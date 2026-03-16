@@ -1,0 +1,189 @@
+.layout-wrapper {
+  min-height: 100vh;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background: #ffffff;
+}
+
+/* phone container */
+.layout-shell {
+  width: 100%;
+  max-width: 430px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+
+  background: linear-gradient(
+    180deg,
+    #eef3f9 0%,
+    #dbeaf8 50%,
+    #e8f2fb 100%
+  );
+
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 0 60px rgba(42, 82, 152, 0.10);
+}
+
+/* soft background glow */
+.layout-shell::before {
+  content: '';
+  position: absolute;
+  top: -80px;
+  right: -60px;
+  width: 260px;
+  height: 260px;
+  background: radial-gradient(
+    circle,
+    rgba(74,122,200,0.08) 0%,
+    transparent 70%
+  );
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.layout-shell::after {
+  content: '';
+  position: absolute;
+  bottom: 100px;
+  left: -80px;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(
+    circle,
+    rgba(42,82,152,0.05) 0%,
+    transparent 70%
+  );
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* header / logo */
+.layout-header {
+  position: relative;
+  z-index: 1;
+  padding: 48px 24px 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.logo-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo-icon-wrap {
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
+
+  background: linear-gradient(
+    135deg,
+    #1a3a6b 0%,
+    #2a5298 60%,
+    #4a7ac8 100%
+  );
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  box-shadow:
+    0 8px 28px rgba(26,58,107,0.22),
+    0 2px 8px rgba(42,82,152,0.12);
+
+  position: relative;
+  overflow: hidden;
+}
+
+.logo-icon-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(255,255,255,0.15) 0%,
+    transparent 60%
+  );
+}
+
+.logo-icon-wrap svg {
+  width: 42px;
+  height: 42px;
+  z-index: 1;
+}
+
+.logo-wordmark {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1a3a6b;
+}
+
+.logo-wordmark span {
+  color: #4a7ac8;
+  font-weight: 600;
+}
+
+/* divider */
+.layout-divider {
+  width: 40px;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #4a7ac8,
+    transparent
+  );
+  border-radius: 2px;
+  margin: 18px auto 0;
+}
+
+/* main content area */
+.layout-content {
+  flex: 1;
+  position: relative;
+  z-index: 1;
+  padding: 40px 20px;
+}
+
+/* bottom dots indicator */
+.bottom-nav-placeholder {
+  position: relative;
+  z-index: 1;
+  height: 64px;
+
+  border-top: 1px solid rgba(208,228,247,0.5);
+  background: rgba(255,255,255,0.55);
+
+  backdrop-filter: blur(12px);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bottom-nav-dots {
+  display: flex;
+  gap: 10px;
+}
+
+.bottom-nav-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9fbce6;
+}
+
+.bottom-nav-dots span:nth-child(2) {
+  width: 8px;
+  height: 8px;
+  background: #4a7ac8;
+  opacity: 0.6;
+}

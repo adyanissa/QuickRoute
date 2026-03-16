@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;600;700;800&family=Quicksand:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-primary: #eef3f9;
+  --bg-secondary: #f5f8fc;
+  --bg-card: #ffffff;
+  --blue-dark: #1a3a6b;
+  --blue-mid: #2a5298;
+  --blue-soft: #4a7ac8;
+  --blue-light: #d0e4f7;
+  --blue-pale: #e8f2fb;
+  --text-primary: #1a3a6b;
+  --text-secondary: #5a7aaa;
+  --text-muted: #8aaacb;
+  --shadow-soft: 0 4px 24px rgba(42, 82, 152, 0.08);
+  --shadow-card: 0 2px 16px rgba(42, 82, 152, 0.06);
+  --radius-lg: 24px;
+  --radius-md: 16px;
+  --radius-sm: 10px;
+  --font-brand: 'Quicksand', sans-serif;
+  --font-body: 'Nunito', sans-serif;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--blue-light);
+  border-radius: 4px;
+}
