@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { LangProvider } from './context/LangContext';
 
 // Import all 30 screens
 import Screen01 from './screens/Screen01';
@@ -37,6 +38,7 @@ import './styles/global.css';
 
 function App() {
   return (
+    <LangProvider>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Navigate to="/screen/01" replace />} />
@@ -76,6 +78,7 @@ function App() {
         <Route path="*" element={<Navigate to="/screen/01" replace />} />
       </Routes>
     </BrowserRouter>
+    </LangProvider>
   );
 }
 
