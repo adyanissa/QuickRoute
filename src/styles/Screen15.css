@@ -1,0 +1,153 @@
+/* ── outer shell: fills viewport, shows a phone-shaped card on desktop ── */
+.s15-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #b8d4ea;          /* slightly darker surround on wide screens */
+}
+
+/* ── the phone-sized container ── */
+.s15-container {
+  width: 100%;
+  max-width: 393px;             /* iPhone 16 logical width */
+  min-height: 100vh;
+  min-height: 100svh;
+  background: #f5f7f9;          /* soft medium-light blue matching reference */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  font-family: var(--font-body);
+  overflow: hidden;
+  /* subtle phone shadow visible on desktop */
+  box-shadow: 0 0 0 1px rgba(42, 82, 152, 0.08),
+              0 12px 48px rgba(42, 82, 152, 0.18);
+}
+
+/* on true mobile devices, remove the surrounding shadow */
+@media (max-width: 430px) {
+  .s15-shell {
+    background: #cfe6f6;
+  }
+  .s15-container {
+    box-shadow: none;
+  }
+}
+
+/* ── language switcher — fixed to physical top-right ── */
+.s15-lang-corner {
+  position: absolute;
+  top: 22px;
+  right: 18px;
+  z-index: 10;
+}
+
+/* ── main content stack ── */
+.s15-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  padding: 60px 28px 40px;
+  width: 100%;
+}
+
+/* ── "WELCOME To" heading ── */
+.s15-welcome {
+  font-family: var(--font-brand);
+  font-size: 32px;
+  font-weight: 700;
+  color: #1a3f7a;               /* rich dark navy, matches reference */
+  text-align: center;
+  letter-spacing: 1.8px;
+  line-height: 1.15;
+}
+
+/* ── logo wrapper: icon + brand name ── */
+.s15-logo-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* blue rounded square holding the SVG */
+.s15-logo-box {
+  width: 110px;
+  height: 110px;
+  background: linear-gradient(145deg, #1f4da0 0%, #3a72c4 55%, #4d8ed8 100%);
+  border-radius: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    0 10px 30px rgba(28, 62, 130, 0.35),
+    0 2px 6px rgba(28, 62, 130, 0.20);
+}
+
+/* "QuickRoute" brand text */
+.s15-brand {
+  font-family: var(--font-brand);
+  font-size: 24px;
+  font-weight: 700;
+  color: #1a3f7a;
+  letter-spacing: 0.4px;
+}
+
+/* ── Go button ── */
+.s15-go-btn {
+  background: #ffffff;
+  color: #2a5298;
+  border: none;
+  border-radius: 22px;
+  padding: 10px 48px;
+  font-size: 15px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow:
+    0 3px 14px rgba(42, 82, 152, 0.16),
+    0 1px 4px rgba(42, 82, 152, 0.10);
+  transition: box-shadow 0.2s, transform 0.15s;
+  letter-spacing: 0.3px;
+}
+
+.s15-go-btn:hover {
+  box-shadow:
+    0 6px 22px rgba(42, 82, 152, 0.26),
+    0 2px 6px rgba(42, 82, 152, 0.14);
+  transform: translateY(-1px);
+}
+
+.s15-go-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px rgba(42, 82, 152, 0.14);
+}
+
+/* ── back button — bottom-start (flips to right in RTL via logical property) ── */
+.s15-back-corner {
+  position: absolute;
+  bottom: 24px;
+  inset-inline-start: 22px;
+}
+
+.s15-back-btn {
+  background: rgba(180, 200, 220, 0.75);
+  color: #445;
+  border: none;
+  border-radius: 14px;
+  padding: 7px 18px;
+  font-size: 13px;
+  font-family: var(--font-body);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+  letter-spacing: 0.2px;
+}
+
+.s15-back-btn:hover {
+  background: rgba(160, 185, 210, 0.85);
+}
