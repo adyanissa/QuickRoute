@@ -1,49 +1,72 @@
-import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useLanguage } from '../context/LanguageContext';
-import translations from '../translations/translations';
-import LanguageSwitcher from '../components/LanguageSwitcher';
 import QuickRouteLogo from '../components/QuickRouteLogo';
+import { useLang } from '../context/LangContext';
 import '../styles/Screen15.css';
 
+const LANGUAGES = [
+  { code: 'ar', label: 'عربي' },
+  { code: 'he', label: 'עברית' },
+  { code: 'en', label: 'EN' },
+];
+
+const UI = {
+  en: { welcome: 'Welcome', go: 'Go →' },
+  ar: { welcome: 'أهلاً وسهلاً', go: '← ابدأ' },
+  he: { welcome: 'ברוכים הבאים', go: '← התחל' },
+};
+
 const Screen15 = () => {
-  const navigate = useNavigate();
-  const { language, isRTL } = useLanguage();
-  const t = translations[language];
+  const { lang, setLang } = useLang();
+  const navigate           = useNavigate();
+  const isRTL              = lang === 'ar' || lang === 'he';
+  const t                  = UI[lang];
 
   return (
-    <div className="s15-shell">
-      <div className="s15-container" dir={isRTL ? 'rtl' : 'ltr'}>
-        {/* Language switcher — physical top-right, always */}
-        <div className="s15-lang-corner">
-          <LanguageSwitcher />
+    <div className="layout-wrapper">
+      <div className="layout-shell s15-shell" dir={isRTL ? 'rtl' : 'ltr'}>
+
+        {/* ── Language selector ── */}
+        <div className="s15-lang-bar">
+          <div className="s15-lang-pill" role="group" aria-label="Language selector">
+            {LANGUAGES.map((l) => (
+              <button
+                key={l.code}
+                className={`s15-lang-btn${lang === l.code ? ' active' : ''}`}
+                onClick={() => setLang(l.code)}
+                aria-pressed={lang === l.code}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Main content */}
-        <div className="s15-content">
-          <h1 className="s15-welcome">{t.welcomeTo}</h1>
-
-          <div className="s15-logo-wrapper">
-            <div className="s15-logo-box">
-              <QuickRouteLogo size={68} />
-            </div>
-            <span className="s15-brand">{t.appName}</span>
+        {/* ── Branding ── */}
+        <div className="s15-brand">
+          <div className="s15-logo-card">
+            <QuickRouteLogo size={52} />
           </div>
+          <div className="s15-wordmark">
+            Quick<span>Route</span>
+          </div>
+        </div>
 
-          <button
-            className="s15-go-btn"
-            onClick={() => navigate('/screen/16')}
-          >
+        {/* ── Welcome heading ── */}
+        <div className="s15-welcome">
+          <h1 className="s15-title">{t.welcome}</h1>
+        </div>
+
+
+        {/* ── Spacer ── */}
+        <div className="s15-spacer" />
+
+        {/* ── Go button ── */}
+        <div className="s15-footer">
+          <button className="s15-go-btn" onClick={() => navigate(-1)}>
             {t.go}
           </button>
         </div>
 
-        {/* Back button — bottom-start corner (left LTR, right RTL) */}
-        <div className="s15-back-corner">
-          <button className="s15-back-btn" onClick={() => navigate(-1)}>
-            {t.back}
-          </button>
-        </div>
       </div>
     </div>
   );
