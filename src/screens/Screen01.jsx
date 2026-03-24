@@ -138,7 +138,7 @@ const Screen01 = () => {
             />
           </div>
 
-          <button className="s01-go-btn" aria-label={t.go}>
+          <button className="s01-go-btn" aria-label={t.go} onClick={() => navigate('/screen/16')}>
             {isRTL ? <ArrowLeftIcon /> : null}
             <span>{t.go}</span>
             {isRTL ? null : <ArrowRightIcon />}

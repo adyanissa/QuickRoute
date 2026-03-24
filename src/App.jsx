@@ -61,6 +61,7 @@ function App() {
         <Route path="/screen/16" element={<Screen16 />} />
         <Route path="/screen/17" element={<Screen17 />} />
         <Route path="/screen/18" element={<Screen18 />} />
+        <Route path="/map"       element={<Screen18 />} />
         <Route path="/screen/19" element={<Screen19 />} />
         <Route path="/screen/20" element={<Screen20 />} />
         <Route path="/screen/21" element={<Screen21 />} />

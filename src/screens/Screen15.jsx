@@ -62,7 +62,7 @@ const Screen15 = () => {
 
         {/* ── Go button ── */}
         <div className="s15-footer">
-          <button className="s15-go-btn" onClick={() => navigate(-1)}>
+          <button className="s15-go-btn" onClick={() => navigate('/screen/16')}>
             {t.go}
           </button>
         </div>
