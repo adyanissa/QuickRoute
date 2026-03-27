@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import HospSearchBar from '../components/HospSearchBar';
 import DestinationCard from '../components/DestinationCard';
+import BackButton from '../components/BackButton';
 import { useLang } from '../context/LangContext';
 import { ROOMS } from '../data/hospitalData';
 import '../styles/screen17.css';
@@ -46,15 +47,6 @@ const UI = {
   },
 };
 
-// ── Icons ─────────────────────────────────────────────────────────────────────
-const BackArrow = ({ flipped }) => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"
-    style={flipped ? { transform: 'scaleX(-1)' } : undefined}>
-    <path d="M19 12H5M11 18l-6-6 6-6" stroke="currentColor" strokeWidth="2.2"
-      strokeLinecap="round" strokeLinejoin="round"/>
-  </svg>
-);
-
 // ── Screen ────────────────────────────────────────────────────────────────────
 const Screen17 = () => {
   const { lang }              = useLang();
@@ -87,16 +79,11 @@ const Screen17 = () => {
         {/* ── Gradient Header ── */}
         <div className="s17-header">
 
-          {/* Back button */}
-          <button
-            className="s17-back-btn"
+          <BackButton
             onClick={() => navigate('/screen/16')}
-            aria-label={t.back}
-            type="button"
-          >
-            <BackArrow flipped={isRTL} />
-            <span>{t.back}</span>
-          </button>
+            label={t.back}
+            isRTL={isRTL}
+          />
 
           {/* Building card row */}
           {building && (

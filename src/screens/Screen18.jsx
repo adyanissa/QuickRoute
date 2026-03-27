@@ -1,7 +1,21 @@
+import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
 import { formatFloor } from '../components/DestinationCard';
+import RouteSteps from '../components/RouteSteps';
+import BackButton from '../components/BackButton';
 import hospitalMap from "../assets/bellinson-map.png";
+import {
+  getRouteSVGPath,
+  getWaypoints,
+  getEstimatedDistance,
+  getEstimatedTime,
+  getDestinationPosition,
+  getStartPosition,
+  getFullRoute,
+  formatDistance,
+  formatTime,
+} from '../utils/routeHelpers';
 import '../styles/screen18.css';
 
 // ── Translations ──────────────────────────────────────────────────────────────
@@ -10,39 +24,50 @@ const UI = {
     back:        'Back',
     destination: 'Your Destination',
     routeReady:  'Route ready',
-    eta:         '~5 min',
-    distance:    '~200 m',
+    navigating:  'Navigating',
+    arrived:     'Arrived',
     startNav:    'Start Navigation',
+    cancelNav:   'Cancel navigation',
+    done:        'Done',
     you:         'You',
+    directions:  'Directions',
+    navHint:     'Tap ✓ on each step when completed',
+    arrivedTitle:'You have arrived!',
+    arrivedSub:  'Destination reached',
   },
   ar: {
     back:        'رجوع',
     destination: 'وجهتك',
     routeReady:  'المسار جاهز',
-    eta:         '~٥ دقائق',
-    distance:    '~٢٠٠م',
+    navigating:  'جارٍ التنقل',
+    arrived:     'وصلت',
     startNav:    'ابدأ التنقل',
+    cancelNav:   'إلغاء التنقل',
+    done:        'تم',
     you:         'أنت',
+    directions:  'التعليمات',
+    navHint:     'اضغط ✓ بعد إتمام كل خطوة',
+    arrivedTitle:'لقد وصلت!',
+    arrivedSub:  'تم الوصول إلى الوجهة',
   },
   he: {
     back:        'חזרה',
     destination: 'היעד שלך',
     routeReady:  'מסלול מוכן',
-    eta:         '~5 דקות',
-    distance:    '~200מ׳',
+    navigating:  'מנווט',
+    arrived:     'הגעת',
     startNav:    'התחל ניווט',
+    cancelNav:   'בטל ניווט',
+    done:        'סיום',
     you:         'אתה',
+    directions:  'הוראות',
+    navHint:     'הקש ✓ בכל שלב שהשלמת',
+    arrivedTitle:'הגעת ליעד!',
+    arrivedSub:  'הגעת ליעדך',
   },
 };
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
-const BackArrow = ({ flip }) => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-    style={flip ? { transform: 'scaleX(-1)' } : undefined}>
-    <path d="M19 12H5M11 18l-6-6 6-6" stroke="currentColor"
-      strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
-  </svg>
-);
 
 const ClockIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
@@ -70,197 +95,291 @@ const NavArrow = ({ flip }) => (
   </svg>
 );
 
-// ── Fake route SVG overlay ────────────────────────────────────────────────────
-// viewBox matches the image's 16∶9 ratio (400×225).
-// The path is a plausible campus walk from the entrance (bottom-left)
-// to the Schneider / upper-right area — purely decorative.
-const RouteOverlay = ({ t }) => (
-  <svg
-    className="s18-route-svg"
-    viewBox="0 0 400 225"
-    preserveAspectRatio="xMidYMid meet"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    {/* ── Shadow / glow under path ── */}
-    <path
-      d="M 62 198 C 62 178 68 168 85 165 L 158 165
-         C 170 165 174 156 174 144 L 174 114
-         C 174 102 184 98 198 97 L 252 97
-         C 265 97 272 89 280 80 L 298 70"
-      stroke="rgba(74,122,200,0.25)"
-      strokeWidth="8"
-      fill="none"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-
-    {/* ── Main route path ── */}
-    <path
-      className="s18-route-path"
-      d="M 62 198 C 62 178 68 168 85 165 L 158 165
-         C 170 165 174 156 174 144 L 174 114
-         C 174 102 184 98 198 97 L 252 97
-         C 265 97 272 89 280 80 L 298 70"
-      stroke="#4a7ac8"
-      strokeWidth="3.5"
-      fill="none"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-
-    {/* ── Waypoint dots along path ── */}
-    <circle cx="121" cy="165" r="4" fill="#4a7ac8" opacity="0.55"/>
-    <circle cx="174" cy="130" r="4" fill="#4a7ac8" opacity="0.55"/>
-    <circle cx="225" cy="97"  r="4" fill="#4a7ac8" opacity="0.55"/>
-    <circle cx="265" cy="88"  r="4" fill="#4a7ac8" opacity="0.55"/>
-
-    {/* ── Start: pulsing "You are here" dot ── */}
-    <circle className="s18-pulse-ring" cx="62" cy="198" r="14"
-      fill="rgba(74,122,200,0.15)" stroke="rgba(74,122,200,0.30)" strokeWidth="1"/>
-    <circle cx="62" cy="198" r="7"
-      fill="white" stroke="#4a7ac8" strokeWidth="2.5"/>
-    <circle cx="62" cy="198" r="3.5" fill="#4a7ac8"/>
-
-    {/* ── Start label ── */}
-    <rect x="70" y="190" width="26" height="16" rx="4"
-      fill="white" opacity="0.90"/>
-    <text x="83" y="201" textAnchor="middle"
-      fontSize="7" fontWeight="700" fill="#1a3a6b" fontFamily="sans-serif">
-      {t.you}
-    </text>
-
-    {/* ── Destination pin ── */}
-    {/* Pin shadow */}
-    <ellipse cx="298" cy="76" rx="6" ry="2.5"
-      fill="rgba(0,0,0,0.18)" transform="translate(0,6)"/>
-    {/* Pin body */}
-    <path
-      d="M 298 43 C 288 43 280 51 280 61 C 280 74 298 88 298 88
-         C 298 88 316 74 316 61 C 316 51 308 43 298 43 Z"
-      fill="#1a3a6b"
-    />
-    <path
-      d="M 298 43 C 288 43 280 51 280 61 C 280 74 298 88 298 88
-         C 298 88 316 74 316 61 C 316 51 308 43 298 43 Z"
-      fill="url(#pinGrad)"
-    />
-    <circle cx="298" cy="61" r="7" fill="white" opacity="0.95"/>
-    <circle cx="298" cy="61" r="3.5" fill="#4a7ac8"/>
-
-    {/* Gradient def */}
-    <defs>
-      <linearGradient id="pinGrad" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stopColor="rgba(255,255,255,0.22)"/>
-        <stop offset="100%" stopColor="transparent"/>
-      </linearGradient>
-    </defs>
+const BigCheckIcon = () => (
+  <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+    <circle cx="12" cy="12" r="11" fill="rgba(39,174,96,0.15)" stroke="#27ae60" strokeWidth="1.5"/>
+    <path d="M7 12l4 4 6-7" stroke="#27ae60" strokeWidth="2.2"
+      strokeLinecap="round" strokeLinejoin="round"/>
   </svg>
 );
 
+// ── Dynamic SVG route overlay ─────────────────────────────────────────────────
+const RouteOverlay = ({ buildingId, t, hasArrived }) => {
+  const pathD  = getRouteSVGPath(buildingId);
+  const waypts = getWaypoints(buildingId);
+  const start  = getStartPosition();
+  const dest   = getDestinationPosition(buildingId);
+
+  if (!pathD) return null;
+
+  const routeColor = hasArrived ? '#27ae60' : '#4a7ac8';
+
+  return (
+    <svg
+      className="s18-route-svg"
+      viewBox="0 0 400 225"
+      preserveAspectRatio="xMidYMid slice"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      {/* Glow under path */}
+      <path d={pathD}
+        stroke={hasArrived ? 'rgba(39,174,96,0.22)' : 'rgba(74,122,200,0.22)'}
+        strokeWidth="8" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+
+      {/* Animated route path */}
+      <path className="s18-route-path" d={pathD}
+        stroke={routeColor} strokeWidth="3.5" fill="none"
+        strokeLinecap="round" strokeLinejoin="round"/>
+
+      {/* Waypoint dots */}
+      {waypts.map((p, i) => (
+        <circle key={i} cx={p.x} cy={p.y} r="4" fill={routeColor} opacity="0.55"/>
+      ))}
+
+      {/* Start: pulsing dot */}
+      <circle className="s18-pulse-ring"
+        cx={start.x} cy={start.y} r="14"
+        fill={`rgba(${hasArrived ? '39,174,96' : '74,122,200'},0.15)`}
+        stroke={`rgba(${hasArrived ? '39,174,96' : '74,122,200'},0.30)`}
+        strokeWidth="1"/>
+      <circle cx={start.x} cy={start.y} r="7"
+        fill="white" stroke={routeColor} strokeWidth="2.5"/>
+      <circle cx={start.x} cy={start.y} r="3.5" fill={routeColor}/>
+
+      {/* Start label */}
+      <rect x={start.x + 8} y={start.y - 8} width="26" height="16" rx="4"
+        fill="white" opacity="0.90"/>
+      <text x={start.x + 21} y={start.y + 3} textAnchor="middle"
+        fontSize="7" fontWeight="700" fill="#1a3a6b" fontFamily="sans-serif">
+        {t.you}
+      </text>
+
+      {/* Destination pin */}
+      <ellipse cx={dest.x} cy={dest.y + 6} rx="6" ry="2.5" fill="rgba(0,0,0,0.18)"/>
+      <path
+        d={`M ${dest.x} ${dest.y - 18}
+            C ${dest.x - 10} ${dest.y - 18} ${dest.x - 18} ${dest.y - 10}
+              ${dest.x - 18} ${dest.y}
+            C ${dest.x - 18} ${dest.y + 13} ${dest.x} ${dest.y + 27}
+              ${dest.x} ${dest.y + 27}
+            C ${dest.x} ${dest.y + 27} ${dest.x + 18} ${dest.y + 13}
+              ${dest.x + 18} ${dest.y}
+            C ${dest.x + 18} ${dest.y - 10} ${dest.x + 10} ${dest.y - 18}
+              ${dest.x} ${dest.y - 18} Z`}
+        fill={hasArrived ? '#27ae60' : '#1a3a6b'}
+      />
+      <path
+        d={`M ${dest.x} ${dest.y - 18}
+            C ${dest.x - 10} ${dest.y - 18} ${dest.x - 18} ${dest.y - 10}
+              ${dest.x - 18} ${dest.y}
+            C ${dest.x - 18} ${dest.y + 13} ${dest.x} ${dest.y + 27}
+              ${dest.x} ${dest.y + 27}
+            C ${dest.x} ${dest.y + 27} ${dest.x + 18} ${dest.y + 13}
+              ${dest.x + 18} ${dest.y}
+            C ${dest.x + 18} ${dest.y - 10} ${dest.x + 10} ${dest.y - 18}
+              ${dest.x} ${dest.y - 18} Z`}
+        fill="url(#pinGrad)"
+      />
+      <circle cx={dest.x} cy={dest.y} r="7" fill="white" opacity="0.95"/>
+      <circle cx={dest.x} cy={dest.y} r="3.5" fill={routeColor}/>
+
+      <defs>
+        <linearGradient id="pinGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%"   stopColor="rgba(255,255,255,0.22)"/>
+          <stop offset="100%" stopColor="transparent"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+};
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 const Screen18 = () => {
-  const { lang }   = useLang();
-  const navigate   = useNavigate();
-  const location   = useLocation();
+  const { lang }  = useLang();
+  const navigate  = useNavigate();
+  const location  = useLocation();
 
-  const isRTL    = lang === 'ar' || lang === 'he';
-  const t        = UI[lang];
+  // Navigation state
+  const [isNavigating, setIsNavigating]   = useState(false);
+  const [completedSteps, setCompletedSteps] = useState(new Set());
 
-  const building = location.state?.building ?? null;
-  const room     = location.state?.room     ?? null;
+  const isRTL = lang === 'ar' || lang === 'he';
+  const t     = UI[lang];
+
+  const building   = location.state?.building    ?? null;
+  const room       = location.state?.destination ?? location.state?.room ?? null;
+  const buildingId = building?.id ?? 'schneider';
+
+  const distanceM = getEstimatedDistance(buildingId);
+  const timeMin   = getEstimatedTime(buildingId);
+  const { outdoor, indoor } = getFullRoute(buildingId, room, lang, building?.name ?? '');
+
+  // Flat step list for index tracking
+  const allSteps  = [...outdoor, ...indoor];
+  const activeStep = allSteps.findIndex((_, i) => !completedSteps.has(i));
+  const hasArrived = isNavigating && allSteps.length > 0 && completedSteps.size === allSteps.length;
+
+  const handleStepToggle = (index) => {
+    setCompletedSteps(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  const handleStartNav = () => {
+    setIsNavigating(true);
+    setCompletedSteps(new Set());
+  };
+
+  const handleCancelNav = () => {
+    setIsNavigating(false);
+    setCompletedSteps(new Set());
+  };
+
+  // Badge config
+  const badgeClass = hasArrived
+    ? 's18-route-badge s18-route-badge--arrived'
+    : isNavigating
+      ? 's18-route-badge s18-route-badge--nav'
+      : 's18-route-badge';
+  const badgeText = hasArrived ? t.arrived : isNavigating ? t.navigating : t.routeReady;
 
   return (
     <div className="layout-wrapper">
       <div className="layout-shell s18-shell" dir={isRTL ? 'rtl' : 'ltr'}>
 
-        {/* ── Compact header ── */}
+        {/* ── Header ── */}
         <div className="s18-header">
-          <button
-            className="s18-back-btn"
+          <BackButton
             onClick={() => navigate('/screen/17', { state: { building } })}
-            type="button"
-            aria-label={t.back}
-          >
-            <BackArrow flip={isRTL} />
-            <span>{t.back}</span>
-          </button>
+            label={t.back}
+            isRTL={isRTL}
+            spacing="compact"
+          />
 
-          {building && room && (
+          {building && (
             <div className="s18-header-info">
               <span className="s18-header-building">{building.name}</span>
-              <span className="s18-header-sep">·</span>
-              <span className="s18-header-room">{room.name}</span>
+              {room && (
+                <>
+                  <span className="s18-header-sep">·</span>
+                  <span className="s18-header-room">{room.name}</span>
+                </>
+              )}
             </div>
           )}
         </div>
 
-        {/* ── Map container ── */}
+        {/* ── Map ── */}
         <div className="s18-map-wrap">
-          <div className="s18-map-container">
+          <div className={`s18-map-container${isNavigating ? ' s18-map-container--nav' : ''}`}>
             <img
               src={hospitalMap}
               alt="Hospital campus map"
               className="s18-map-img"
               draggable="false"
             />
-            <RouteOverlay t={t} />
+            <RouteOverlay buildingId={buildingId} t={t} hasArrived={hasArrived} />
           </div>
-
-          {/* Route ready badge */}
-          <div className="s18-route-badge">
+          <div className={badgeClass}>
             <span className="s18-route-dot" />
-            <span>{t.routeReady}</span>
+            <span>{badgeText}</span>
           </div>
         </div>
 
-        {/* ── Info card ── */}
-        <div className="s18-info-card">
+        {/* ── Scrollable bottom ── */}
+        <div className="s18-bottom">
 
-          <p className="s18-dest-label">{t.destination}</p>
-
-          {building && room ? (
-            <>
-              <h2 className="s18-dest-name">{room.name}</h2>
-              <p className="s18-dest-meta">
-                <span
-                  className="s18-building-chip"
-                  style={{ color: building.iconColor, background: building.iconBg }}
-                >
-                  {building.tag}
-                </span>
-                <span className="s18-floor-chip">
-                  {formatFloor(room.floor)}
-                </span>
-                <span className="s18-type-chip">
-                  {room.type.replace('_', '\u00A0')}
-                </span>
-              </p>
-            </>
-          ) : (
-            <h2 className="s18-dest-name">—</h2>
+          {/* Arrival banner */}
+          {hasArrived && (
+            <div className="s18-arrival">
+              <BigCheckIcon />
+              <div className="s18-arrival-text">
+                <p className="s18-arrival-title">{t.arrivedTitle}</p>
+                <p className="s18-arrival-sub">{t.arrivedSub}</p>
+              </div>
+            </div>
           )}
 
-          {/* Stats row */}
-          <div className="s18-stats">
-            <div className="s18-stat">
-              <ClockIcon />
-              <span>{t.eta}</span>
-            </div>
-            <div className="s18-stat-divider" />
-            <div className="s18-stat">
-              <WalkIcon />
-              <span>{t.distance}</span>
+          {/* Info card */}
+          <div className={`s18-info-card${hasArrived ? ' s18-info-card--arrived' : ''}`}>
+            <p className="s18-dest-label">{t.destination}</p>
+
+            {building ? (
+              <>
+                <h2 className="s18-dest-name">{room ? room.name : building.name}</h2>
+                <p className="s18-dest-meta">
+                  <span
+                    className="s18-building-chip"
+                    style={{ color: building.iconColor, background: building.iconBg }}
+                  >
+                    {building.tag}
+                  </span>
+                  {room && (
+                    <>
+                      <span className="s18-floor-chip">{formatFloor(room.floor)}</span>
+                      <span className="s18-type-chip">{room.type.replace('_', '\u00A0')}</span>
+                    </>
+                  )}
+                </p>
+              </>
+            ) : (
+              <h2 className="s18-dest-name">—</h2>
+            )}
+
+            <div className="s18-stats">
+              <div className="s18-stat">
+                <ClockIcon />
+                <span>{formatTime(timeMin)}</span>
+              </div>
+              <div className="s18-stat-divider" />
+              <div className="s18-stat">
+                <WalkIcon />
+                <span>{formatDistance(distanceM)}</span>
+              </div>
             </div>
           </div>
 
-          {/* CTA */}
-          <button className="s18-nav-btn" type="button">
-            <span>{t.startNav}</span>
-            <NavArrow flip={isRTL} />
-          </button>
+          {/* Directions section */}
+          {allSteps.length > 0 && (
+            <div className="s18-directions">
+              <div className="s18-directions-header">
+                <p className="s18-directions-label">{t.directions}</p>
+                {isNavigating && !hasArrived && (
+                  <p className="s18-nav-hint">{t.navHint}</p>
+                )}
+              </div>
+              <RouteSteps
+                outdoorSteps={outdoor}
+                indoorSteps={indoor}
+                lang={lang}
+                isNavigating={isNavigating}
+                completedSteps={completedSteps}
+                activeStep={activeStep}
+                onStepToggle={handleStepToggle}
+              />
+            </div>
+          )}
+
+          {/* Bottom action */}
+          {hasArrived ? (
+            <button className="s18-done-btn" type="button" onClick={handleCancelNav}>
+              <span>{t.done}</span>
+            </button>
+          ) : isNavigating ? (
+            <button className="s18-cancel-btn" type="button" onClick={handleCancelNav}>
+              {t.cancelNav}
+            </button>
+          ) : (
+            <button className="s18-nav-btn" type="button" onClick={handleStartNav}>
+              <span>{t.startNav}</span>
+              <NavArrow flip={isRTL} />
+            </button>
+          )}
 
         </div>
-
       </div>
     </div>
   );

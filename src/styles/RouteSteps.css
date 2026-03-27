@@ -1,0 +1,229 @@
+/* ─── RouteSteps component ───────────────────────────────────────────────── */
+
+.rs-root {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* ── Section ──────────────────────────────────────────────────────────────── */
+
+.rs-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.rs-section + .rs-section {
+  margin-top: 14px;
+}
+
+.rs-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-body, sans-serif);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  padding: 0 0 10px 0;
+}
+
+.rs-section-header--outdoor { color: #4a7ac8; }
+.rs-section-header--indoor  { color: #27ae60; }
+
+/* ── Step row base ───────────────────────────────────────────────────────── */
+
+.rs-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 36px;
+  border-radius: 12px;
+  padding: 0 6px 0 2px;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+/* ── Navigation state variants ──────────────────────────────────────────── */
+
+/* Active step — highlighted, draws attention */
+.rs-step--active {
+  background: rgba(74, 122, 200, 0.07);
+  border-inline-start: 3px solid #4a7ac8;
+  padding-inline-start: 8px;
+}
+
+/* Completed step — muted, clearly done */
+.rs-step--completed {
+  opacity: 0.72;
+}
+
+.rs-step--completed .rs-step-text {
+  color: #8aaacb;
+  text-decoration: line-through;
+  text-decoration-color: rgba(138, 170, 203, 0.6);
+}
+
+/* Pending (future) step — slightly dimmed */
+.rs-step--pending {
+  opacity: 0.55;
+}
+
+/* Non-nav arrive step */
+.rs-step--arrive .rs-step-text {
+  font-weight: 700;
+  color: #1a3a6b;
+}
+
+/* ── Left column: icon + connector ──────────────────────────────────────── */
+
+.rs-step-left {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+  width: 32px;
+}
+
+/* ── Icon bubble ─────────────────────────────────────────────────────────── */
+
+.rs-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+/* Default (not navigating) */
+.rs-icon--exit     { color: #e05a6e; background: rgba(224,90,110,0.09);  border: 1.5px solid rgba(224,90,110,0.18); }
+.rs-icon--enter    { color: #27ae60; background: rgba(39,174,96,0.09);   border: 1.5px solid rgba(39,174,96,0.18); }
+.rs-icon--arrive   { color: #27ae60; background: rgba(39,174,96,0.14);   border: 1.5px solid rgba(39,174,96,0.25); }
+.rs-icon--elevator { color: #9b59b6; background: rgba(155,89,182,0.09);  border: 1.5px solid rgba(155,89,182,0.18); }
+.rs-icon--info     { color: #f39c12; background: rgba(243,156,18,0.09);  border: 1.5px solid rgba(243,156,18,0.18); }
+.rs-icon--turn     { color: #2980b9; background: rgba(41,128,185,0.09);  border: 1.5px solid rgba(41,128,185,0.18); }
+.rs-icon--walk     { color: #4a7ac8; background: rgba(74,122,200,0.09);  border: 1.5px solid rgba(74,122,200,0.18); }
+
+/* Completed icon — green filled */
+.rs-icon--done {
+  color: #ffffff;
+  background: #27ae60;
+  border: 1.5px solid #27ae60;
+}
+
+/* ── Connector line ──────────────────────────────────────────────────────── */
+
+.rs-connector {
+  width: 2px;
+  flex: 1;
+  min-height: 10px;
+  background: linear-gradient(to bottom, rgba(74,122,200,0.25), rgba(74,122,200,0.08));
+  border-radius: 1px;
+  margin: 3px 0;
+}
+
+.rs-step--completed .rs-connector {
+  background: linear-gradient(to bottom, rgba(39,174,96,0.35), rgba(39,174,96,0.10));
+}
+
+/* ── Step body ───────────────────────────────────────────────────────────── */
+
+.rs-step-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding-top: 7px;
+  padding-bottom: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rs-step-num {
+  font-family: var(--font-brand, sans-serif);
+  font-size: 10px;
+  font-weight: 800;
+  color: rgba(74, 122, 200, 0.55);
+  min-width: 14px;
+  line-height: 18px;
+  flex-shrink: 0;
+}
+
+.rs-step-num--done {
+  color: rgba(39, 174, 96, 0.70);
+}
+
+.rs-step-text {
+  font-family: var(--font-body, sans-serif);
+  font-size: 13px;
+  font-weight: 500;
+  color: #2c3e5a;
+  line-height: 1.45;
+  transition: color 0.2s;
+}
+
+/* Active step text — bolder */
+.rs-step--active .rs-step-text {
+  font-weight: 700;
+  color: #1a3a6b;
+}
+
+/* ── Check button ────────────────────────────────────────────────────────── */
+
+.rs-check-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 6px;
+  transition: all 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.rs-check-btn:active {
+  transform: scale(0.88);
+}
+
+/* Active step check button — blue pulsing */
+.rs-check-btn--active {
+  border-color: #4a7ac8;
+  background: rgba(74, 122, 200, 0.08);
+  color: #4a7ac8;
+  animation: rsCheckPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes rsCheckPulse {
+  0%, 100% { box-shadow: 0 0 0 0   rgba(74,122,200,0.40); }
+  50%       { box-shadow: 0 0 0 5px rgba(74,122,200,0.00); }
+}
+
+/* Completed check button — green filled */
+.rs-check-btn--done {
+  border-color: #27ae60;
+  background: #27ae60;
+  color: #ffffff;
+  animation: none;
+}
+
+/* Pending (future) check button — grey, subtle */
+.rs-check-btn--pending {
+  border-color: rgba(138, 170, 203, 0.45);
+  background: transparent;
+  color: transparent;
+}
+
+/* ── RTL ─────────────────────────────────────────────────────────────────── */
+
+[dir="rtl"] .rs-step-body       { flex-direction: row-reverse; }
+[dir="rtl"] .rs-section-header  { flex-direction: row-reverse; }
+[dir="rtl"] .rs-step--active    {
+  border-inline-start: 3px solid #4a7ac8;
+  border-inline-end: none;
+}

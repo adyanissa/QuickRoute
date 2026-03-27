@@ -43,6 +43,32 @@
   pointer-events: none;
 }
 
+/* ── Back button ─────────────────────────────────────────────────────────── */
+
+.s16-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 100px;
+  padding: 7px 14px 7px 10px;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  width: fit-content;
+  margin-bottom: 10px;
+  transition: all 0.18s ease;
+  backdrop-filter: blur(8px);
+}
+
+.s16-back-btn:hover  { background: rgba(255, 255, 255, 0.20); color: #ffffff; }
+.s16-back-btn:active { transform: scale(0.96); }
+
+[dir="rtl"] .s16-back-btn { padding: 7px 10px 7px 14px; }
+
 /* ── Top bar: logo + lang switcher ───────────────────────────────────────── */
 
 .s16-topbar {

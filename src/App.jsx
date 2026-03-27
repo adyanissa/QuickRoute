@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { LangProvider } from './context/LangContext';
+import { LocationProvider } from './context/LocationContext';
 
 // Import all 30 screens
 import Screen01 from './screens/Screen01';
@@ -38,6 +39,7 @@ import './styles/global.css';
 
 function App() {
   return (
+    <LocationProvider>
     <LangProvider>
     <BrowserRouter>
       <Routes>
@@ -80,6 +82,7 @@ function App() {
       </Routes>
     </BrowserRouter>
     </LangProvider>
+    </LocationProvider>
   );
 }
 
