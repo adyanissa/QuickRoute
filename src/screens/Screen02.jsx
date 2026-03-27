@@ -152,7 +152,7 @@ const Screen02 = () => {
           </div>
 
           {/* Sign In */}
-          <button className="s02-signin-btn" aria-label={t.signIn}>
+          <button className="s02-signin-btn" onClick={() => navigate('/screen/05')} aria-label={t.signIn}>
             {t.signIn}
           </button>
 

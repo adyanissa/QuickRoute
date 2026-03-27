@@ -33,12 +33,18 @@ import Screen27 from './screens/Screen27';
 import Screen28 from './screens/Screen28';
 import Screen29 from './screens/Screen29';
 import Screen30 from './screens/Screen30';
+import AdminMapScreen        from './screens/AdminMapScreen';
+import AdminLocationsScreen  from './screens/AdminLocationsScreen';
+import AdminRoomsScreen      from './screens/AdminRoomsScreen';
+import AdminRoutesScreen     from './screens/AdminRoutesScreen';
+import { AdminProvider }     from './context/AdminContext';
 
 import './styles/global.css';
 
 function App() {
   return (
     <LangProvider>
+    <AdminProvider>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Navigate to="/screen/01" replace />} />
@@ -75,10 +81,16 @@ function App() {
         <Route path="/screen/29" element={<Screen29 />} />
         <Route path="/screen/30" element={<Screen30 />} />
 
+        <Route path="/admin/map"       element={<AdminMapScreen />} />
+        <Route path="/admin/locations" element={<AdminLocationsScreen />} />
+        <Route path="/admin/rooms"     element={<AdminRoomsScreen />} />
+        <Route path="/admin/routes"    element={<AdminRoutesScreen />} />
+
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/screen/01" replace />} />
       </Routes>
     </BrowserRouter>
+    </AdminProvider>
     </LangProvider>
   );
 }
