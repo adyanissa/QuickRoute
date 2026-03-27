@@ -14,7 +14,7 @@
 
 .s18-header {
   flex-shrink: 0;
-  background: linear-gradient(158deg, #0d2244 0%, #1a3a6b 50%, #2a5298 100%);
+  background: linear-gradient(158deg, #778aaa 0%, #1a3a6b 50%, #2a5298 100%);
   padding: 50px 20px 18px;
   display: flex;
   flex-direction: column;
@@ -95,6 +95,8 @@
   position: relative;
   flex-shrink: 0;
   padding: 16px 16px 0;
+  /* Same color as page background — padding area blends seamlessly */
+  background: var(--bg-primary, #eef3f9);
 }
 
 /* Route ready badge */
@@ -136,21 +138,35 @@
 .s18-map-container {
   position: relative;
   width: 100%;
-  /* ~60% of 100vh minus header (~100px) and info card (~190px) */
-  height: 56vw;
-  max-height: 56vh;
-  min-height: 180px;
+  /* Normal size before navigation starts */
+  height: 48vw;
+  max-height: 46vh;
+  min-height: 165px;
   border-radius: 22px;
   overflow: hidden;
+  background: var(--bg-primary, #eef3f9);
   box-shadow:
     0 10px 40px rgba(26, 58, 107, 0.22),
-    0 3px 14px rgba(42, 82, 152, 0.14),
-    0 0 0 1px rgba(208, 228, 247, 0.60);
+    0 3px 14px rgba(42, 82, 152, 0.14);
+  /* Smooth shrink when navigation mode is activated */
+  transition:
+    height     0.5s cubic-bezier(0.4, 0, 0.2, 1),
+    max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+    min-height 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Compact map while navigating — gives more space to the directions list */
+.s18-map-container--nav {
+  height: 28vw;
+  max-height: 26vh;
+  min-height: 110px;
 }
 
 .s18-map-img {
   width: 100%;
   height: 100%;
+  /* cover: image fills the container without letterboxing,
+     so the SVG overlay (also cover-mode) sits precisely on top */
   object-fit: cover;
   object-position: center;
   display: block;
@@ -179,10 +195,10 @@
   to { stroke-dashoffset: 0; }
 }
 
-/* Pulsing ring at current location */
+/* Pulsing ring at current location — origin matches roundabout start (192, 213) */
 .s18-pulse-ring {
   animation: s18Pulse 2s ease-in-out infinite;
-  transform-origin: 62px 198px;
+  transform-origin: 192px 213px;
 }
 
 @keyframes s18Pulse {
@@ -190,14 +206,26 @@
   50%       { transform: scale(1.5); opacity: 0.2; }
 }
 
+/* ── Scrollable bottom section ───────────────────────────────────────────── */
+
+.s18-bottom {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 12px 16px 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.s18-bottom::-webkit-scrollbar { width: 0; }
+
 /* ── Info card ───────────────────────────────────────────────────────────── */
 
 .s18-info-card {
-  flex: 1;
   background: rgba(255, 255, 255, 0.96);
-  margin: 12px 16px 16px;
   border-radius: 22px;
-  padding: 18px 18px 20px;
+  padding: 18px 18px 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -205,7 +233,7 @@
   box-shadow:
     0 4px 24px rgba(42, 82, 152, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.90);
-  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .s18-dest-label {
@@ -291,6 +319,28 @@
   background: rgba(74, 122, 200, 0.18);
 }
 
+/* ── Directions section ──────────────────────────────────────────────────── */
+
+.s18-directions {
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 20px;
+  padding: 16px 16px 14px;
+  margin-top: 10px;
+  border: 1px solid rgba(208, 228, 247, 0.60);
+  box-shadow: 0 2px 12px rgba(42, 82, 152, 0.06);
+  flex-shrink: 0;
+}
+
+.s18-directions-label {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #8aaacb;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 12px;
+}
+
 /* ── Start Navigation button ─────────────────────────────────────────────── */
 
 .s18-nav-btn {
@@ -316,7 +366,8 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.16);
   position: relative;
   overflow: hidden;
-  margin-top: auto;
+  margin-top: 12px;
+  flex-shrink: 0;
 }
 
 .s18-nav-btn::before {
@@ -334,3 +385,154 @@
 }
 
 .s18-nav-btn:active { transform: translateY(0); }
+
+/* ── Route badge variants ────────────────────────────────────────────────── */
+
+.s18-route-badge--nav {
+  color: #2a5298;
+  border-color: rgba(74, 122, 200, 0.30);
+  box-shadow: 0 2px 12px rgba(74, 122, 200, 0.18);
+}
+
+.s18-route-badge--nav .s18-route-dot {
+  background: #4a7ac8;
+}
+
+.s18-route-badge--arrived {
+  color: #219150;
+  border-color: rgba(39, 174, 96, 0.30);
+  box-shadow: 0 2px 12px rgba(39, 174, 96, 0.20);
+}
+
+.s18-route-badge--arrived .s18-route-dot {
+  background: #27ae60;
+  animation: none;
+}
+
+/* ── Directions section header row ──────────────────────────────────────── */
+
+.s18-directions-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.s18-directions-label {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #8aaacb;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0;
+}
+
+.s18-nav-hint {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: #4a7ac8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Arrival banner ──────────────────────────────────────────────────────── */
+
+.s18-arrival {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(39, 174, 96, 0.09);
+  border: 1px solid rgba(39, 174, 96, 0.28);
+  border-radius: 18px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
+  animation: s18ArriveIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes s18ArriveIn {
+  from { opacity: 0; transform: scale(0.92) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.s18-arrival-text { display: flex; flex-direction: column; gap: 2px; }
+
+.s18-arrival-title {
+  font-family: var(--font-brand);
+  font-size: 15px;
+  font-weight: 800;
+  color: #1a6b3a;
+  letter-spacing: -0.01em;
+}
+
+.s18-arrival-sub {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: #3a8a5a;
+}
+
+/* Info card muted state after arriving */
+.s18-info-card--arrived {
+  opacity: 0.72;
+}
+
+/* ── Done button (green, post-arrival) ───────────────────────────────────── */
+
+.s18-done-btn {
+  width: 100%;
+  height: 54px;
+  border-radius: 17px;
+  border: none;
+  background: linear-gradient(135deg, #1a6b3a 0%, #27ae60 50%, #2ecc71 100%);
+  color: #ffffff;
+  font-family: var(--font-brand);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: all 0.20s ease;
+  box-shadow:
+    0 10px 32px rgba(39, 174, 96, 0.32),
+    0 3px 10px rgba(39, 174, 96, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.20);
+  margin-top: 12px;
+  flex-shrink: 0;
+  animation: s18ArriveIn 0.5s 0.1s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.s18-done-btn:hover  { transform: translateY(-1.5px); }
+.s18-done-btn:active { transform: translateY(0); }
+
+/* ── Cancel navigation button (subtle text) ──────────────────────────────── */
+
+.s18-cancel-btn {
+  width: 100%;
+  height: 44px;
+  border-radius: 14px;
+  border: 1px solid rgba(74, 122, 200, 0.22);
+  background: rgba(74, 122, 200, 0.05);
+  color: #6a8ab8;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s ease;
+  margin-top: 10px;
+  flex-shrink: 0;
+}
+
+.s18-cancel-btn:hover  { background: rgba(74, 122, 200, 0.10); color: #4a7ac8; }
+.s18-cancel-btn:active { transform: scale(0.97); }

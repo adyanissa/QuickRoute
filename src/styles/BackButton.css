@@ -1,0 +1,52 @@
+/* ─── Shared BackButton component ────────────────────────────────────────── */
+
+/*
+ * The row is a full-width flex container.
+ * In LTR:  justify-content: flex-start  → button appears on the LEFT.
+ * In RTL:  justify-content: flex-end    → button appears on the RIGHT.
+ * This works regardless of whether the parent is a block or flex container.
+ */
+
+.back-btn-row {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  margin-bottom: 14px;
+}
+
+.back-btn-row--compact {
+  margin-bottom: 6px;
+}
+
+[dir="rtl"] .back-btn-row {
+  justify-content: flex-end;
+}
+
+/* ── Button itself ─────────────────────────────────────────────────────────── */
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 100px;
+  padding: 7px 14px 7px 10px;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: var(--font-body, sans-serif);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, transform 0.12s ease;
+  backdrop-filter: blur(8px);
+  -webkit-tap-highlight-color: transparent;
+  white-space: nowrap;
+}
+
+/* Flip padding for RTL so icon stays adjacent to text */
+[dir="rtl"] .back-btn {
+  padding: 7px 10px 7px 14px;
+}
+
+.back-btn:hover  { background: rgba(255, 255, 255, 0.20); color: #ffffff; }
+.back-btn:active { transform: scale(0.96); }

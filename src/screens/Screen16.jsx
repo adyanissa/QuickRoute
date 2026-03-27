@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import HospSearchBar from '../components/HospSearchBar';
 import DestinationCard from '../components/DestinationCard';
+import BackButton from '../components/BackButton';
 import { useLang } from '../context/LangContext';
 import { BUILDINGS } from '../data/hospitalData';
 import '../styles/screen16.css';
@@ -17,6 +18,7 @@ const UI = {
     count:     (n) => `${n} location${n !== 1 ? 's' : ''}`,
     noResults: 'No buildings found',
     wordmark:  ['Quick', 'Route'],
+    back:      'Back',
   },
   ar: {
     title:     'أين تريد\nالذهاب؟',
@@ -26,6 +28,7 @@ const UI = {
     count:     (n) => `${n} موقع`,
     noResults: 'لا توجد نتائج',
     wordmark:  ['Quick', 'Route'],
+    back:      'رجوع',
   },
   he: {
     title:     'לאן אתה\nרוצה להגיע?',
@@ -35,6 +38,7 @@ const UI = {
     count:     (n) => `${n} מיקום`,
     noResults: 'לא נמצאו מבנים',
     wordmark:  ['Quick', 'Route'],
+    back:      'חזרה',
   },
 };
 
@@ -79,6 +83,12 @@ const Screen16 = () => {
 
         {/* ── Gradient Header ── */}
         <div className="s16-header">
+
+          <BackButton
+            onClick={() => navigate('/screen/01')}
+            label={t.back}
+            isRTL={isRTL}
+          />
 
           {/* Top row: logo + language switcher */}
           <div className="s16-topbar">

@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
+<<<<<<< HEAD
       "Bash(node --input-type=module --eval \":*)"
+=======
+      "Bash(npx tsc:*)"
+>>>>>>> 31c73cf2f50214ddd98848723ba7edb018b7d3da
     ]
   }
 }
