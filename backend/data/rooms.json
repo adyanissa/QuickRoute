@@ -1,0 +1,64 @@
+{
+  "heart": [
+    {
+      "id": "hrt-1",
+      "buildingId": "heart",
+      "name": "Cardiac Emergency Unit",
+      "floor": 0,
+      "type": "emergency",
+      "description": "Immediate heart attack response"
+    },
+    {
+      "id": "hrt-2",
+      "buildingId": "heart",
+      "name": "Catheterization Lab",
+      "floor": 1,
+      "type": "lab",
+      "description": "Cardiac catheterization procedures"
+    },
+    {
+      "id": "hrt-9",
+      "buildingId": "heart",
+      "name": "Reception & Admissions",
+      "floor": 0,
+      "type": "reception",
+      "description": "Patient check-in and information"
+    }
+  ],
+  "mri": [
+    {
+      "id": "mri-1",
+      "buildingId": "mri",
+      "name": "MRI Suite 1 - 1.5T",
+      "floor": 0,
+      "type": "imaging",
+      "description": "Standard 1.5 Tesla MRI scanner"
+    },
+    {
+      "id": "mri-8",
+      "buildingId": "mri",
+      "name": "Scheduling & Reception",
+      "floor": 0,
+      "type": "reception",
+      "description": "Appointments and walk-in check-in"
+    }
+  ],
+  "outpatient": [
+    {
+      "id": "out-1",
+      "buildingId": "outpatient",
+      "name": "General Practice Clinic",
+      "floor": 1,
+      "type": "clinic",
+      "description": "Primary care consultations"
+    },
+    {
+      "id": "out-12",
+      "buildingId": "outpatient",
+      "name": "Central Reception",
+      "floor": 0,
+      "type": "reception",
+      "description": "Check-in and clinic directions"
+    }
+  ]
+}

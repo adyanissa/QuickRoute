@@ -1,0 +1,26 @@
+[
+  {
+    "id": "heart",
+    "name": "מרכז הלב",
+    "nameEn": "Heart Center",
+    "subtitle": "Cardiology & cardiac surgery",
+    "category": "cardiology",
+    "tag": "Cardiology"
+  },
+  {
+    "id": "mri",
+    "name": "MRI",
+    "nameEn": "MRI Imaging Center",
+    "subtitle": "Magnetic resonance imaging",
+    "category": "mri",
+    "tag": "MRI"
+  },
+  {
+    "id": "outpatient",
+    "name": "בניין מרפאות חוץ",
+    "nameEn": "Outpatient Clinics Building",
+    "subtitle": "External clinics & consultations",
+    "category": "outpatient",
+    "tag": "Outpatient"
+  }
+]

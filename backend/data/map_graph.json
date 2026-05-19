@@ -1,0 +1,126 @@
+{
+  "nodes": [
+    {
+      "id": "main_entrance",
+      "name": "Main Entrance",
+      "type": "entrance",
+      "floor": 0,
+      "x": 50,
+      "y": 300
+    },
+    {
+      "id": "heart_entrance",
+      "name": "Heart Center Entrance",
+      "buildingId": "heart",
+      "type": "building_entrance",
+      "floor": 0,
+      "x": 180,
+      "y": 240
+    },
+    {
+      "id": "heart_reception",
+      "name": "Heart Reception",
+      "buildingId": "heart",
+      "roomId": "hrt-9",
+      "type": "reception",
+      "floor": 0,
+      "x": 220,
+      "y": 240
+    },
+    {
+      "id": "heart_lab",
+      "name": "Catheterization Lab",
+      "buildingId": "heart",
+      "roomId": "hrt-2",
+      "type": "lab",
+      "floor": 1,
+      "x": 260,
+      "y": 180
+    },
+    {
+      "id": "mri_entrance",
+      "name": "MRI Entrance",
+      "buildingId": "mri",
+      "type": "building_entrance",
+      "floor": 0,
+      "x": 360,
+      "y": 280
+    },
+    {
+      "id": "mri_reception",
+      "name": "MRI Reception",
+      "buildingId": "mri",
+      "roomId": "mri-8",
+      "type": "reception",
+      "floor": 0,
+      "x": 400,
+      "y": 280
+    },
+    {
+      "id": "outpatient_entrance",
+      "name": "Outpatient Entrance",
+      "buildingId": "outpatient",
+      "type": "building_entrance",
+      "floor": 0,
+      "x": 520,
+      "y": 320
+    },
+    {
+      "id": "outpatient_reception",
+      "name": "Outpatient Reception",
+      "buildingId": "outpatient",
+      "roomId": "out-12",
+      "type": "reception",
+      "floor": 0,
+      "x": 560,
+      "y": 320
+    }
+  ],
+  "edges": [
+    {
+      "from": "main_entrance",
+      "to": "heart_entrance",
+      "distance": 30
+    },
+    {
+      "from": "heart_entrance",
+      "to": "heart_reception",
+      "distance": 8
+    },
+    {
+      "from": "heart_reception",
+      "to": "heart_lab",
+      "distance": 15
+    },
+    {
+      "from": "main_entrance",
+      "to": "mri_entrance",
+      "distance": 55
+    },
+    {
+      "from": "mri_entrance",
+      "to": "mri_reception",
+      "distance": 7
+    },
+    {
+      "from": "main_entrance",
+      "to": "outpatient_entrance",
+      "distance": 70
+    },
+    {
+      "from": "outpatient_entrance",
+      "to": "outpatient_reception",
+      "distance": 9
+    },
+    {
+      "from": "heart_entrance",
+      "to": "mri_entrance",
+      "distance": 35
+    },
+    {
+      "from": "mri_entrance",
+      "to": "outpatient_entrance",
+      "distance": 28
+    }
+  ]
+}
