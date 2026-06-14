@@ -1,19 +1,56 @@
-from flask import Flask, jsonify
-from flask_cors import CORS
-from routes.navigation_routes import navigation_bp
+from contextlib import asynccontextmanager
 
-app = Flask(__name__)
-CORS(app)
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-app.register_blueprint(navigation_bp)
+from database.mongo import init_db
+from routes.navigation_routes import router as navigation_router
+from routes.auth_routes import router as auth_router
+from routes.invitation_code_routes import router as invitation_code_router
+from routes.building_routes import router as building_router
+from routes.map_routes import router as map_router
+from routes.room_routes import router as room_router
+from routes.route_point_routes import router as route_point_router
+from routes.route_edge_routes import router as route_edge_router
 
 
-@app.route("/")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
+
+
+app = FastAPI(
+    title="QuickRoute API",
+    description="Backend API for QuickRoute indoor navigation system",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(navigation_router)
+app.include_router(auth_router)
+app.include_router(invitation_code_router)
+app.include_router(building_router)
+app.include_router(map_router)
+app.include_router(room_router)
+app.include_router(route_point_router)
+app.include_router(route_edge_router)
+
+
+
+
+
+@app.get("/")
 def home():
-    return jsonify({
+    return {
         "message": "Backend is running 🚀"
-    })
-
-
-if __name__ == "__main__":
-    app.run(debug=True)
+    }
