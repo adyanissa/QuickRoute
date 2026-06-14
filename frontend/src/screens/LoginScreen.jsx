@@ -2,29 +2,39 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
+import { loginUser } from '../api/authApi';
 import '../styles/LoginScreen.css';
 
 const UI = {
   en: {
-    title:       'Login',
-    userPlaceholder: 'Enter username',
+    title: 'Login',
+    userPlaceholder: 'Enter email',
     passPlaceholder: 'Enter password',
-    signIn:      'Sign In',
-    back:        'Back',
+    signIn: 'Sign In',
+    back: 'Back',
+    loading: 'Signing in...',
+    required: 'Please enter email and password',
+    failed: 'Login failed. Please check your details.',
   },
   ar: {
-    title:       'تسجيل الدخول',
-    userPlaceholder: 'أدخل اسم المستخدم',
+    title: 'تسجيل الدخول',
+    userPlaceholder: 'أدخل البريد الإلكتروني',
     passPlaceholder: 'أدخل كلمة المرور',
-    signIn:      'دخول',
-    back:        'رجوع',
+    signIn: 'دخول',
+    back: 'رجوع',
+    loading: 'جاري تسجيل الدخول...',
+    required: 'أدخل البريد الإلكتروني وكلمة المرور',
+    failed: 'فشل تسجيل الدخول. افحصي البيانات.',
   },
   he: {
-    title:       'התחברות',
-    userPlaceholder: 'הזן שם משתמש',
+    title: 'התחברות',
+    userPlaceholder: 'הזן אימייל',
     passPlaceholder: 'הזן סיסמה',
-    signIn:      'כניסה',
-    back:        'חזרה',
+    signIn: 'כניסה',
+    back: 'חזרה',
+    loading: 'מתחבר...',
+    required: 'יש להזין אימייל וסיסמה',
+    failed: 'ההתחברות נכשלה. בדקי את הפרטים.',
   },
 };
 
@@ -68,32 +78,61 @@ const BackArrowRTL = () => (
 );
 
 const LoginScreen = () => {
-  const { lang }          = useLang();
-  const navigate          = useNavigate();
+  const { lang } = useLang();
+  const navigate = useNavigate();
+
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
 
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
   const isRTL = lang === 'ar' || lang === 'he';
-  const t     = UI[lang];
+  const t = UI[lang];
+
+  const handleLogin = async () => {
+    setError('');
+
+    if (!username.trim() || !password.trim()) {
+      setError(t.required);
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const data = await loginUser({
+        email: username.trim(),
+        password: password,
+      });
+
+      localStorage.setItem('quickroute_admin', JSON.stringify(data));
+
+      navigate('/screen/05');
+    } catch (err) {
+      setError(err.message || t.failed);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="layout-wrapper">
       <div className="layout-shell s02-shell" dir={isRTL ? 'rtl' : 'ltr'}>
 
-        {/* ── Back button ── */}
         <div className={`s02-topbar${isRTL ? ' s02-topbar-rtl' : ''}`}>
           <button
             className={`s02-back-btn${isRTL ? ' s02-back-btn-rtl' : ''}`}
             onClick={() => navigate('/screen/01')}
             aria-label={t.back}
+            type="button"
           >
             {isRTL ? <BackArrowRTL /> : <BackArrowLTR />}
             {t.back}
           </button>
         </div>
 
-        {/* ── Branding ── */}
         <div className="s02-brand">
           <div className="s02-logo-card">
             <QuickRouteLogo size={46} />
@@ -103,23 +142,20 @@ const LoginScreen = () => {
           </div>
         </div>
 
-        {/* ── Page title ── */}
         <div className="s02-heading">
           <h1 className="s02-title">{t.title}</h1>
         </div>
 
-        {/* ── Form ── */}
         <div className="s02-form">
 
-          {/* Username */}
           <div className="s02-input-wrap">
             <span className={`s02-input-icon${isRTL ? ' s02-input-icon-rtl' : ''}`}>
               <UserIcon />
             </span>
             <input
               className={`s02-input${isRTL ? ' s02-input-rtl' : ''}`}
-              type="text"
-              autoComplete="username"
+              type="email"
+              autoComplete="email"
               placeholder={t.userPlaceholder}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -127,7 +163,6 @@ const LoginScreen = () => {
             />
           </div>
 
-          {/* Password */}
           <div className="s02-input-wrap">
             <span className={`s02-input-icon${isRTL ? ' s02-input-icon-rtl' : ''}`}>
               <LockIcon />
@@ -139,6 +174,11 @@ const LoginScreen = () => {
               placeholder={t.passPlaceholder}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleLogin();
+                }
+              }}
               dir={isRTL ? 'rtl' : 'ltr'}
             />
             <button
@@ -151,9 +191,20 @@ const LoginScreen = () => {
             </button>
           </div>
 
-          {/* Sign In */}
-          <button className="s02-signin-btn" onClick={() => navigate('/screen/05')} aria-label={t.signIn}>
-            {t.signIn}
+          {error && (
+            <p style={{ color: '#b42318', textAlign: 'center', marginTop: '8px' }}>
+              {error}
+            </p>
+          )}
+
+          <button
+            className="s02-signin-btn"
+            onClick={handleLogin}
+            aria-label={t.signIn}
+            type="button"
+            disabled={loading}
+          >
+            {loading ? t.loading : t.signIn}
           </button>
 
         </div>
