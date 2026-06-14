@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
-import '../styles/screen04.css';
+import '../styles/AccountCreationScreen.css';
 
 const UI = {
   en: {
@@ -87,7 +87,7 @@ const BackArrowRTL = () => (
   </svg>
 );
 
-const Screen04 = () => {
+const AccountCreationScreen = () => {
   const { lang }  = useLang();
   const navigate  = useNavigate();
   const isRTL     = lang === 'ar' || lang === 'he';
@@ -238,4 +238,4 @@ const Screen04 = () => {
   );
 };
 
-export default Screen04;
+export default AccountCreationScreen;

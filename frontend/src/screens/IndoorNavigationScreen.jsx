@@ -16,7 +16,7 @@ import {
   formatDistance,
   formatTime,
 } from '../utils/routeHelpers';
-import '../styles/screen18.css';
+import '../styles/IndoorNavigationScreen.css';
 
 // ── Translations ──────────────────────────────────────────────────────────────
 const UI = {
@@ -194,7 +194,7 @@ const RouteOverlay = ({ buildingId, t, hasArrived }) => {
 };
 
 // ── Screen ────────────────────────────────────────────────────────────────────
-const Screen18 = () => {
+const IndoorNavigationScreen = () => {
   const { lang }  = useLang();
   const navigate  = useNavigate();
   const location  = useLocation();
@@ -385,4 +385,4 @@ const Screen18 = () => {
   );
 };
 
-export default Screen18;
+export default IndoorNavigationScreen;

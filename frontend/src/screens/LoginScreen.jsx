@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
-import '../styles/screen02.css';
+import '../styles/LoginScreen.css';
 
 const UI = {
   en: {
@@ -67,7 +67,7 @@ const BackArrowRTL = () => (
   </svg>
 );
 
-const Screen02 = () => {
+const LoginScreen = () => {
   const { lang }          = useLang();
   const navigate          = useNavigate();
   const [username, setUsername] = useState('');
@@ -163,4 +163,4 @@ const Screen02 = () => {
   );
 };
 
-export default Screen02;
+export default LoginScreen;

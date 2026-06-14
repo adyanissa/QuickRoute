@@ -1,0 +1,529 @@
+/* ─── Screen 17 — Room / Destination Selection ──────────────────────────── */
+
+.s17-shell {
+  width: 100%;
+  max-width: 100%;
+  min-height: 100vh;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  background: linear-gradient(
+    180deg,
+    #eef3f9 0%,
+    #dbeaf8 52%,
+    #e8f2fb 100%
+  );
+}
+
+/* ── Gradient Header ───────────────────────────────────────────────────── */
+
+.s17-header {
+  flex-shrink: 0;
+  width: 100%;
+  background: linear-gradient(
+    158deg,
+    #0d2244 0%,
+    #1a3a6b 42%,
+    #2a5298 76%,
+    #3b65b5 100%
+  );
+  padding: 52px 22px 72px;
+  border-radius: 0;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.s17-header::before {
+  content: '';
+  position: absolute;
+  top: -50px;
+  right: -50px;
+  width: 200px;
+  height: 200px;
+  background: radial-gradient(circle, rgba(74, 122, 200, 0.20) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.s17-header::after {
+  content: '';
+  position: absolute;
+  bottom: 12px;
+  left: -42px;
+  width: 180px;
+  height: 180px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.045) 0%, transparent 70%);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* ── Back button ───────────────────────────────────────────────────────── */
+
+.s17-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 100px;
+  padding: 7px 14px 7px 10px;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  margin-bottom: 20px;
+  backdrop-filter: blur(8px);
+  position: relative;
+  z-index: 2;
+  align-self: flex-start;
+}
+
+.s17-back-btn:hover {
+  background: rgba(255, 255, 255, 0.20);
+  color: #ffffff;
+}
+
+.s17-back-btn:active {
+  transform: scale(0.96);
+}
+
+[dir="rtl"] .s17-back-btn {
+  padding: 7px 10px 7px 14px;
+}
+
+/* ── Building row ──────────────────────────────────────────────────────── */
+
+.s17-building-row {
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 13px;
+  margin-bottom: 12px;
+  position: relative;
+  z-index: 2;
+  text-align: center;
+}
+
+.s17-building-icon {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(6px);
+}
+
+.s17-building-tag {
+  font-family: var(--font-body);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.s17-building-text {
+  min-width: 0;
+}
+
+.s17-building-name {
+  font-family: var(--font-brand);
+  font-size: 21px;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  unicode-bidi: embed;
+}
+
+.s17-building-en {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(188, 214, 248, 0.82);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+  direction: ltr;
+  unicode-bidi: embed;
+}
+
+/* ── Subtitle ──────────────────────────────────────────────────────────── */
+
+.s17-subtitle {
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(185, 212, 248, 0.76);
+  position: relative;
+  z-index: 2;
+  text-align: center;
+}
+
+/* ── Sticky search area ────────────────────────────────────────────────── */
+
+.s17-search-wrap {
+  flex-shrink: 0;
+  width: 100%;
+  padding: 0 18px;
+  margin-top: -28px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  filter: drop-shadow(0 8px 20px rgba(26, 58, 107, 0.14));
+}
+
+.s17-search-wrap > * {
+  width: 100%;
+  max-width: 760px;
+}
+
+/* ── Content ───────────────────────────────────────────────────────────── */
+
+.s17-content {
+  flex: 1;
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 34px 18px 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  overflow: visible;
+}
+
+.s17-content-padded {
+  padding-bottom: 120px;
+}
+
+/* ── Section row ───────────────────────────────────────────────────────── */
+
+.s17-section-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding: 0 2px;
+}
+
+.s17-section-label {
+  font-family: var(--font-brand);
+  font-size: 13px;
+  font-weight: 700;
+  color: #5a7aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.s17-section-count {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: #8aaacb;
+  background: rgba(74, 122, 200, 0.09);
+  padding: 3px 10px;
+  border-radius: 100px;
+}
+
+/* ── Room list ─────────────────────────────────────────────────────────── */
+
+.s17-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Empty state ───────────────────────────────────────────────────────── */
+
+.s17-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 44px 24px;
+}
+
+.s17-empty p {
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 500;
+  color: #b0ccdf;
+  text-align: center;
+}
+
+/* ── Sticky Go footer ──────────────────────────────────────────────────── */
+
+.s17-footer {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  width: min(100%, 760px);
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(208, 228, 247, 0.80);
+  border-bottom: none;
+  border-radius: 24px 24px 0 0;
+  padding: 14px 18px 22px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: 0 -8px 28px rgba(42, 82, 152, 0.10);
+  animation: slideUp 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+  z-index: 60;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translate(-50%, 100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+.s17-footer-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.s17-footer-label {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #8aaacb;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+
+.s17-footer-room {
+  font-family: var(--font-brand);
+  font-size: 15px;
+  font-weight: 700;
+  color: #1a3a6b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.s17-footer-floor {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #8aaacb;
+  text-transform: capitalize;
+}
+
+/* ── Go button ─────────────────────────────────────────────────────────── */
+
+.s17-go-btn {
+  flex-shrink: 0;
+  height: 50px;
+  padding: 0 22px;
+  border-radius: 16px;
+  border: none;
+  background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 50%, #3b6dbf 100%);
+  color: #ffffff;
+  font-family: var(--font-brand);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.20s ease;
+  box-shadow:
+    0 8px 28px rgba(26, 58, 107, 0.30),
+    0 3px 10px rgba(42, 82, 152, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  position: relative;
+  overflow: hidden;
+}
+
+.s17-go-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, transparent 55%);
+}
+
+.s17-go-btn:hover {
+  transform: translateY(-1.5px);
+  box-shadow:
+    0 12px 34px rgba(26, 58, 107, 0.34),
+    0 5px 14px rgba(42, 82, 152, 0.22);
+}
+
+.s17-go-btn:active {
+  transform: translateY(0);
+}
+
+/* ── Desktop / laptop layout ───────────────────────────────────────────── */
+
+@media (min-width: 900px) {
+  .s17-shell {
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at top left, rgba(74, 122, 200, 0.10), transparent 32%),
+      radial-gradient(circle at bottom right, rgba(42, 82, 152, 0.08), transparent 34%),
+      linear-gradient(180deg, #eef3f9 0%, #dbeaf8 52%, #e8f2fb 100%);
+  }
+
+  .s17-header {
+    padding: 54px 40px 78px;
+  }
+
+  .s17-header > * {
+    max-width: 1080px;
+  }
+
+  .s17-back-btn {
+    align-self: center;
+    transform: translateX(-500px);
+  }
+
+  .s17-back-btn:active {
+    transform: translateX(-500px) scale(0.96);
+  }
+
+  .s17-search-wrap {
+    max-width: 980px;
+    margin: -34px auto 0;
+    padding: 0 28px;
+    top: 14px;
+  }
+
+  .s17-search-wrap::before {
+    content: "";
+    position: absolute;
+    inset: -14px 18px -10px;
+    border-radius: 28px;
+    background: rgba(238, 243, 249, 0.82);
+    backdrop-filter: blur(14px);
+    z-index: -1;
+  }
+
+  .s17-search-wrap > * {
+    max-width: 760px;
+  }
+
+  .s17-content {
+    max-width: 980px;
+    padding: 40px 28px 90px;
+  }
+
+  .s17-section-row {
+    max-width: 760px;
+    margin-inline: auto;
+  }
+
+  .s17-list {
+    max-width: 760px;
+    margin-inline: auto;
+    gap: 18px;
+  }
+
+  .s17-footer {
+    width: min(100%, 760px);
+  }
+}
+
+/* ── Wide desktop: 2-column card layout ────────────────────────────────── */
+
+@media (min-width: 1180px) {
+  .s17-content {
+    max-width: 1120px;
+  }
+
+  .s17-search-wrap {
+    max-width: 1120px;
+  }
+
+  .s17-search-wrap > * {
+    max-width: 820px;
+  }
+
+  .s17-section-row {
+    max-width: 100%;
+  }
+
+  .s17-list {
+    max-width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(320px, 1fr));
+    gap: 18px;
+  }
+
+  .s17-footer {
+    width: min(100%, 860px);
+  }
+}
+
+/* ── Very large screens ────────────────────────────────────────────────── */
+
+@media (min-width: 1500px) {
+  .s17-content,
+  .s17-search-wrap {
+    max-width: 1180px;
+  }
+}
+
+/* ── Mobile polish ─────────────────────────────────────────────────────── */
+
+@media (max-width: 520px) {
+  .s17-header {
+    padding: 52px 22px 58px;
+  }
+
+  .s17-building-row {
+    justify-content: flex-start;
+    text-align: start;
+  }
+
+  .s17-search-wrap {
+    margin-top: -26px;
+    padding: 0 18px;
+    top: 0;
+  }
+
+  .s17-content {
+    padding: 28px 18px 110px;
+  }
+
+  .s17-list {
+    gap: 9px;
+  }
+
+  .s17-footer {
+    width: 100%;
+    border-radius: 22px 22px 0 0;
+  }
+}

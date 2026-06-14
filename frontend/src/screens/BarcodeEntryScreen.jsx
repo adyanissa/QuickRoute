@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
-import '../styles/screen01.css';
+import '../styles/BarcodeEntryScreen.css';
 
 const LANGUAGES = [
   { code: 'ar', label: 'عربي' },
@@ -76,7 +76,7 @@ const ArrowLeftIcon = () => (
   </svg>
 );
 
-const Screen01 = () => {
+const BarcodeEntryScreen = () => {
   const { lang, setLang } = useLang();
   const navigate           = useNavigate();
   const [barcode, setBarcode] = useState('');
@@ -163,4 +163,4 @@ const Screen01 = () => {
   );
 };
 
-export default Screen01;
+export default BarcodeEntryScreen;

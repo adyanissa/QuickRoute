@@ -5,7 +5,7 @@ import DestinationCard from '../components/DestinationCard';
 import BackButton from '../components/BackButton';
 import { useLang } from '../context/LangContext';
 import { ROOMS } from '../data/hospitalData';
-import '../styles/screen17.css';
+import '../styles/DestinationSelectionScreen.css';
 
 // ── Translations ──────────────────────────────────────────────────────────────
 const UI = {
@@ -48,7 +48,7 @@ const UI = {
 };
 
 // ── Screen ────────────────────────────────────────────────────────────────────
-const Screen17 = () => {
+const DestinationSelectionScreen = () => {
   const { lang }              = useLang();
   const navigate              = useNavigate();
   const location              = useLocation();
@@ -157,4 +157,4 @@ const Screen17 = () => {
   );
 };
 
-export default Screen17;
+export default DestinationSelectionScreen;

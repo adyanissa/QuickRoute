@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
-import '../styles/Screen15.css';
+import '../styles/WelcomeScreen.css';
 
 const LANGUAGES = [
   { code: 'ar', label: 'عربي' },
@@ -15,7 +15,7 @@ const UI = {
   he: { welcome: 'ברוכים הבאים', go: '← התחל' },
 };
 
-const Screen15 = () => {
+const WelcomeScreen = () => {
   const { lang, setLang } = useLang();
   const navigate           = useNavigate();
   const isRTL              = lang === 'ar' || lang === 'he';
@@ -72,4 +72,4 @@ const Screen15 = () => {
   );
 };
 
-export default Screen15;
+export default WelcomeScreen;

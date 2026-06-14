@@ -1,0 +1,27 @@
+@media (min-width: 900px) {
+  .s15-shell {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 48px 36px 56px !important;
+    background: rgba(255,255,255,0.96);
+    border-radius: 32px;
+    box-shadow: 0 24px 80px rgba(42,82,152,0.12);
+  }
+
+  .s15-title {
+    font-size: 36px;
+    line-height: 1.08;
+  }
+
+  .s15-subtitle {
+    font-size: 16px;
+    max-width: 92%;
+    margin: 0 auto;
+  }
+
+  .s15-go-btn {
+    max-width: 420px;
+    margin: 0 auto;
+  }
+}
+

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
-import '../styles/screen03.css';
+import '../styles/RegisterVerificationScreen.css';
 
 const UI = {
   en: {
@@ -61,7 +61,7 @@ const BackArrowRTL = () => (
   </svg>
 );
 
-const Screen03 = () => {
+const RegisterVerificationScreen = () => {
   const { lang }      = useLang();
   const navigate      = useNavigate();
   const [barcode, setBarcode] = useState('');
@@ -134,4 +134,4 @@ const Screen03 = () => {
   );
 };
 
-export default Screen03;
+export default RegisterVerificationScreen;

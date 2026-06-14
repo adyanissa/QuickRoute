@@ -6,7 +6,7 @@ import DestinationCard from '../components/DestinationCard';
 import BackButton from '../components/BackButton';
 import { useLang } from '../context/LangContext';
 import { BUILDINGS } from '../data/hospitalData';
-import '../styles/screen16.css';
+import '../styles/BuildingSelectionScreen.css';
 
 // ── Translations ──────────────────────────────────────────────────────────────
 const UI = {
@@ -57,7 +57,7 @@ const PinIcon = () => (
 );
 
 // ── Screen ────────────────────────────────────────────────────────────────────
-const Screen16 = () => {
+const BuildingSelectionScreen = () => {
   const { lang, setLang } = useLang();
   const navigate          = useNavigate();
   const [query, setQuery] = useState('');
@@ -177,4 +177,4 @@ const Screen16 = () => {
   );
 };
 
-export default Screen16;
+export default BuildingSelectionScreen;
