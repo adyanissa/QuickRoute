@@ -11,7 +11,14 @@ class RouteEdge(Document):
     from_point_id: str
     to_point_id: str
 
+    # walkway / stairs / elevator
+    edge_type: str = "walkway"
+
+    # final calculated distance in meters
     distance: float
+
+    # optional manual distance for stairs/elevator
+    distance_override: Optional[float] = None
 
     is_bidirectional: bool = True
     is_accessible: bool = True

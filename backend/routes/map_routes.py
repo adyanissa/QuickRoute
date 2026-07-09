@@ -22,6 +22,8 @@ def map_to_response(map_item: Map) -> MapResponse:
         address=map_item.address,
         description=map_item.description,
         image_url=map_item.image_url,
+        scale=map_item.scale,
+        floor_scales=map_item.floor_scales,
         is_current=map_item.is_current,
         created_at=map_item.created_at,
         updated_at=map_item.updated_at,
@@ -34,7 +36,6 @@ def map_to_response(map_item: Map) -> MapResponse:
     status_code=status.HTTP_201_CREATED
 )
 async def create_map(map_data: MapCreate):
-    # If this map is current, make all old maps not current
     await Map.find(Map.is_current == True).update(
         {"$set": {"is_current": False}}
     )
@@ -45,6 +46,8 @@ async def create_map(map_data: MapCreate):
         address=map_data.address,
         description=map_data.description,
         image_url=map_data.image_url,
+        scale=map_data.scale,
+        floor_scales=map_data.floor_scales,
         is_current=True,
     )
 
