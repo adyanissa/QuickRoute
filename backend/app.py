@@ -14,7 +14,6 @@ from routes.route_point_routes import router as route_point_router
 from routes.route_edge_routes import router as route_edge_router
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
