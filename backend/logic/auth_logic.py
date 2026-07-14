@@ -23,7 +23,10 @@ async def register_user(request: RegisterRequest):
     new_user = User(
         full_name=request.full_name,
         email=request.email,
-        password=hash_password(request.password)
+        password=hash_password(request.password),
+        role="regular_user",
+        building_ids=[],
+        all_buildings=False
     )
 
     await new_user.insert()
@@ -33,7 +36,10 @@ async def register_user(request: RegisterRequest):
         "message": "User registered successfully",
         "user": {
             "full_name": new_user.full_name,
-            "email": new_user.email
+            "email": new_user.email,
+            "role": new_user.role,
+            "building_ids": new_user.building_ids,
+            "all_buildings": new_user.all_buildings
         }
     }
 
@@ -57,7 +63,12 @@ async def signup_user(request: SignupRequest):
     new_user = User(
         full_name=request.full_name,
         email=request.email,
-        password=hash_password(request.password)
+        password=hash_password(request.password),
+
+        # Permissions are copied from the invitation code
+        role=invitation_code.role,
+        building_ids=list(invitation_code.building_ids),
+        all_buildings=invitation_code.all_buildings
     )
 
     await new_user.insert()
@@ -73,7 +84,10 @@ async def signup_user(request: SignupRequest):
         "message": "User signed up successfully",
         "user": {
             "full_name": new_user.full_name,
-            "email": new_user.email
+            "email": new_user.email,
+            "role": new_user.role,
+            "building_ids": new_user.building_ids,
+            "all_buildings": new_user.all_buildings
         }
     }
 
@@ -89,6 +103,9 @@ async def login_user(request: LoginRequest):
         "message": "Login successful",
         "user": {
             "full_name": user.full_name,
-            "email": user.email
+            "email": user.email,
+            "role": user.role,
+            "building_ids": user.building_ids,
+            "all_buildings": user.all_buildings
         }
     }

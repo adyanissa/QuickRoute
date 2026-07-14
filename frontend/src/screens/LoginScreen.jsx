@@ -107,7 +107,10 @@ const LoginScreen = () => {
         password: password,
       });
 
-      localStorage.setItem('quickroute_admin', JSON.stringify(data));
+      const user = data.user;
+
+      localStorage.setItem('quickroute_user', JSON.stringify(user));
+      localStorage.setItem('quickroute_admin', JSON.stringify(user));
 
       navigate('/screen/05');
     } catch (err) {
