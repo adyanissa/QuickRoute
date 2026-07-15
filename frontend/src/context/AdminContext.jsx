@@ -1,77 +1,78 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { BUILDINGS, ROOMS } from '../data/hospitalData';
 
-// ── Dummy route-point data (ready for future backend) ─────────────────────────
-const INITIAL_ROUTES = [
-  {
-    id: 'rt-1',
-    name: 'Main Entrance Node',
-    floor: 0,
-    x: 120,
-    y: 380,
-    connectedTo: ['rt-2', 'rt-6'],
-  },
-  {
-    id: 'rt-2',
-    name: 'Lobby Junction',
-    floor: 0,
-    x: 120,
-    y: 280,
-    connectedTo: ['rt-1', 'rt-3', 'rt-4'],
-  },
-  {
-    id: 'rt-3',
-    name: 'Corridor A-West',
-    floor: 0,
-    x: 220,
-    y: 280,
-    connectedTo: ['rt-2', 'rt-5'],
-  },
-  {
-    id: 'rt-4',
-    name: 'Elevator Landing',
-    floor: 0,
-    x: 120,
-    y: 180,
-    connectedTo: ['rt-2'],
-  },
-  {
-    id: 'rt-5',
-    name: 'East Wing Gate',
-    floor: 0,
-    x: 320,
-    y: 280,
-    connectedTo: ['rt-3'],
-  },
-  {
-    id: 'rt-6',
-    name: 'Emergency Entrance',
-    floor: 0,
-    x: 50,
-    y: 350,
-    connectedTo: ['rt-1'],
-  },
-];
+const API_BASE_URL = 'http://127.0.0.1:8000';
 
-// ── Real Quick Route map ──────────────────────────────────────────────────────
-const INITIAL_MAP = {
-  id: '6a4cf16aa921ae9dc1c84616',
-  title: 'Quick Route Real Residential Area',
-  campus: 'Afula Residential Complex',
-  address: 'Yitzhak Sadeh Street, Afula',
-  description:
-    'Real navigation area based on architectural development plan',
-  hasImage: true,
-  imageUrl: '/maps/quick_route_ground_floor.png',
+const INITIAL_ROUTES = [];
+
+const FALLBACK_MAP = {
+  id: null,
+  title: '',
+  campus: '',
+  address: '',
+  description: '',
+  hasImage: false,
+
+  imageUrl: null,
+  sourceImageUrl: null,
+  displayImageUrl: null,
+
   scale: 1,
   floor_scales: {},
-  is_current: true,
+  is_current: false,
 };
+
+const normalizeMap = (map) => {
+  if (!map) return FALLBACK_MAP;
+
+  return {
+    id: map.id || map._id || null,
+    title: map.title || map.name || '',
+    campus: map.campus || map.location || '',
+    address: map.address || '',
+    description: map.description || '',
+
+    imageUrl: map.imageUrl || map.image_url || null,
+    sourceImageUrl: map.sourceImageUrl || map.source_image_url || null,
+    displayImageUrl: map.displayImageUrl || map.display_image_url || null,
+
+    hasImage: Boolean(
+      map.hasImage ||
+        map.has_image ||
+        map.imageUrl ||
+        map.image_url ||
+        map.sourceImageUrl ||
+        map.source_image_url ||
+        map.displayImageUrl ||
+        map.display_image_url
+    ),
+
+    scale: map.scale ?? 1,
+    floor_scales: map.floor_scales || {},
+    is_current: Boolean(map.is_current || map.isCurrent),
+  };
+};
+
+const mapToApiPayload = (map) => ({
+  title: map.title || '',
+  campus: map.campus || '',
+  address: map.address || '',
+  description: map.description || '',
+  image_url: map.imageUrl || null,
+  source_image_url: map.sourceImageUrl || null,
+  display_image_url: map.displayImageUrl || null,
+  scale: Number(map.scale || 1),
+  floor_scales: map.floor_scales || {},
+  is_current: Boolean(map.is_current),
+});
 
 const AdminContext = createContext(null);
 
 export const AdminProvider = ({ children }) => {
-  const [mapData, setMapData] = useState(INITIAL_MAP);
+  const [mapData, setMapData] = useState(FALLBACK_MAP);
+  const [maps, setMaps] = useState([]);
+  const [isMapLoading, setIsMapLoading] = useState(false);
+  const [mapError, setMapError] = useState('');
 
   const [buildings, setBuildings] = useState([...BUILDINGS]);
 
@@ -84,16 +85,74 @@ export const AdminProvider = ({ children }) => {
     )
   );
 
-  const [routePoints, setRoutePoints] = useState([
-    ...INITIAL_ROUTES,
-  ]);
+  const [routePoints, setRoutePoints] = useState([...INITIAL_ROUTES]);
 
-  // ── Map ────────────────────────────────────────────────────────────────────
-  const updateMap = (data) => {
-    setMapData({ ...data });
+  const loadMaps = async () => {
+    setIsMapLoading(true);
+    setMapError('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/maps`);
+
+      if (!response.ok) {
+        throw new Error('Failed to load maps');
+      }
+
+      const data = await response.json();
+      const normalizedMaps = Array.isArray(data)
+        ? data.map(normalizeMap)
+        : [normalizeMap(data)];
+
+      setMaps(normalizedMaps);
+
+      const currentMap =
+        normalizedMaps.find((map) => map.is_current) || normalizedMaps[0] || FALLBACK_MAP;
+
+      setMapData(currentMap);
+    } catch (error) {
+      console.error(error);
+      setMapError('Failed to load maps');
+      setMapData(FALLBACK_MAP);
+    } finally {
+      setIsMapLoading(false);
+    }
   };
 
-  // ── Buildings ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    loadMaps();
+  }, []);
+
+  const updateMap = async (data) => {
+    const normalized = normalizeMap(data);
+
+    if (!normalized.id) {
+      setMapData(normalized);
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/maps/${normalized.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mapToApiPayload(normalized)),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update map');
+      }
+
+      const updatedMap = normalizeMap(await response.json());
+
+      setMapData(updatedMap);
+      setMaps((previousMaps) =>
+        previousMaps.map((map) => (map.id === updatedMap.id ? updatedMap : map))
+      );
+    } catch (error) {
+      console.error(error);
+      alert('Failed to update map');
+    }
+  };
+
   const addBuilding = (b) => {
     setBuildings((p) => [
       ...p,
@@ -105,17 +164,11 @@ export const AdminProvider = ({ children }) => {
   };
 
   const updateBuilding = (b) => {
-    setBuildings((p) =>
-      p.map((x) =>
-        x.id === b.id ? { ...b } : x
-      )
-    );
+    setBuildings((p) => p.map((x) => (x.id === b.id ? { ...b } : x)));
   };
 
   const deleteBuilding = (id) => {
-    setBuildings((p) =>
-      p.filter((x) => x.id !== id)
-    );
+    setBuildings((p) => p.filter((x) => x.id !== id));
 
     setRooms((p) => {
       const n = { ...p };
@@ -124,7 +177,6 @@ export const AdminProvider = ({ children }) => {
     });
   };
 
-  // ── Rooms ──────────────────────────────────────────────────────────────────
   const addRoom = (bId, r) => {
     setRooms((p) => ({
       ...p,
@@ -141,22 +193,17 @@ export const AdminProvider = ({ children }) => {
   const updateRoom = (bId, r) => {
     setRooms((p) => ({
       ...p,
-      [bId]: (p[bId] || []).map((x) =>
-        x.id === r.id ? { ...r } : x
-      ),
+      [bId]: (p[bId] || []).map((x) => (x.id === r.id ? { ...r } : x)),
     }));
   };
 
   const deleteRoom = (bId, id) => {
     setRooms((p) => ({
       ...p,
-      [bId]: (p[bId] || []).filter(
-        (x) => x.id !== id
-      ),
+      [bId]: (p[bId] || []).filter((x) => x.id !== id),
     }));
   };
 
-  // ── Route points ───────────────────────────────────────────────────────────
   const addRoute = (r) => {
     setRoutePoints((p) => [
       ...p,
@@ -168,23 +215,23 @@ export const AdminProvider = ({ children }) => {
   };
 
   const updateRoute = (r) => {
-    setRoutePoints((p) =>
-      p.map((x) =>
-        x.id === r.id ? { ...r } : x
-      )
-    );
+    setRoutePoints((p) => p.map((x) => (x.id === r.id ? { ...r } : x)));
   };
 
   const deleteRoute = (id) => {
-    setRoutePoints((p) =>
-      p.filter((x) => x.id !== id)
-    );
+    setRoutePoints((p) => p.filter((x) => x.id !== id));
   };
 
   return (
     <AdminContext.Provider
       value={{
+        API_BASE_URL,
+
         mapData,
+        maps,
+        isMapLoading,
+        mapError,
+        loadMaps,
         updateMap,
 
         buildings,
@@ -212,9 +259,7 @@ export const useAdmin = () => {
   const ctx = useContext(AdminContext);
 
   if (!ctx) {
-    throw new Error(
-      'useAdmin must be used inside <AdminProvider>'
-    );
+    throw new Error('useAdmin must be used inside <AdminProvider>');
   }
 
   return ctx;
