@@ -11,6 +11,7 @@ from beanie import PydanticObjectId
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Depends,
     File,
     Form,
     HTTPException,
@@ -18,7 +19,9 @@ from fastapi import (
     status,
 )
 
+from core.auth_deps import require_global_admin
 from models.map_model import Map
+from models.user_model import User
 from schemas.map_schema import (
     MapCreate,
     MapProcessingResponse,
@@ -33,6 +36,13 @@ from services.map_image_service import (
     process_uploaded_map,
     save_upload_to_temporary_file,
 )
+from services.storage_backend import (
+    delete_generated_file,
+    sync_generated_file,
+)
+from models.route_edge_model import RouteEdge
+from models.route_point_model import RoutePoint
+from models.location_code_model import LocationCode
 
 
 router = APIRouter(
@@ -127,7 +137,8 @@ async def set_map_as_current(map_item: Map) -> None:
 
 def remove_map_files(map_id: str) -> None:
     """
-    Delete generated source, display and temporary files.
+    Delete generated source, display and temporary files (local disk and,
+    if configured, their S3 copies).
     """
 
     delete_file_safely(
@@ -138,10 +149,48 @@ def remove_map_files(map_id: str) -> None:
         DISPLAY_DIR / f"{map_id}.png"
     )
 
+    delete_generated_file(f"/uploads/maps/source/{map_id}.png")
+    delete_generated_file(f"/uploads/maps/display/{map_id}.png")
+
     for temporary_file in TEMP_DIR.glob(
         f"{map_id}_*"
     ):
         delete_file_safely(temporary_file)
+
+
+async def cascade_delete_map_graph(map_id: str) -> dict:
+    """
+    Remove every RouteEdge, RoutePoint and LocationCode that belongs to a
+    map being deleted, so deleting a map never leaves orphaned navigation
+    graph documents behind. Edges are removed before points because edges
+    reference point IDs.
+    """
+
+    deleted_edges = await RouteEdge.find(
+        RouteEdge.map_id == map_id
+    ).delete()
+
+    deleted_location_codes = await LocationCode.find(
+        LocationCode.map_id == map_id
+    ).delete()
+
+    deleted_points = await RoutePoint.find(
+        RoutePoint.map_id == map_id
+    ).delete()
+
+    return {
+        "deleted_edges": (
+            deleted_edges.deleted_count if deleted_edges else 0
+        ),
+        "deleted_points": (
+            deleted_points.deleted_count if deleted_points else 0
+        ),
+        "deleted_location_codes": (
+            deleted_location_codes.deleted_count
+            if deleted_location_codes
+            else 0
+        ),
+    }
 
 
 # ---------------------------------------------------------
@@ -194,11 +243,19 @@ async def process_map_in_background(
             remove_map_files(map_id)
             return
 
-        map_item.source_image_url = result.source_url
-        map_item.display_image_url = result.display_url
+        # Local disk always has the authoritative copy already; this only
+        # additionally uploads to S3 and swaps in the S3 URL when
+        # MAP_STORAGE_BACKEND=s3 is configured. No-op (returns the same
+        # local URL) otherwise, so default local-disk behavior is unchanged.
+        map_item.source_image_url = sync_generated_file(
+            result.source_path, result.source_url
+        )
+        map_item.display_image_url = sync_generated_file(
+            result.display_path, result.display_url
+        )
 
         # Keep the old image field working with old frontend code.
-        map_item.image_url = result.display_url
+        map_item.image_url = map_item.display_image_url
 
         map_item.source_width = result.source_width
         map_item.source_height = result.source_height
@@ -257,7 +314,10 @@ async def process_map_in_background(
     response_model=MapResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_map(map_data: MapCreate):
+async def create_map(
+    map_data: MapCreate,
+    _admin: User = Depends(require_global_admin),
+):
     legacy_image_url = (
         map_data.image_url
         or map_data.display_image_url
@@ -338,6 +398,8 @@ async def upload_map(
     # try OpenAI when an API key exists.
     # Otherwise local processing is used automatically.
     use_openai: bool = Form(default=True),
+
+    _admin: User = Depends(require_global_admin),
 ):
     cleaned_title = title.strip()
 
@@ -509,6 +571,7 @@ async def retry_map_processing(
     map_id: PydanticObjectId,
     background_tasks: BackgroundTasks,
     use_openai: bool = True,
+    _admin: User = Depends(require_global_admin),
 ):
     map_item = await Map.get(map_id)
 
@@ -613,6 +676,7 @@ async def get_map_by_id(
 async def update_map(
     map_id: PydanticObjectId,
     map_data: MapUpdate,
+    _admin: User = Depends(require_global_admin),
 ):
     map_item = await Map.get(map_id)
 
@@ -686,6 +750,7 @@ async def update_map(
 )
 async def delete_map(
     map_id: PydanticObjectId,
+    _admin: User = Depends(require_global_admin),
 ):
     map_item = await Map.get(map_id)
 
@@ -696,10 +761,16 @@ async def delete_map(
         )
 
     was_current = map_item.is_current
+    map_id_str = str(map_id)
+
+    # Cascade first (edges -> location codes -> points) so nothing in the
+    # navigation graph ever ends up pointing at a map that no longer
+    # exists.
+    cascade_summary = await cascade_delete_map_graph(map_id_str)
 
     await map_item.delete()
 
-    remove_map_files(str(map_id))
+    remove_map_files(map_id_str)
 
     # When the current map is deleted, select another map.
     if was_current:
@@ -712,4 +783,5 @@ async def delete_map(
 
     return {
         "message": "Map deleted successfully",
+        **cascade_summary,
     }

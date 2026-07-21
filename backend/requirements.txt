@@ -6,6 +6,7 @@ pydantic
 email-validator
 passlib
 bcrypt==4.0.1
+PyJWT
 python-dotenv
 python-multipart
 opencv-python
@@ -13,3 +14,4 @@ PyMuPDF
 Pillow
 numpy
 openai
+boto3

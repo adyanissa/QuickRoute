@@ -7,8 +7,32 @@ import {
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
-import { useAdmin } from '../context/AdminContext';
+import {
+  getMaps,
+  updateMap as apiUpdateMap,
+  deleteMap as apiDeleteMap,
+  uploadMap as apiUploadMap,
+  getMapProcessingStatus,
+  normalizeMap,
+} from '../api/mapsApi';
+import {
+  getRoutePoints,
+  createRoutePoint,
+  deleteRoutePoint,
+} from '../api/routePointsApi';
+import {
+  getRouteEdges,
+  createRouteEdge,
+  deleteRouteEdge,
+} from '../api/routeEdgesApi';
+import { getBuildings } from '../api/buildingsApi';
+import { getRooms } from '../api/roomsApi';
+import { calculateRoute } from '../api/navigationApi';
+import { findNearestPointWithinThreshold } from '../utils/geometry';
 import '../styles/adminScreens.css';
+
+// Snap threshold for Draw Walkable Path, in original-image pixels.
+const SNAP_THRESHOLD_PX = 18;
 
 const LANGUAGES = [
   { code: 'ar', label: 'عربي' },
@@ -31,10 +55,50 @@ const UI = {
     openFullMap: 'Click map to open full view',
     savedPoints: 'Saved points',
     noPoints: 'No route points saved for this map yet',
+    savedEdges: 'Saved edges',
+    noEdges: 'No route edges saved for this map yet',
     loadingMaps: 'Loading maps...',
     loadingPoints: 'Loading route points...',
+    loadingEdges: 'Loading route edges...',
     mapsError: 'Failed to load maps',
     pointsError: 'Failed to load route points',
+    edgesError: 'Failed to load route edges',
+    edgeDataWarning:
+      'route edge(s) reference a route point that is missing from this map and were not drawn',
+    addPointMode: 'Add Point',
+    drawMode: 'Draw Walkable Path',
+    drawHint: 'Click the map to add corridor points. Click near an existing point to reuse it.',
+    drawFloor: 'Floor',
+    drawUndo: 'Undo',
+    drawClear: 'Clear',
+    drawCancel: 'Cancel',
+    drawSave: 'Save Path',
+    drawSaving: 'Saving...',
+    drawNeedTwo: 'Add at least 2 points before saving',
+    drawSaveSuccess: (points, edges) =>
+      `Saved ${points} point${points === 1 ? '' : 's'} and ${edges} edge${edges === 1 ? '' : 's'}`,
+    drawSaveFailed: 'Could not save the path. Any newly created points and edges were rolled back.',
+    drawPointCount: (n) => `${n} point${n === 1 ? '' : 's'} in draft`,
+    drawReusedPoint: 'existing point reused',
+    building: 'Building',
+    room: 'Room',
+    selectBuilding: 'Select a building',
+    selectRoom: 'Select a room',
+    connectNearest: 'Connect to nearest corridor point',
+    roomAlreadyLinked: (name) => `This room is already linked to "${name}"`,
+    testMode: 'Test Route',
+    testStart: 'Start point',
+    testEnd: 'Destination point',
+    testSelectStart: 'Select a start point',
+    testSelectEnd: 'Select a destination',
+    testFind: 'Find Route',
+    testClear: 'Clear Test',
+    testChangeStart: 'Change Start',
+    testChangeEnd: 'Change Destination',
+    testCalculating: 'Calculating route...',
+    testNoRoute: 'No route found between these points',
+    testDistance: (meters) => `Total distance: ${meters.toFixed(1)} m`,
+    testStepCount: (n) => `${n} point${n === 1 ? '' : 's'} on this route`,
     processing: 'Processing map',
     processingFailed: 'Map processing failed',
     confirmDelete: 'Delete the selected map?',
@@ -89,10 +153,48 @@ const UI = {
     openFullMap: 'اضغطي على الخريطة لفتحها كاملة',
     savedPoints: 'النقاط المحفوظة',
     noPoints: 'لا توجد نقاط محفوظة لهذه الخريطة بعد',
+    savedEdges: 'الحواف المحفوظة',
+    noEdges: 'لا توجد حواف مسار محفوظة لهذه الخريطة بعد',
     loadingMaps: 'جاري تحميل الخرائط...',
     loadingPoints: 'جاري تحميل نقاط المسار...',
+    loadingEdges: 'جاري تحميل حواف المسار...',
     mapsError: 'فشل تحميل الخرائط',
     pointsError: 'فشل تحميل نقاط المسار',
+    edgesError: 'فشل تحميل حواف المسار',
+    edgeDataWarning: 'حافة/حواف مسار تشير إلى نقطة غير موجودة في هذه الخريطة ولم تُرسم',
+    addPointMode: 'إضافة نقطة',
+    drawMode: 'رسم مسار للمشي',
+    drawHint: 'اضغطي على الخريطة لإضافة نقاط الممر. اضغطي بالقرب من نقطة موجودة لإعادة استخدامها.',
+    drawFloor: 'الطابق',
+    drawUndo: 'تراجع',
+    drawClear: 'مسح',
+    drawCancel: 'إلغاء',
+    drawSave: 'حفظ المسار',
+    drawSaving: 'جاري الحفظ...',
+    drawNeedTwo: 'أضيفي نقطتين على الأقل قبل الحفظ',
+    drawSaveSuccess: (points, edges) => `تم حفظ ${points} نقطة و ${edges} حافة`,
+    drawSaveFailed: 'تعذر حفظ المسار. تم التراجع عن أي نقاط وحواف تم إنشاؤها حديثًا.',
+    drawPointCount: (n) => `${n} نقطة في المسودة`,
+    drawReusedPoint: 'إعادة استخدام نقطة موجودة',
+    building: 'المبنى',
+    room: 'الغرفة',
+    selectBuilding: 'اختر مبنى',
+    selectRoom: 'اختر غرفة',
+    connectNearest: 'الاتصال بأقرب نقطة ممر',
+    roomAlreadyLinked: (name) => `هذه الغرفة مرتبطة بالفعل بـ "${name}"`,
+    testMode: 'اختبار المسار',
+    testStart: 'نقطة البداية',
+    testEnd: 'نقطة الوجهة',
+    testSelectStart: 'اختر نقطة البداية',
+    testSelectEnd: 'اختر الوجهة',
+    testFind: 'ابحث عن مسار',
+    testClear: 'مسح الاختبار',
+    testChangeStart: 'تغيير البداية',
+    testChangeEnd: 'تغيير الوجهة',
+    testCalculating: 'جاري حساب المسار...',
+    testNoRoute: 'لم يتم العثور على مسار بين هاتين النقطتين',
+    testDistance: (meters) => `المسافة الإجمالية: ${meters.toFixed(1)} م`,
+    testStepCount: (n) => `${n} نقطة على هذا المسار`,
     processing: 'جاري تجهيز الخريطة',
     processingFailed: 'فشلت معالجة الخريطة',
     confirmDelete: 'حذف الخريطة المختارة؟',
@@ -146,10 +248,48 @@ const UI = {
     openFullMap: 'לחצי על המפה כדי לפתוח תצוגה מלאה',
     savedPoints: 'נקודות שמורות',
     noPoints: 'עדיין אין נקודות שמורות למפה זו',
+    savedEdges: 'קשתות שמורות',
+    noEdges: 'עדיין אין קשתות מסלול שמורות למפה זו',
     loadingMaps: 'טוען מפות...',
     loadingPoints: 'טוען נקודות מסלול...',
+    loadingEdges: 'טוען קשתות מסלול...',
     mapsError: 'טעינת המפות נכשלה',
     pointsError: 'טעינת נקודות המסלול נכשלה',
+    edgesError: 'טעינת קשתות המסלול נכשלה',
+    edgeDataWarning: 'קשת/קשתות מסלול מצביעות על נקודה שלא נמצאה במפה זו ולא צוירו',
+    addPointMode: 'הוסף נקודה',
+    drawMode: 'צייר מסלול הליכה',
+    drawHint: 'לחצי על המפה כדי להוסיף נקודות מסדרון. לחצי ליד נקודה קיימת כדי לעשות בה שימוש חוזר.',
+    drawFloor: 'קומה',
+    drawUndo: 'בטל',
+    drawClear: 'נקה',
+    drawCancel: 'ביטול',
+    drawSave: 'שמור מסלול',
+    drawSaving: 'שומר...',
+    drawNeedTwo: 'הוסף לפחות 2 נקודות לפני השמירה',
+    drawSaveSuccess: (points, edges) => `נשמרו ${points} נקודות ו-${edges} קשתות`,
+    drawSaveFailed: 'לא ניתן היה לשמור את המסלול. נקודות וקשתות שנוצרו לאחרונה בוטלו.',
+    drawPointCount: (n) => `${n} נקודות בטיוטה`,
+    drawReusedPoint: 'שימוש חוזר בנקודה קיימת',
+    building: 'מבנה',
+    room: 'חדר',
+    selectBuilding: 'בחר מבנה',
+    selectRoom: 'בחר חדר',
+    connectNearest: 'חבר לנקודת המסדרון הקרובה ביותר',
+    roomAlreadyLinked: (name) => `החדר הזה כבר מקושר ל-"${name}"`,
+    testMode: 'בדיקת מסלול',
+    testStart: 'נקודת התחלה',
+    testEnd: 'נקודת יעד',
+    testSelectStart: 'בחר נקודת התחלה',
+    testSelectEnd: 'בחר יעד',
+    testFind: 'מצא מסלול',
+    testClear: 'נקה בדיקה',
+    testChangeStart: 'שנה התחלה',
+    testChangeEnd: 'שנה יעד',
+    testCalculating: 'מחשב מסלול...',
+    testNoRoute: 'לא נמצא מסלול בין הנקודות הללו',
+    testDistance: (meters) => `מרחק כולל: ${meters.toFixed(1)} מ'`,
+    testStepCount: (n) => `${n} נקודות במסלול זה`,
     processing: 'מעבד את המפה',
     processingFailed: 'עיבוד המפה נכשל',
     confirmDelete: 'למחוק את המפה שנבחרה?',
@@ -280,76 +420,9 @@ const DeleteIcon = () => (
   </svg>
 );
 
-const buildAssetUrl = (apiBaseUrl, value) => {
-  if (!value) return null;
-
-  if (/^https?:\/\//i.test(value) || value.startsWith('data:')) {
-    return value;
-  }
-
-  const cleanBase = String(apiBaseUrl || '').replace(/\/$/, '');
-  const cleanPath = value.startsWith('/') ? value : `/${value}`;
-
-  return `${cleanBase}${cleanPath}`;
-};
-
-const normalizeMap = (map, apiBaseUrl) => {
-  if (!map) return null;
-
-  const imageUrl = buildAssetUrl(
-    apiBaseUrl,
-    map.image_url ?? map.imageUrl,
-  );
-
-  const sourceImageUrl = buildAssetUrl(
-    apiBaseUrl,
-    map.source_image_url ?? map.sourceImageUrl,
-  );
-
-  const displayImageUrl = buildAssetUrl(
-    apiBaseUrl,
-    map.display_image_url ?? map.displayImageUrl,
-  );
-
-  return {
-    ...map,
-    id: map.id ?? map._id,
-    imageUrl,
-    sourceImageUrl,
-    displayImageUrl,
-    hasImage: Boolean(
-      imageUrl ||
-        sourceImageUrl ||
-        displayImageUrl,
-    ),
-    isCurrent: Boolean(
-      map.is_current ??
-        map.isCurrent,
-    ),
-    processingStatus:
-      map.processing_status ??
-      map.processingStatus ??
-      'not_started',
-    processingProgress: Number(
-      map.processing_progress ??
-        map.processingProgress ??
-        0,
-    ),
-    processingError:
-      map.processing_error ??
-      map.processingError ??
-      null,
-  };
-};
-
 const AdminMapScreen = () => {
   const { lang, setLang } = useLang();
-  const { API_BASE_URL } = useAdmin();
   const navigate = useNavigate();
-
-  const apiBaseUrl =
-    API_BASE_URL ||
-    'http://127.0.0.1:8000';
 
   const isRTL =
     lang === 'ar' ||
@@ -367,6 +440,10 @@ const AdminMapScreen = () => {
   const [routePoints, setRoutePoints] = useState([]);
   const [isPointsLoading, setIsPointsLoading] = useState(false);
   const [pointsError, setPointsError] = useState('');
+
+  const [routeEdges, setRouteEdges] = useState([]);
+  const [isEdgesLoading, setIsEdgesLoading] = useState(false);
+  const [edgesError, setEdgesError] = useState('');
 
   const [form, setForm] = useState({});
 
@@ -386,6 +463,35 @@ const AdminMapScreen = () => {
   const [pointName, setPointName] = useState('');
   const [pointType, setPointType] = useState('hallway');
   const [floor, setFloor] = useState(0);
+
+  // ── Connect Place: link a room/store point to a building + room ───────────
+  const [buildingsList, setBuildingsList] = useState([]);
+  const [roomsList, setRoomsList] = useState([]);
+  const [isRoomsLoading, setIsRoomsLoading] = useState(false);
+  const [selectedBuildingId, setSelectedBuildingId] = useState('');
+  const [selectedRoomId, setSelectedRoomId] = useState('');
+  const [connectToNearest, setConnectToNearest] = useState(true);
+
+  const isPlaceType = pointType === 'room' || pointType === 'store';
+
+  // ── Test Route mode ─────────────────────────────────────────────────────────
+  const [testStartId, setTestStartId] = useState('');
+  const [testEndId, setTestEndId] = useState('');
+  const [testResult, setTestResult] = useState(null);
+  const [isTestLoading, setIsTestLoading] = useState(false);
+  const [testError, setTestError] = useState('');
+
+  // ── Admin map editing modes ─────────────────────────────────────────────────
+  // 'point' is the original click-to-add-a-single-point behavior.
+  // 'draw'  is the Draw Walkable Path workflow — nothing touches the backend
+  //         until Save is pressed.
+  // 'test'  is Test Route — pick two existing points and run the real
+  //         Dijkstra endpoint; purely read-only, nothing is ever saved.
+  const [mode, setMode] = useState('point');
+  const [drawFloor, setDrawFloor] = useState(0);
+  const [draftPoints, setDraftPoints] = useState([]);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [draftError, setDraftError] = useState('');
 
   const fullMapImageRef = useRef(null);
 
@@ -413,21 +519,7 @@ const AdminMapScreen = () => {
       setMapsError('');
 
       try {
-        const response = await fetch(
-          `${apiBaseUrl}/api/maps`,
-        );
-
-        if (!response.ok) {
-          throw new Error(await response.text());
-        }
-
-        const data = await response.json();
-
-        const normalizedMaps = Array.isArray(data)
-          ? data.map((map) =>
-              normalizeMap(map, apiBaseUrl),
-            )
-          : [];
+        const normalizedMaps = await getMaps();
 
         setMaps(normalizedMaps);
 
@@ -471,72 +563,150 @@ const AdminMapScreen = () => {
         setIsMapsLoading(false);
       }
     },
-    [apiBaseUrl, t.mapsError],
+    [t.mapsError],
   );
 
   useEffect(() => {
     loadMaps();
   }, [loadMaps]);
 
+  // Buildings list for the room/store connect-place picker. Loaded once —
+  // buildings don't change often enough to warrant reloading per map.
   useEffect(() => {
-    let cancelled = false;
-
-    const loadRoutePoints = async () => {
-      setClickedPoint(null);
-      setPointsError('');
-
-      if (!selectedMapId) {
-        setRoutePoints([]);
-        return;
-      }
-
-      setIsPointsLoading(true);
-
+    const loadBuildingsList = async () => {
       try {
-        const response = await fetch(
-          `${apiBaseUrl}/api/route-points?map_id=${encodeURIComponent(
-            selectedMapId,
-          )}`,
-        );
-
-        if (!response.ok) {
-          throw new Error(await response.text());
-        }
-
-        const data = await response.json();
-
-        if (!cancelled) {
-          setRoutePoints(
-            Array.isArray(data) ? data : [],
-          );
-        }
+        const data = await getBuildings();
+        setBuildingsList(Array.isArray(data) ? data : []);
       } catch (error) {
-        console.error(
-          'Failed to load route points:',
-          error,
-        );
-
-        if (!cancelled) {
-          setRoutePoints([]);
-          setPointsError(t.pointsError);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsPointsLoading(false);
-        }
+        console.error('Failed to load buildings for Connect Place:', error);
+        setBuildingsList([]);
       }
     };
 
-    loadRoutePoints();
+    loadBuildingsList();
+  }, []);
+
+  // Rooms for whichever building is currently selected in the Add Point
+  // form's room/store fields.
+  useEffect(() => {
+    if (!selectedBuildingId) {
+      setRoomsList([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const loadRoomsForBuilding = async () => {
+      setIsRoomsLoading(true);
+
+      try {
+        const data = await getRooms({ building_id: selectedBuildingId });
+        if (!cancelled) {
+          setRoomsList(Array.isArray(data) ? data : []);
+        }
+      } catch (error) {
+        console.error('Failed to load rooms for Connect Place:', error);
+        if (!cancelled) setRoomsList([]);
+      } finally {
+        if (!cancelled) setIsRoomsLoading(false);
+      }
+    };
+
+    loadRoomsForBuilding();
 
     return () => {
       cancelled = true;
     };
-  }, [
-    apiBaseUrl,
-    selectedMapId,
-    t.pointsError,
-  ]);
+  }, [selectedBuildingId]);
+
+  // Reusable loader for a single map's RoutePoints + RouteEdges. Used both
+  // by the "selected map changed" effect below and after a successful
+  // Draw Walkable Path save (to pull in the freshly created graph data).
+  const refreshRouteGraph = useCallback(
+    async (mapId) => {
+      if (!mapId) {
+        setRoutePoints([]);
+        setRouteEdges([]);
+        return;
+      }
+
+      setIsPointsLoading(true);
+      setIsEdgesLoading(true);
+      setPointsError('');
+      setEdgesError('');
+
+      const [pointsResult, edgesResult] = await Promise.allSettled([
+        getRoutePoints({ map_id: mapId }),
+        getRouteEdges({ map_id: mapId }),
+      ]);
+
+      if (pointsResult.status === 'fulfilled') {
+        setRoutePoints(
+          Array.isArray(pointsResult.value) ? pointsResult.value : [],
+        );
+      } else {
+        console.error(
+          'Failed to load route points:',
+          pointsResult.reason,
+        );
+
+        setRoutePoints([]);
+        setPointsError(t.pointsError);
+      }
+
+      if (edgesResult.status === 'fulfilled') {
+        setRouteEdges(
+          Array.isArray(edgesResult.value) ? edgesResult.value : [],
+        );
+      } else {
+        console.error(
+          'Failed to load route edges:',
+          edgesResult.reason,
+        );
+
+        setRouteEdges([]);
+        setEdgesError(t.edgesError);
+      }
+
+      setIsPointsLoading(false);
+      setIsEdgesLoading(false);
+    },
+    [t.pointsError, t.edgesError],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    // Switching maps must never leave the previous map's graph on screen,
+    // even for a moment — clear points, edges, and any in-progress overlay
+    // state before fetching the newly selected map's data. This includes
+    // any Draw Walkable Path draft: it is never carried over to another
+    // map, and switching away discards it with zero API calls.
+    setClickedPoint(null);
+    setPointName('');
+    setPointType('hallway');
+    setFloor(0);
+    setFullMapMetrics(null);
+    setMode('point');
+    setDraftPoints([]);
+    setDraftError('');
+    setIsSavingDraft(false);
+    setSelectedBuildingId('');
+    setSelectedRoomId('');
+    setTestStartId('');
+    setTestEndId('');
+    setTestResult(null);
+    setTestError('');
+    setIsTestLoading(false);
+
+    if (!cancelled) {
+      refreshRouteGraph(selectedMapId);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedMapId, refreshRouteGraph]);
 
   useEffect(() => {
     if (!pollingMapId) return undefined;
@@ -546,41 +716,30 @@ const AdminMapScreen = () => {
 
     const checkStatus = async () => {
       try {
-        const response = await fetch(
-          `${apiBaseUrl}/api/maps/${pollingMapId}/processing-status`,
-        );
-
-        if (!response.ok) {
-          throw new Error(await response.text());
-        }
-
-        const statusData = await response.json();
+        const statusData = await getMapProcessingStatus(pollingMapId);
 
         if (cancelled) return;
 
         setMaps((previousMaps) =>
           previousMaps.map((map) =>
             map.id === pollingMapId
-              ? normalizeMap(
-                  {
-                    ...map,
-                    processing_status:
-                      statusData.processing_status,
-                    processing_progress:
-                      statusData.processing_progress,
-                    processing_error:
-                      statusData.processing_error,
-                    generation_method:
-                      statusData.generation_method,
-                    source_image_url:
-                      statusData.source_image_url ??
-                      map.sourceImageUrl,
-                    display_image_url:
-                      statusData.display_image_url ??
-                      map.displayImageUrl,
-                  },
-                  apiBaseUrl,
-                )
+              ? normalizeMap({
+                  ...map,
+                  processing_status:
+                    statusData.processing_status,
+                  processing_progress:
+                    statusData.processing_progress,
+                  processing_error:
+                    statusData.processing_error,
+                  generation_method:
+                    statusData.generation_method,
+                  source_image_url:
+                    statusData.source_image_url ??
+                    map.sourceImageUrl,
+                  display_image_url:
+                    statusData.display_image_url ??
+                    map.displayImageUrl,
+                })
               : map,
           ),
         );
@@ -629,7 +788,6 @@ const AdminMapScreen = () => {
       }
     };
   }, [
-    apiBaseUrl,
     loadMaps,
     pollingMapId,
   ]);
@@ -704,27 +862,9 @@ const AdminMapScreen = () => {
     if (!mapId) return;
 
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/maps/${mapId}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            is_current: true,
-          }),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-
-      const selectedMap = normalizeMap(
-        await response.json(),
-        apiBaseUrl,
-      );
+      const selectedMap = await apiUpdateMap(mapId, {
+        is_current: true,
+      });
 
       setMaps((previousMaps) =>
         previousMaps.map((map) =>
@@ -774,25 +914,7 @@ const AdminMapScreen = () => {
     };
 
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/maps/${activeMap.id}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-
-      const updatedMap = normalizeMap(
-        await response.json(),
-        apiBaseUrl,
-      );
+      const updatedMap = await apiUpdateMap(activeMap.id, payload);
 
       setMaps((previousMaps) =>
         previousMaps.map((map) =>
@@ -817,18 +939,10 @@ const AdminMapScreen = () => {
     if (!activeMap?.id) return;
 
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/maps/${activeMap.id}`,
-        {
-          method: 'DELETE',
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
+      await apiDeleteMap(activeMap.id);
 
       setRoutePoints([]);
+      setRouteEdges([]);
       setClickedPoint(null);
       setIsMapOpen(false);
       setView('detail');
@@ -979,34 +1093,7 @@ const AdminMapScreen = () => {
     setUploadError('');
 
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/maps/upload`,
-        {
-          method: 'POST',
-          body: formData,
-        },
-      );
-
-      if (!response.ok) {
-        let message = await response.text();
-
-        try {
-          const parsed = JSON.parse(message);
-
-          message =
-            parsed.detail ||
-            message;
-        } catch {
-          // Keep backend text.
-        }
-
-        throw new Error(message);
-      }
-
-      const newMap = normalizeMap(
-        await response.json(),
-        apiBaseUrl,
-      );
+      const newMap = await apiUploadMap(formData);
 
       setMaps((previousMaps) => [
         newMap,
@@ -1022,6 +1109,7 @@ const AdminMapScreen = () => {
 
       setSelectedMapId(newMap.id);
       setRoutePoints([]);
+      setRouteEdges([]);
       setPollingMapId(newMap.id);
       setIsUploadOpen(false);
 
@@ -1080,8 +1168,234 @@ const AdminMapScreen = () => {
       naturalHeight: image.naturalHeight,
     });
 
+    // Draw Walkable Path has its own click handling and must never also
+    // trigger the normal single-point Add Point form.
+    if (mode === 'draw') {
+      handleDrawClick(x, y);
+      return;
+    }
+
     setClickedPoint({ x, y });
     setPointName(`Point ${x},${y}`);
+  };
+
+  // ── Draw Walkable Path handlers ────────────────────────────────────────────
+
+  const handleDrawClick = (x, y) => {
+    setDraftError('');
+
+    // Ignore a click that lands on (or right next to) the last draft point
+    // — this is almost always an accidental double-click and would create
+    // a zero-length duplicate segment.
+    const lastDraftPoint = draftPoints[draftPoints.length - 1];
+
+    if (
+      lastDraftPoint &&
+      Math.sqrt(
+        (x - lastDraftPoint.x) ** 2 + (y - lastDraftPoint.y) ** 2,
+      ) <= SNAP_THRESHOLD_PX
+    ) {
+      return;
+    }
+
+    const nearestExisting = findNearestPointWithinThreshold(
+      routePoints,
+      x,
+      y,
+      SNAP_THRESHOLD_PX,
+      drawFloor,
+    );
+
+    if (nearestExisting) {
+      const existingId = nearestExisting.id || nearestExisting._id;
+
+      // Reusing the same existing point twice in a row would also create a
+      // zero-length segment — ignore it the same way.
+      if (lastDraftPoint?.kind === 'existing' && lastDraftPoint.routePointId === existingId) {
+        return;
+      }
+
+      setDraftPoints((previous) => [
+        ...previous,
+        {
+          tempId: `existing-${existingId}-${previous.length}`,
+          kind: 'existing',
+          routePointId: existingId,
+          x: Number(nearestExisting.x),
+          y: Number(nearestExisting.y),
+          floor: nearestExisting.floor,
+          name: nearestExisting.name,
+          point_type: nearestExisting.point_type,
+        },
+      ]);
+
+      return;
+    }
+
+    setDraftPoints((previous) => [
+      ...previous,
+      {
+        tempId: `new-${Date.now()}-${previous.length}`,
+        kind: 'new',
+        x,
+        y,
+        floor: drawFloor,
+      },
+    ]);
+  };
+
+  const handleUndoDraft = () => {
+    setDraftError('');
+    setDraftPoints((previous) => previous.slice(0, -1));
+  };
+
+  const handleClearDraft = () => {
+    setDraftError('');
+    setDraftPoints([]);
+  };
+
+  const handleCancelDraw = () => {
+    setMode('point');
+    setDraftPoints([]);
+    setDraftError('');
+  };
+
+  const handleSaveDraft = async () => {
+    if (draftPoints.length < 2) {
+      setDraftError(t.drawNeedTwo);
+      return;
+    }
+
+    if (!activeMap?.id) {
+      setDraftError(t.noSelectedMap);
+      return;
+    }
+
+    setIsSavingDraft(true);
+    setDraftError('');
+
+    // Tracks only what THIS save created, so a failure can be rolled back
+    // without ever touching pre-existing reused points.
+    const createdPointIds = [];
+    const createdEdgeIds = [];
+
+    // resolvedIds[i] is the real backend RoutePoint id for draftPoints[i],
+    // whether that point was freshly created or an existing point reused
+    // via snapping.
+    const resolvedIds = new Array(draftPoints.length).fill(null);
+
+    try {
+      for (let i = 0; i < draftPoints.length; i += 1) {
+        const draftPoint = draftPoints[i];
+
+        if (draftPoint.kind === 'existing') {
+          resolvedIds[i] = draftPoint.routePointId;
+          continue;
+        }
+
+        const created = await createRoutePoint({
+          map_id: activeMap.id,
+          name: `Corridor Point ${Date.now()}-${i}`,
+          point_type: 'hallway',
+          x: draftPoint.x,
+          y: draftPoint.y,
+          floor: Number(draftPoint.floor ?? drawFloor),
+          building_id: null,
+          room_id: null,
+          is_accessible: true,
+        });
+
+        const newId = created.id || created._id;
+        resolvedIds[i] = newId;
+        createdPointIds.push(newId);
+      }
+
+      // Build the set of already-existing edges (in either direction) so a
+      // re-drawn segment over an already-connected pair doesn't create a
+      // duplicate edge.
+      const existingEdgeKeys = new Set(
+        routeEdges.map(
+          (edge) => `${edge.from_point_id}::${edge.to_point_id}`,
+        ),
+      );
+
+      routeEdges.forEach((edge) => {
+        existingEdgeKeys.add(`${edge.to_point_id}::${edge.from_point_id}`);
+      });
+
+      for (let i = 0; i < resolvedIds.length - 1; i += 1) {
+        const fromId = resolvedIds[i];
+        const toId = resolvedIds[i + 1];
+
+        if (!fromId || !toId || fromId === toId) {
+          continue;
+        }
+
+        const key = `${fromId}::${toId}`;
+
+        if (existingEdgeKeys.has(key)) {
+          continue;
+        }
+
+        const createdEdge = await createRouteEdge({
+          map_id: activeMap.id,
+          from_point_id: fromId,
+          to_point_id: toId,
+          edge_type: 'walkway',
+          is_bidirectional: true,
+          is_accessible: true,
+        });
+
+        createdEdgeIds.push(createdEdge.id || createdEdge._id);
+        existingEdgeKeys.add(key);
+        existingEdgeKeys.add(`${toId}::${fromId}`);
+      }
+
+      const summary = t.drawSaveSuccess(
+        createdPointIds.length,
+        createdEdgeIds.length,
+      );
+
+      // The draw toolbar unmounts the instant we switch back to 'point'
+      // mode, so an inline success message would never actually be seen —
+      // use the same alert() pattern the rest of this screen already uses
+      // for save confirmations.
+      setMode('point');
+      setDraftPoints([]);
+
+      await refreshRouteGraph(activeMap.id);
+
+      alert(summary);
+    } catch (error) {
+      console.error('Failed to save walkable path, rolling back:', error);
+
+      // Roll back edges first (they reference points), then points. Only
+      // ever delete what THIS save created — reused existing points are
+      // never touched.
+      for (const edgeId of createdEdgeIds.reverse()) {
+        try {
+          await deleteRouteEdge(edgeId);
+        } catch (rollbackError) {
+          console.error('Rollback: failed to delete edge', edgeId, rollbackError);
+        }
+      }
+
+      for (const pointId of createdPointIds.reverse()) {
+        try {
+          await deleteRoutePoint(pointId);
+        } catch (rollbackError) {
+          console.error('Rollback: failed to delete point', pointId, rollbackError);
+        }
+      }
+
+      setDraftError(t.drawSaveFailed);
+
+      // Refresh so the overlay reflects the post-rollback truth rather than
+      // any partially-created state that briefly existed on the backend.
+      await refreshRouteGraph(activeMap.id);
+    } finally {
+      setIsSavingDraft(false);
+    }
   };
 
   const saveRoutePoint = async () => {
@@ -1104,30 +1418,13 @@ const AdminMapScreen = () => {
       x: clickedPoint.x,
       y: clickedPoint.y,
       floor: Number(floor),
-      building_id: null,
-      room_id: null,
+      building_id: isPlaceType ? selectedBuildingId || null : null,
+      room_id: isPlaceType ? selectedRoomId || null : null,
       is_accessible: true,
     };
 
     try {
-      const response = await fetch(
-        `${apiBaseUrl}/api/route-points`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-
-      const savedPoint = await response
-        .json()
-        .catch(() => payload);
+      const savedPoint = await createRoutePoint(payload);
 
       setRoutePoints(
         (previousPoints) => [
@@ -1136,10 +1433,53 @@ const AdminMapScreen = () => {
         ],
       );
 
+      // Connect Place: optionally wire this new point into the graph by
+      // creating a walkway edge to the nearest existing point on the same
+      // floor. Never crosses floors (that would be an invalid walkway) and
+      // never crosses maps (routePoints here is already scoped to the
+      // active map).
+      if (connectToNearest) {
+        const nearest = findNearestPointWithinThreshold(
+          routePoints,
+          savedPoint.x,
+          savedPoint.y,
+          Infinity,
+          savedPoint.floor,
+        );
+
+        if (nearest) {
+          const nearestId = nearest.id || nearest._id;
+          const newId = savedPoint.id || savedPoint._id;
+
+          try {
+            const newEdge = await createRouteEdge({
+              map_id: activeMap.id,
+              from_point_id: newId,
+              to_point_id: nearestId,
+              edge_type: 'walkway',
+              is_bidirectional: true,
+              is_accessible: true,
+            });
+
+            setRouteEdges((previousEdges) => [...previousEdges, newEdge]);
+          } catch (connectError) {
+            // The point itself was saved successfully — a failed connecting
+            // edge shouldn't be reported as a failed point save. Log it and
+            // let the admin connect it manually via Draw Walkable Path.
+            console.error(
+              'Route point saved, but connecting edge failed:',
+              connectError,
+            );
+          }
+        }
+      }
+
       setClickedPoint(null);
       setPointName('');
       setPointType('hallway');
       setFloor(0);
+      setSelectedBuildingId('');
+      setSelectedRoomId('');
 
       alert(t.savedPoint);
     } catch (error) {
@@ -1154,30 +1494,123 @@ const AdminMapScreen = () => {
     }
   };
 
-  const markerPosition = (point) => {
-    if (!fullMapMetrics) return null;
+  // ── Test Route mode handlers ────────────────────────────────────────────────
+  // Read-only: calls the real Dijkstra endpoint and renders the response.
+  // Nothing here is ever written back to MongoDB.
 
-    const pointX = Number(point.x);
-    const pointY = Number(point.y);
-
-    if (
-      !Number.isFinite(pointX) ||
-      !Number.isFinite(pointY)
-    ) {
-      return null;
+  const handleFindRoute = async () => {
+    if (!activeMap?.id || !testStartId || !testEndId) {
+      return;
     }
 
-    return {
-      left:
-        (pointX /
-          fullMapMetrics.naturalWidth) *
-        fullMapMetrics.displayWidth,
+    setIsTestLoading(true);
+    setTestError('');
+    setTestResult(null);
 
-      top:
-        (pointY /
-          fullMapMetrics.naturalHeight) *
-        fullMapMetrics.displayHeight,
-    };
+    try {
+      const result = await calculateRoute({
+        mapId: activeMap.id,
+        startPointId: testStartId,
+        endPointId: testEndId,
+      });
+
+      setTestResult(result);
+    } catch (error) {
+      console.error('Failed to calculate test route:', error);
+      setTestError(error.message || t.testNoRoute);
+    } finally {
+      setIsTestLoading(false);
+    }
+  };
+
+  const handleClearTest = () => {
+    setTestResult(null);
+    setTestError('');
+  };
+
+  const handleChangeTestStart = () => {
+    setTestStartId('');
+    setTestResult(null);
+    setTestError('');
+  };
+
+  const handleChangeTestEnd = () => {
+    setTestEndId('');
+    setTestResult(null);
+    setTestError('');
+  };
+
+  // ── SVG overlay: point/edge lookups and color coding ──────────────────────
+  // The overlay uses a single SVG whose viewBox equals the original image's
+  // natural pixel dimensions, so route point x/y and edge geometry can be
+  // rendered directly without any manual display-scaling math.
+
+  const pointsById = useMemo(() => {
+    const lookup = new Map();
+
+    routePoints.forEach((point) => {
+      const id = point.id || point._id;
+      if (id) lookup.set(id, point);
+    });
+
+    return lookup;
+  }, [routePoints]);
+
+  const { resolvedEdges, missingEdgeCount } = useMemo(() => {
+    const resolved = [];
+    let missingCount = 0;
+
+    routeEdges.forEach((edge) => {
+      const fromPoint = pointsById.get(edge.from_point_id);
+      const toPoint = pointsById.get(edge.to_point_id);
+
+      if (!fromPoint || !toPoint) {
+        missingCount += 1;
+        return;
+      }
+
+      resolved.push({ edge, fromPoint, toPoint });
+    });
+
+    if (missingCount > 0) {
+      console.warn(
+        `AdminMapScreen: ${missingCount} route edge(s) for map ${selectedMapId} ` +
+          'reference a from_point_id/to_point_id that was not found among the ' +
+          'loaded route points for this map. These edges were skipped instead ' +
+          'of rendered.',
+        routeEdges.filter(
+          (edge) =>
+            !pointsById.has(edge.from_point_id) ||
+            !pointsById.has(edge.to_point_id),
+        ),
+      );
+    }
+
+    return { resolvedEdges: resolved, missingEdgeCount: missingCount };
+  }, [routeEdges, pointsById, selectedMapId]);
+
+  const POINT_TYPE_COLORS = {
+    hallway: '#2f7edb',
+    junction: '#8e44ad',
+    entrance: '#e6820e',
+    room: '#e6820e',
+    store: '#e6820e',
+    stairs: '#c0392b',
+    elevator: '#c0392b',
+  };
+
+  const LABELED_POINT_TYPES = new Set(['entrance', 'room', 'store']);
+  const VERTICAL_TRANSIT_TYPES = new Set(['stairs', 'elevator']);
+
+  const getPointColor = (pointType) =>
+    POINT_TYPE_COLORS[pointType] || '#5f7fa6';
+
+  const getEdgeStyle = (edgeType) => {
+    if (VERTICAL_TRANSIT_TYPES.has(edgeType)) {
+      return { stroke: '#c0392b', dash: '7 5' };
+    }
+
+    return { stroke: '#a9c3e3', dash: undefined };
   };
 
   return (
@@ -1347,6 +1780,62 @@ const AdminMapScreen = () => {
                       {t.noPoints}
                     </div>
                   )}
+
+                {isEdgesLoading && (
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: 12.5,
+                      color: '#5f7fa6',
+                    }}
+                  >
+                    {t.loadingEdges}
+                  </div>
+                )}
+
+                {!isEdgesLoading &&
+                  edgesError && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 12.5,
+                        color: '#c0392b',
+                      }}
+                    >
+                      {edgesError}
+                    </div>
+                  )}
+
+                {!isEdgesLoading &&
+                  !edgesError &&
+                  selectedMapId && (
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontSize: 12.5,
+                        color:
+                          routeEdges.length === 0
+                            ? '#7a9abf'
+                            : '#5f7fa6',
+                      }}
+                    >
+                      {routeEdges.length === 0
+                        ? t.noEdges
+                        : `${t.savedEdges}: ${routeEdges.length}`}
+                    </div>
+                  )}
+
+                {missingEdgeCount > 0 && (
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: 12.5,
+                      color: '#c0392b',
+                    }}
+                  >
+                    {missingEdgeCount} {t.edgeDataWarning}
+                  </div>
+                )}
               </div>
 
               {isProcessing && (
@@ -2065,113 +2554,667 @@ const AdminMapScreen = () => {
                   }}
                 />
 
-                {routePoints.map(
-                  (point) => {
-                    const position =
-                      markerPosition(point);
-
-                    if (!position) {
-                      return null;
-                    }
-
-                    return (
-                      <div
-                        key={
-                          point.id ||
-                          point._id ||
-                          `${point.x}-${point.y}-${point.name}`
-                        }
-                        title={
-                          point.name ||
-                          'Route point'
-                        }
-                        style={{
-                          position:
-                            'absolute',
-                          left:
-                            position.left -
-                            6,
-                          top:
-                            position.top -
-                            6,
-                          width: 12,
-                          height: 12,
-                          borderRadius:
-                            '50%',
-                          background:
-                            '#28a745',
-                          border:
-                            '2px solid white',
-                          boxShadow:
-                            '0 0 7px rgba(0, 0, 0, 0.45)',
-                          pointerEvents:
-                            'none',
-                        }}
-                      />
-                    );
-                  },
-                )}
-
-                {clickedPoint &&
+                {fullMapMetrics &&
                   (() => {
-                    const position =
-                      markerPosition(
-                        clickedPoint,
-                      );
-
-                    if (!position) {
-                      return null;
-                    }
+                    const radius = Math.max(
+                      8,
+                      fullMapMetrics.naturalWidth * 0.006,
+                    );
 
                     return (
-                      <div
+                      <svg
+                        viewBox={`0 0 ${fullMapMetrics.naturalWidth} ${fullMapMetrics.naturalHeight}`}
+                        preserveAspectRatio="xMidYMid meet"
                         style={{
-                          position:
-                            'absolute',
-                          left:
-                            position.left -
-                            7,
-                          top:
-                            position.top -
-                            7,
-                          width: 14,
-                          height: 14,
-                          borderRadius:
-                            '50%',
-                          background: 'red',
-                          border:
-                            '2px solid white',
-                          boxShadow:
-                            '0 0 8px rgba(0, 0, 0, 0.5)',
-                          pointerEvents:
-                            'none',
+                          position: 'absolute',
+                          inset: 0,
+                          width: '100%',
+                          height: '100%',
+                          pointerEvents: 'none',
                         }}
-                      />
+                      >
+                        {/* Route edges — drawn first so points sit on top */}
+                        {resolvedEdges.map(
+                          ({ edge, fromPoint, toPoint }) => {
+                            const style = getEdgeStyle(
+                              edge.edge_type,
+                            );
+
+                            return (
+                              <line
+                                key={edge.id || edge._id}
+                                x1={fromPoint.x}
+                                y1={fromPoint.y}
+                                x2={toPoint.x}
+                                y2={toPoint.y}
+                                stroke={style.stroke}
+                                strokeWidth={
+                                  Math.max(
+                                    2,
+                                    fullMapMetrics.naturalWidth * 0.0015,
+                                  )
+                                }
+                                strokeDasharray={style.dash}
+                                strokeLinecap="round"
+                              />
+                            );
+                          },
+                        )}
+
+                        {/* Existing saved route points */}
+                        {routePoints.map((point) => {
+                          const pointX = Number(point.x);
+                          const pointY = Number(point.y);
+
+                          if (
+                            !Number.isFinite(pointX) ||
+                            !Number.isFinite(pointY)
+                          ) {
+                            return null;
+                          }
+
+                          const isVertical = VERTICAL_TRANSIT_TYPES.has(
+                            point.point_type,
+                          );
+
+                          const color = getPointColor(
+                            point.point_type,
+                          );
+
+                          const key =
+                            point.id ||
+                            point._id ||
+                            `${point.x}-${point.y}-${point.name}`;
+
+                          return (
+                            <g key={key}>
+                              {isVertical ? (
+                                <rect
+                                  x={pointX - radius}
+                                  y={pointY - radius}
+                                  width={radius * 2}
+                                  height={radius * 2}
+                                  fill={color}
+                                  stroke="white"
+                                  strokeWidth={radius * 0.25}
+                                  transform={`rotate(45 ${pointX} ${pointY})`}
+                                />
+                              ) : (
+                                <circle
+                                  cx={pointX}
+                                  cy={pointY}
+                                  r={radius}
+                                  fill={color}
+                                  stroke="white"
+                                  strokeWidth={radius * 0.25}
+                                />
+                              )}
+
+                              {LABELED_POINT_TYPES.has(
+                                point.point_type,
+                              ) &&
+                                point.name && (
+                                  <text
+                                    x={pointX}
+                                    y={pointY - radius - 6}
+                                    textAnchor="middle"
+                                    fontSize={
+                                      fullMapMetrics.naturalWidth * 0.012
+                                    }
+                                    fontWeight="700"
+                                    fill="#173b70"
+                                    stroke="white"
+                                    strokeWidth={2}
+                                    paintOrder="stroke"
+                                  >
+                                    {point.name}
+                                  </text>
+                                )}
+                            </g>
+                          );
+                        })}
+
+                        {/* Test Route result — visually distinct from normal graph edges:
+                            solid, thick, bright green vs. the light blue/red dashed
+                            edges used for the real graph. */}
+                        {mode === 'test' &&
+                          testResult &&
+                          (() => {
+                            const testPathPoints = (
+                              testResult.path_point_ids || []
+                            )
+                              .map((id) => pointsById.get(id))
+                              .filter(Boolean);
+
+                            if (testPathPoints.length < 2) return null;
+
+                            return (
+                              <>
+                                <polyline
+                                  points={testPathPoints
+                                    .map((p) => `${p.x},${p.y}`)
+                                    .join(' ')}
+                                  fill="none"
+                                  stroke="#16a34a"
+                                  strokeWidth={Math.max(
+                                    3,
+                                    fullMapMetrics.naturalWidth * 0.0025,
+                                  )}
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                                {testPathPoints.map((p, index) => (
+                                  <circle
+                                    key={`test-${p.id || p._id || index}`}
+                                    cx={p.x}
+                                    cy={p.y}
+                                    r={radius * 0.7}
+                                    fill="#16a34a"
+                                    stroke="white"
+                                    strokeWidth={radius * 0.2}
+                                  />
+                                ))}
+                              </>
+                            );
+                          })()}
+
+                        {/* In-progress clicked point (not yet saved) — Add Point mode only */}
+                        {mode === 'point' &&
+                          clickedPoint &&
+                          Number.isFinite(Number(clickedPoint.x)) &&
+                          Number.isFinite(Number(clickedPoint.y)) && (
+                            <circle
+                              cx={clickedPoint.x}
+                              cy={clickedPoint.y}
+                              r={radius * 1.15}
+                              fill="red"
+                              stroke="white"
+                              strokeWidth={radius * 0.3}
+                            />
+                          )}
+
+                        {/* Draw Walkable Path draft — live polyline + draft points */}
+                        {mode === 'draw' && draftPoints.length > 1 && (
+                          <polyline
+                            points={draftPoints
+                              .map((point) => `${point.x},${point.y}`)
+                              .join(' ')}
+                            fill="none"
+                            stroke="#f2b705"
+                            strokeWidth={Math.max(
+                              2,
+                              fullMapMetrics.naturalWidth * 0.0018,
+                            )}
+                            strokeDasharray="10 6"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        )}
+
+                        {mode === 'draw' &&
+                          draftPoints.map((point, index) => (
+                            <g key={point.tempId}>
+                              {point.kind === 'existing' && (
+                                <circle
+                                  cx={point.x}
+                                  cy={point.y}
+                                  r={radius * 1.6}
+                                  fill="none"
+                                  stroke="#2ecc71"
+                                  strokeWidth={radius * 0.35}
+                                />
+                              )}
+                              <circle
+                                cx={point.x}
+                                cy={point.y}
+                                r={radius * 0.85}
+                                fill={
+                                  point.kind === 'existing'
+                                    ? '#2ecc71'
+                                    : '#f2b705'
+                                }
+                                stroke="white"
+                                strokeWidth={radius * 0.22}
+                              />
+                              <text
+                                x={point.x}
+                                y={point.y - radius * 1.9}
+                                textAnchor="middle"
+                                fontSize={fullMapMetrics.naturalWidth * 0.011}
+                                fontWeight="700"
+                                fill="#173b70"
+                                stroke="white"
+                                strokeWidth={2}
+                                paintOrder="stroke"
+                              >
+                                {index + 1}
+                              </text>
+                            </g>
+                          ))}
+                      </svg>
                     );
                   })()}
 
+                {/* ── Mode toolbar: Add Point / Draw Walkable Path ── */}
                 <div
                   style={{
                     position: 'absolute',
+                    top: 20,
                     left: '50%',
-                    bottom: 18,
-                    transform:
-                      'translateX(-50%)',
-                    background:
-                      'rgba(20, 55, 105, 0.92)',
-                    color: 'white',
-                    padding: '10px 16px',
+                    transform: 'translateX(-50%)',
+                    display: 'flex',
+                    gap: 8,
+                    background: 'rgba(20, 55, 105, 0.92)',
+                    padding: 6,
                     borderRadius: 999,
-                    fontSize: 13,
-                    fontWeight: 700,
-                    pointerEvents: 'none',
-                    whiteSpace: 'nowrap',
                   }}
                 >
-                  {t.selectPoint}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (mode !== 'point') {
+                        setMode('point');
+                        setDraftPoints([]);
+                        setDraftError('');
+                      }
+                    }}
+                    style={{
+                      border: 'none',
+                      borderRadius: 999,
+                      padding: '8px 16px',
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      background: mode === 'point' ? 'white' : 'transparent',
+                      color: mode === 'point' ? '#173b70' : 'white',
+                    }}
+                  >
+                    {t.addPointMode}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (mode !== 'draw') {
+                        setMode('draw');
+                        setClickedPoint(null);
+                        setPointName('');
+                      }
+                    }}
+                    style={{
+                      border: 'none',
+                      borderRadius: 999,
+                      padding: '8px 16px',
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      background: mode === 'draw' ? 'white' : 'transparent',
+                      color: mode === 'draw' ? '#173b70' : 'white',
+                    }}
+                  >
+                    {t.drawMode}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (mode !== 'test') {
+                        setMode('test');
+                        setClickedPoint(null);
+                        setPointName('');
+                      }
+                    }}
+                    style={{
+                      border: 'none',
+                      borderRadius: 999,
+                      padding: '8px 16px',
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      background: mode === 'test' ? 'white' : 'transparent',
+                      color: mode === 'test' ? '#173b70' : 'white',
+                    }}
+                  >
+                    {t.testMode}
+                  </button>
                 </div>
 
-                {clickedPoint && (
+                {mode === 'point' && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: '50%',
+                      bottom: 18,
+                      transform:
+                        'translateX(-50%)',
+                      background:
+                        'rgba(20, 55, 105, 0.92)',
+                      color: 'white',
+                      padding: '10px 16px',
+                      borderRadius: 999,
+                      fontSize: 13,
+                      fontWeight: 700,
+                      pointerEvents: 'none',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {t.selectPoint}
+                  </div>
+                )}
+
+                {mode === 'draw' && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 76,
+                      left: 20,
+                      width: 300,
+                      background: 'white',
+                      borderRadius: 16,
+                      padding: 16,
+                      boxShadow: '0 14px 40px rgba(0, 0, 0, 0.35)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 800,
+                        color: '#173b70',
+                        marginBottom: 8,
+                      }}
+                    >
+                      {t.drawMode}
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: '#5f7fa6',
+                        marginBottom: 10,
+                      }}
+                    >
+                      {t.drawHint}
+                    </div>
+
+                    <div className="adm-form-group">
+                      <label className="adm-form-label">{t.drawFloor}</label>
+                      <input
+                        className="adm-form-input"
+                        type="number"
+                        value={drawFloor}
+                        disabled={isSavingDraft}
+                        onChange={(event) =>
+                          setDrawFloor(Number(event.target.value))
+                        }
+                      />
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 12.5,
+                        fontWeight: 700,
+                        color: '#173b70',
+                        marginBottom: 10,
+                      }}
+                    >
+                      {t.drawPointCount(draftPoints.length)}
+                    </div>
+
+                    {draftError && (
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          padding: 8,
+                          borderRadius: 10,
+                          background: '#fff0f0',
+                          color: '#b42318',
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {draftError}
+                      </div>
+                    )}
+
+                    <div
+                      className="adm-form-actions"
+                      style={{ flexWrap: 'wrap', gap: 8 }}
+                    >
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn-cancel"
+                        disabled={isSavingDraft || draftPoints.length === 0}
+                        onClick={handleUndoDraft}
+                      >
+                        {t.drawUndo}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn-cancel"
+                        disabled={isSavingDraft || draftPoints.length === 0}
+                        onClick={handleClearDraft}
+                      >
+                        {t.drawClear}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn-cancel"
+                        disabled={isSavingDraft}
+                        onClick={handleCancelDraw}
+                      >
+                        {t.drawCancel}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn-primary"
+                        disabled={isSavingDraft || draftPoints.length < 2}
+                        onClick={handleSaveDraft}
+                      >
+                        {isSavingDraft ? t.drawSaving : t.drawSave}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {mode === 'test' && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 76,
+                      left: 20,
+                      width: 300,
+                      background: 'white',
+                      borderRadius: 16,
+                      padding: 16,
+                      boxShadow: '0 14px 40px rgba(0, 0, 0, 0.35)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: 800,
+                        color: '#173b70',
+                        marginBottom: 10,
+                      }}
+                    >
+                      {t.testMode}
+                    </div>
+
+                    {!testStartId ? (
+                      <div className="adm-form-group">
+                        <label className="adm-form-label">
+                          {t.testStart}
+                        </label>
+                        <select
+                          className="adm-form-input"
+                          value=""
+                          onChange={(event) =>
+                            setTestStartId(event.target.value)
+                          }
+                        >
+                          <option value="">{t.testSelectStart}</option>
+                          {routePoints.map((point) => (
+                            <option
+                              key={point.id || point._id}
+                              value={point.id || point._id}
+                            >
+                              {point.name} ({point.point_type})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          fontSize: 12.5,
+                          color: '#173b70',
+                        }}
+                      >
+                        <strong>{t.testStart}:</strong>{' '}
+                        {
+                          routePoints.find(
+                            (point) =>
+                              (point.id || point._id) === testStartId,
+                          )?.name
+                        }{' '}
+                        <button
+                          type="button"
+                          onClick={handleChangeTestStart}
+                          style={{
+                            border: 'none',
+                            background: 'none',
+                            color: '#4a7ac8',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            fontSize: 11.5,
+                          }}
+                        >
+                          {t.testChangeStart}
+                        </button>
+                      </div>
+                    )}
+
+                    {!testEndId ? (
+                      <div className="adm-form-group">
+                        <label className="adm-form-label">
+                          {t.testEnd}
+                        </label>
+                        <select
+                          className="adm-form-input"
+                          value=""
+                          onChange={(event) =>
+                            setTestEndId(event.target.value)
+                          }
+                        >
+                          <option value="">{t.testSelectEnd}</option>
+                          {routePoints.map((point) => (
+                            <option
+                              key={point.id || point._id}
+                              value={point.id || point._id}
+                            >
+                              {point.name} ({point.point_type})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          fontSize: 12.5,
+                          color: '#173b70',
+                        }}
+                      >
+                        <strong>{t.testEnd}:</strong>{' '}
+                        {
+                          routePoints.find(
+                            (point) =>
+                              (point.id || point._id) === testEndId,
+                          )?.name
+                        }{' '}
+                        <button
+                          type="button"
+                          onClick={handleChangeTestEnd}
+                          style={{
+                            border: 'none',
+                            background: 'none',
+                            color: '#4a7ac8',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            fontSize: 11.5,
+                          }}
+                        >
+                          {t.testChangeEnd}
+                        </button>
+                      </div>
+                    )}
+
+                    {testError && (
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          padding: 8,
+                          borderRadius: 10,
+                          background: '#fff0f0',
+                          color: '#b42318',
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {testError}
+                      </div>
+                    )}
+
+                    {testResult && (
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          padding: 8,
+                          borderRadius: 10,
+                          background: '#eafaf0',
+                          color: '#1a7f37',
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {t.testDistance(testResult.total_distance)}
+                        <br />
+                        {t.testStepCount(
+                          (testResult.path_point_ids || []).length,
+                        )}
+                      </div>
+                    )}
+
+                    <div
+                      className="adm-form-actions"
+                      style={{ flexWrap: 'wrap', gap: 8 }}
+                    >
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn-cancel"
+                        disabled={!testResult && !testError}
+                        onClick={handleClearTest}
+                      >
+                        {t.testClear}
+                      </button>
+
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn-primary"
+                        disabled={
+                          isTestLoading || !testStartId || !testEndId
+                        }
+                        onClick={handleFindRoute}
+                      >
+                        {isTestLoading ? t.testCalculating : t.testFind}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {mode === 'point' && clickedPoint && (
                   <div
                     style={{
                       position: 'absolute',
@@ -2246,6 +3289,10 @@ const AdminMapScreen = () => {
                           hallway
                         </option>
 
+                        <option value="junction">
+                          junction
+                        </option>
+
                         <option value="stairs">
                           stairs
                         </option>
@@ -2257,8 +3304,83 @@ const AdminMapScreen = () => {
                         <option value="room">
                           room
                         </option>
+
+                        <option value="store">
+                          store
+                        </option>
                       </select>
                     </div>
+
+                    {isPlaceType && (
+                      <>
+                        <div className="adm-form-group">
+                          <label className="adm-form-label">
+                            {t.building}
+                          </label>
+
+                          <select
+                            className="adm-form-input"
+                            value={selectedBuildingId}
+                            onChange={(event) => {
+                              setSelectedBuildingId(event.target.value);
+                              setSelectedRoomId('');
+                            }}
+                          >
+                            <option value="">{t.selectBuilding}</option>
+                            {buildingsList.map((building) => (
+                              <option key={building.id} value={building.id}>
+                                {building.name_en || building.id}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="adm-form-group">
+                          <label className="adm-form-label">
+                            {t.room}
+                          </label>
+
+                          <select
+                            className="adm-form-input"
+                            value={selectedRoomId}
+                            disabled={
+                              !selectedBuildingId || isRoomsLoading
+                            }
+                            onChange={(event) =>
+                              setSelectedRoomId(event.target.value)
+                            }
+                          >
+                            <option value="">{t.selectRoom}</option>
+                            {roomsList.map((room) => (
+                              <option key={room.id} value={room.id}>
+                                {room.name_en || room.id}
+                              </option>
+                            ))}
+                          </select>
+
+                          {selectedRoomId &&
+                            (() => {
+                              const alreadyLinked = routePoints.find(
+                                (point) => point.room_id === selectedRoomId,
+                              );
+
+                              if (!alreadyLinked) return null;
+
+                              return (
+                                <div
+                                  style={{
+                                    marginTop: 6,
+                                    fontSize: 11.5,
+                                    color: '#b47b09',
+                                  }}
+                                >
+                                  {t.roomAlreadyLinked(alreadyLinked.name)}
+                                </div>
+                              );
+                            })()}
+                        </div>
+                      </>
+                    )}
 
                     <div className="adm-form-group">
                       <label className="adm-form-label">
@@ -2278,6 +3400,28 @@ const AdminMapScreen = () => {
                       />
                     </div>
 
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginBottom: 14,
+                        fontSize: 12.5,
+                        fontWeight: 700,
+                        color: '#315b8f',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={connectToNearest}
+                        onChange={(event) =>
+                          setConnectToNearest(event.target.checked)
+                        }
+                      />
+                      {t.connectNearest}
+                    </label>
+
                     <div className="adm-form-actions">
                       <button
                         className="adm-btn adm-btn-cancel"
@@ -2287,6 +3431,8 @@ const AdminMapScreen = () => {
                           );
 
                           setPointName('');
+                          setSelectedBuildingId('');
+                          setSelectedRoomId('');
                         }}
                       >
                         {t.cancel}

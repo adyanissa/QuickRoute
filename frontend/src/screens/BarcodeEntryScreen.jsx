@@ -2,7 +2,15 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
+import { resolveLocationCode } from '../api/locationCodesApi';
+import { getBuildingById } from '../api/buildingsApi';
+import { buildingToViewModel } from '../utils/viewModels';
 import '../styles/BarcodeEntryScreen.css';
+
+// Where the resolved starting location (from a scanned/typed code) is kept
+// so IndoorNavigationScreen can pick it up later instead of always
+// defaulting to the map's first entrance point.
+const START_LOCATION_KEY = 'quickroute_start_location';
 
 const LANGUAGES = [
   { code: 'ar', label: 'عربي' },
@@ -19,6 +27,9 @@ const UI = {
     or:         'OR',
     login:      'Login',
     signup:     'Sign Up',
+    checking:   'Checking code...',
+    required:   'Please enter a barcode number',
+    invalid:    'Invalid or inactive barcode. Please try again.',
   },
   ar: {
     welcome:    'أهلاً وسهلاً',
@@ -28,6 +39,9 @@ const UI = {
     or:         'أو',
     login:      'تسجيل الدخول',
     signup:     'إنشاء حساب',
+    checking:   'جاري التحقق من الرمز...',
+    required:   'الرجاء إدخال رقم الباركود',
+    invalid:    'رمز الباركود غير صحيح أو غير مفعّل. حاول مرة أخرى.',
   },
   he: {
     welcome:    'ברוכים הבאים',
@@ -37,6 +51,9 @@ const UI = {
     or:         'או',
     login:      'התחברות',
     signup:     'הרשמה',
+    checking:   'בודק קוד...',
+    required:   'יש להזין מספר ברקוד',
+    invalid:    'ברקוד לא תקין או לא פעיל. נסה שוב.',
   },
 };
 
@@ -80,9 +97,53 @@ const BarcodeEntryScreen = () => {
   const { lang, setLang } = useLang();
   const navigate           = useNavigate();
   const [barcode, setBarcode] = useState('');
+  const [isResolving, setIsResolving] = useState(false);
+  const [error, setError] = useState('');
 
   const isRTL = lang === 'ar' || lang === 'he';
   const t     = UI[lang];
+
+  const handleGo = async () => {
+    const code = barcode.trim();
+
+    if (!code) {
+      setError(t.required);
+      return;
+    }
+
+    setError('');
+    setIsResolving(true);
+
+    try {
+      // Resolve the code to an exact start RoutePoint. The resolve endpoint
+      // itself re-validates that the point/map still exist and that the
+      // code is active, so a successful response is safe to trust.
+      const resolved = await resolveLocationCode(code);
+
+      const buildingRaw = await getBuildingById(resolved.building_id);
+      const building = buildingToViewModel(buildingRaw);
+
+      // Persist the resolved starting location so IndoorNavigationScreen
+      // can use it instead of always defaulting to the map's first
+      // entrance point.
+      localStorage.setItem(
+        START_LOCATION_KEY,
+        JSON.stringify({
+          routePointId: resolved.route_point_id,
+          mapId: resolved.map_id,
+          buildingId: resolved.building_id,
+          code: resolved.code,
+        }),
+      );
+
+      navigate('/screen/17', { state: { building } });
+    } catch (err) {
+      console.error('Failed to resolve location code:', err);
+      setError(t.invalid);
+    } finally {
+      setIsResolving(false);
+    }
+  };
 
   return (
     <div className="layout-wrapper">
@@ -132,17 +193,26 @@ const BarcodeEntryScreen = () => {
               inputMode="numeric"
               placeholder={t.placeholder}
               value={barcode}
-              onChange={(e) => setBarcode(e.target.value)}
+              onChange={(e) => { setBarcode(e.target.value); if (error) setError(''); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !isResolving) handleGo(); }}
               dir={isRTL ? 'rtl' : 'ltr'}
               aria-label="Barcode number"
+              disabled={isResolving}
             />
           </div>
 
-          <button className="s01-go-btn" aria-label={t.go} onClick={() => navigate('/screen/16')}>
+          <button
+            className="s01-go-btn"
+            aria-label={t.go}
+            onClick={handleGo}
+            disabled={isResolving}
+          >
             {isRTL ? <ArrowLeftIcon /> : null}
-            <span>{t.go}</span>
+            <span>{isResolving ? t.checking : t.go}</span>
             {isRTL ? null : <ArrowRightIcon />}
           </button>
+
+          {error && <p className="s01-barcode-error">{error}</p>}
         </div>
 
         {/* ── Auth ── */}

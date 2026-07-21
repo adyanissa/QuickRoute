@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
 import { useAdmin } from '../context/AdminContext';
@@ -32,10 +32,15 @@ const UI = {
     save: 'Save', cancel: 'Cancel',
     confirmDelete: 'Delete this room?',
     yes: 'Yes, Delete',
-    empty: 'No rooms for this building',
+    empty: 'No rooms found',
     emptyHint: 'Tap "Add Room" to create one',
     count: (n) => `${n} room${n !== 1 ? 's' : ''}`,
     floor: 'Floor',
+    loading: 'Loading rooms...',
+    noBuildings: 'No buildings found',
+    noBuildingsHint: 'Add a building first, then add rooms to it',
+    saveError: 'Failed to save room',
+    deleteError: 'Failed to delete room',
   },
   ar: {
     title: 'الغرف والوجهات',
@@ -50,10 +55,15 @@ const UI = {
     save: 'حفظ', cancel: 'إلغاء',
     confirmDelete: 'حذف هذه الغرفة؟',
     yes: 'نعم، احذف',
-    empty: 'لا توجد غرف لهذا المبنى',
+    empty: 'لا توجد غرف',
     emptyHint: 'اضغط "إضافة غرفة" للإنشاء',
     count: (n) => `${n} غرفة`,
     floor: 'طابق',
+    loading: 'جاري تحميل الغرف...',
+    noBuildings: 'لا توجد مباني',
+    noBuildingsHint: 'أضف مبنى أولاً، ثم أضف غرفاً إليه',
+    saveError: 'فشل حفظ الغرفة',
+    deleteError: 'فشل حذف الغرفة',
   },
   he: {
     title: 'חדרים ויעדים',
@@ -68,10 +78,15 @@ const UI = {
     save: 'שמור', cancel: 'ביטול',
     confirmDelete: 'למחוק חדר זה?',
     yes: 'כן, מחק',
-    empty: 'אין חדרים למבנה זה',
+    empty: 'אין חדרים',
     emptyHint: 'לחץ "הוסף חדר" ליצירה',
     count: (n) => `${n} חדרים`,
     floor: 'קומה',
+    loading: 'טוען חדרים...',
+    noBuildings: 'אין מבנים',
+    noBuildingsHint: 'הוסף מבנה תחילה, ואז הוסף לו חדרים',
+    saveError: 'שמירת החדר נכשלה',
+    deleteError: 'מחיקת החדר נכשלה',
   },
 };
 
@@ -127,15 +142,31 @@ const EMPTY_ROOM = { id: '', name: '', type: 'clinic', floor: 0, description: ''
 const AdminRoomsScreen = () => {
   const { lang, setLang } = useLang();
   const navigate          = useNavigate();
-  const { buildings, rooms, addRoom, updateRoom, deleteRoom } = useAdmin();
+  const {
+    buildings,
+    buildingsLoading,
+    rooms,
+    roomsLoading,
+    addRoom,
+    updateRoom,
+    deleteRoom,
+  } = useAdmin();
 
   const isRTL = lang === 'ar' || lang === 'he';
   const t     = UI[lang];
 
-  const [selectedBldId, setSelectedBldId] = useState(buildings[0]?.id ?? null);
+  const [selectedBldId, setSelectedBldId] = useState(null);
   const [view,          setView]          = useState('list');
   const [form,          setForm]          = useState({ ...EMPTY_ROOM });
   const [confirmId,     setConfirmId]     = useState(null);
+  const [error,         setError]         = useState('');
+
+  // Buildings load asynchronously, so pick a default selection once they arrive.
+  useEffect(() => {
+    if (!selectedBldId && buildings.length > 0) {
+      setSelectedBldId(buildings[0].id);
+    }
+  }, [buildings, selectedBldId]);
 
   const currentRooms = selectedBldId ? (rooms[selectedBldId] || []) : [];
   const currentBld   = buildings.find((b) => b.id === selectedBldId);
@@ -143,27 +174,42 @@ const AdminRoomsScreen = () => {
   const setField = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
   const openAdd = () => {
-    setForm({ ...EMPTY_ROOM, id: `rm-${Date.now()}` });
+    setForm({ ...EMPTY_ROOM });
+    setError('');
     setView('add');
   };
 
   const openEdit = (r) => {
     setForm({ ...r });
+    setError('');
     setView('edit');
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!selectedBldId) return;
     const entry = { ...form, floor: Number(form.floor) };
-    if (view === 'add') addRoom(selectedBldId, entry);
-    else updateRoom(selectedBldId, entry);
-    setView('list');
+
+    try {
+      if (view === 'add') await addRoom(selectedBldId, entry);
+      else await updateRoom(selectedBldId, entry);
+      setView('list');
+    } catch (err) {
+      console.error('Failed to save room:', err);
+      setError(err.message || t.saveError);
+    }
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = async (id) => {
     if (!selectedBldId) return;
-    deleteRoom(selectedBldId, id);
-    setConfirmId(null);
+
+    try {
+      await deleteRoom(selectedBldId, id);
+      setConfirmId(null);
+    } catch (err) {
+      console.error('Failed to delete room:', err);
+      setError(err.message || t.deleteError);
+      setConfirmId(null);
+    }
   };
 
   return (
@@ -201,8 +247,31 @@ const AdminRoomsScreen = () => {
         {/* ── Content ─────────────────────────────────────────────────── */}
         <div className="adm-content">
 
+          {error && (
+            <div style={{
+              marginBottom: 16, padding: 12, borderRadius: 12,
+              background: '#ffe9e9', color: '#a92323', fontSize: 14,
+            }}>
+              {error}
+            </div>
+          )}
+
           {/* ── List view ── */}
-          {view === 'list' && (
+          {view === 'list' && buildingsLoading && (
+            <div className="adm-empty">
+              <div className="adm-empty-txt">{t.loading}</div>
+            </div>
+          )}
+
+          {view === 'list' && !buildingsLoading && buildings.length === 0 && (
+            <div className="adm-empty">
+              <div className="adm-empty-icon"><RoomIcon /></div>
+              <div className="adm-empty-txt">{t.noBuildings}</div>
+              <div className="adm-empty-hint">{t.noBuildingsHint}</div>
+            </div>
+          )}
+
+          {view === 'list' && !buildingsLoading && buildings.length > 0 && (
             <>
               {/* Building selector tabs */}
               <div className="adm-building-tabs">
@@ -235,7 +304,11 @@ const AdminRoomsScreen = () => {
                 </button>
               </div>
 
-              {currentRooms.length === 0 ? (
+              {roomsLoading ? (
+                <div className="adm-empty">
+                  <div className="adm-empty-txt">{t.loading}</div>
+                </div>
+              ) : currentRooms.length === 0 ? (
                 <div className="adm-empty">
                   <div className="adm-empty-icon"><RoomIcon /></div>
                   <div className="adm-empty-txt">{t.empty}</div>

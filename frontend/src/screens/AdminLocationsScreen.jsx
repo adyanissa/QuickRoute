@@ -31,9 +31,12 @@ const UI = {
     save: 'Save', cancel: 'Cancel', delete: 'Delete',
     confirmDelete: 'Delete this building?',
     yes: 'Yes, Delete',
-    empty: 'No buildings yet',
+    empty: 'No buildings found',
     emptyHint: 'Tap "Add Building" to create one',
     count: (n) => `${n} building${n !== 1 ? 's' : ''}`,
+    loading: 'Loading buildings...',
+    saveError: 'Failed to save building',
+    deleteError: 'Failed to delete building',
   },
   ar: {
     title: 'المواقع',
@@ -52,6 +55,9 @@ const UI = {
     empty: 'لا توجد مباني',
     emptyHint: 'اضغط "إضافة مبنى" للإنشاء',
     count: (n) => `${n} مبنى`,
+    loading: 'جاري تحميل المباني...',
+    saveError: 'فشل حفظ المبنى',
+    deleteError: 'فشل حذف المبنى',
   },
   he: {
     title: 'מיקומים',
@@ -70,6 +76,9 @@ const UI = {
     empty: 'אין מבנים',
     emptyHint: 'לחץ "הוסף מבנה" ליצירה',
     count: (n) => `${n} מבנים`,
+    loading: 'טוען מבנים...',
+    saveError: 'שמירת המבנה נכשלה',
+    deleteError: 'מחיקת המבנה נכשלה',
   },
 };
 
@@ -122,7 +131,13 @@ const EMPTY_BUILDING = {
 const AdminLocationsScreen = () => {
   const { lang, setLang } = useLang();
   const navigate          = useNavigate();
-  const { buildings, addBuilding, updateBuilding, deleteBuilding } = useAdmin();
+  const {
+    buildings,
+    buildingsLoading,
+    addBuilding,
+    updateBuilding,
+    deleteBuilding,
+  } = useAdmin();
 
   const isRTL = lang === 'ar' || lang === 'he';
   const t     = UI[lang];
@@ -130,29 +145,44 @@ const AdminLocationsScreen = () => {
   const [view,      setView]      = useState('list');  // 'list' | 'add' | 'edit'
   const [form,      setForm]      = useState({ ...EMPTY_BUILDING });
   const [confirmId, setConfirmId] = useState(null);
+  const [error,     setError]     = useState('');
 
   const setField = (k, v) => setForm((p) => ({ ...p, [k]: v }));
 
   const openAdd = () => {
-    setForm({ ...EMPTY_BUILDING, id: `bld-${Date.now()}` });
+    setForm({ ...EMPTY_BUILDING });
+    setError('');
     setView('add');
   };
 
   const openEdit = (b) => {
     setForm({ ...b });
+    setError('');
     setView('edit');
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const entry = { ...form, iconBg: `${form.iconColor}1f` };
-    if (view === 'add') addBuilding(entry);
-    else updateBuilding(entry);
-    setView('list');
+
+    try {
+      if (view === 'add') await addBuilding(entry);
+      else await updateBuilding(entry);
+      setView('list');
+    } catch (err) {
+      console.error('Failed to save building:', err);
+      setError(err.message || t.saveError);
+    }
   };
 
-  const handleDelete = (id) => {
-    deleteBuilding(id);
-    setConfirmId(null);
+  const handleDelete = async (id) => {
+    try {
+      await deleteBuilding(id);
+      setConfirmId(null);
+    } catch (err) {
+      console.error('Failed to delete building:', err);
+      setError(err.message || t.deleteError);
+      setConfirmId(null);
+    }
   };
 
   return (
@@ -190,6 +220,15 @@ const AdminLocationsScreen = () => {
         {/* ── Content ─────────────────────────────────────────────────── */}
         <div className="adm-content">
 
+          {error && (
+            <div style={{
+              marginBottom: 16, padding: 12, borderRadius: 12,
+              background: '#ffe9e9', color: '#a92323', fontSize: 14,
+            }}>
+              {error}
+            </div>
+          )}
+
           {/* ── List view ── */}
           {view === 'list' && (
             <>
@@ -204,7 +243,11 @@ const AdminLocationsScreen = () => {
                 <span className="adm-section-count">{t.count(buildings.length)}</span>
               </div>
 
-              {buildings.length === 0 ? (
+              {buildingsLoading ? (
+                <div className="adm-empty">
+                  <div className="adm-empty-txt">{t.loading}</div>
+                </div>
+              ) : buildings.length === 0 ? (
                 <div className="adm-empty">
                   <div className="adm-empty-icon"><LocationIcon /></div>
                   <div className="adm-empty-txt">{t.empty}</div>

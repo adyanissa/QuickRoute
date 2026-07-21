@@ -55,3 +55,38 @@ INVITATION_CODE_REQUIRED = {
     "status_code": status.HTTP_400_BAD_REQUEST,
     "detail": "Invitation code is required"
 }
+
+LOCATION_CODE_NOT_FOUND = {
+    "status_code": status.HTTP_404_NOT_FOUND,
+    "detail": "Location code not found"
+}
+
+LOCATION_CODE_ALREADY_EXISTS = {
+    "status_code": status.HTTP_409_CONFLICT,
+    "detail": "This code is already in use"
+}
+
+LOCATION_CODE_INACTIVE = {
+    "status_code": status.HTTP_400_BAD_REQUEST,
+    "detail": "This location code is no longer active"
+}
+
+NOT_AUTHENTICATED = {
+    "status_code": status.HTTP_401_UNAUTHORIZED,
+    "detail": "Not authenticated"
+}
+
+INVALID_OR_EXPIRED_TOKEN = {
+    "status_code": status.HTTP_401_UNAUTHORIZED,
+    "detail": "Invalid or expired access token"
+}
+
+FORBIDDEN_ROLE = {
+    "status_code": status.HTTP_403_FORBIDDEN,
+    "detail": "You do not have permission to perform this action"
+}
+
+FORBIDDEN_BUILDING_SCOPE = {
+    "status_code": status.HTTP_403_FORBIDDEN,
+    "detail": "You do not have permission to manage this building"
+}

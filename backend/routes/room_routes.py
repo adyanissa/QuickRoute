@@ -2,10 +2,14 @@ from datetime import datetime
 from typing import List, Optional
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from core.auth_deps import get_current_user, user_can_manage_building
+from core.errors import FORBIDDEN_BUILDING_SCOPE, FORBIDDEN_ROLE
 from models.room_model import Room
 from models.building_model import Building
+from models.route_point_model import RoutePoint
+from models.user_model import User
 from schemas.room_schema import RoomCreate, RoomUpdate, RoomResponse
 
 
@@ -37,7 +41,16 @@ def room_to_response(room: Room) -> RoomResponse:
     response_model=RoomResponse,
     status_code=status.HTTP_201_CREATED
 )
-async def create_room(room_data: RoomCreate):
+async def create_room(
+    room_data: RoomCreate,
+    user: User = Depends(get_current_user),
+):
+    if user.role == "regular_user":
+        raise HTTPException(**FORBIDDEN_ROLE)
+
+    if not user_can_manage_building(user, room_data.building_id):
+        raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
     building = await Building.get(PydanticObjectId(room_data.building_id))
 
     if not building:
@@ -107,7 +120,8 @@ async def get_room_by_id(room_id: PydanticObjectId):
 )
 async def update_room(
     room_id: PydanticObjectId,
-    room_data: RoomUpdate
+    room_data: RoomUpdate,
+    user: User = Depends(get_current_user),
 ):
     room = await Room.get(room_id)
 
@@ -117,9 +131,18 @@ async def update_room(
             detail="Room not found"
         )
 
+    if user.role == "regular_user":
+        raise HTTPException(**FORBIDDEN_ROLE)
+
+    if not user_can_manage_building(user, room.building_id):
+        raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
     update_data = room_data.model_dump(exclude_unset=True)
 
     if "building_id" in update_data:
+        if not user_can_manage_building(user, update_data["building_id"]):
+            raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
         building = await Building.get(PydanticObjectId(update_data["building_id"]))
 
         if not building:
@@ -141,13 +164,38 @@ async def update_room(
     "/{room_id}",
     status_code=status.HTTP_200_OK
 )
-async def delete_room(room_id: PydanticObjectId):
+async def delete_room(
+    room_id: PydanticObjectId,
+    user: User = Depends(get_current_user),
+):
     room = await Room.get(room_id)
 
     if not room:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Room not found"
+        )
+
+    if user.role == "regular_user":
+        raise HTTPException(**FORBIDDEN_ROLE)
+
+    if not user_can_manage_building(user, room.building_id):
+        raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
+    # A room that is already connected to the navigation graph (has a
+    # RoutePoint pointing at it) must not be silently unlinked — the
+    # admin needs to disconnect it from the graph first.
+    linked_point = await RoutePoint.find_one(
+        RoutePoint.room_id == str(room_id)
+    )
+
+    if linked_point:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This room is still connected to the navigation graph. "
+                "Remove its route point connection before deleting it."
+            ),
         )
 
     await room.delete()

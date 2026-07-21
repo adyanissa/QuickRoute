@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import HospSearchBar from '../components/HospSearchBar';
 import DestinationCard from '../components/DestinationCard';
 import BackButton from '../components/BackButton';
 import { useLang } from '../context/LangContext';
-import { ROOMS } from '../data/hospitalData';
+import { getRooms } from '../api/roomsApi';
+import { roomToViewModel } from '../utils/viewModels';
 import '../styles/DestinationSelectionScreen.css';
 
 // ── Translations ──────────────────────────────────────────────────────────────
@@ -15,7 +16,9 @@ const UI = {
     section:    'Destinations',
     count:      (n) => `${n} destination${n !== 1 ? 's' : ''}`,
     noResults:  'No destinations found',
-    noData:     'No destinations available',
+    noData:     'No destinations found',
+    loading:    'Loading destinations...',
+    loadError:  'Failed to load destinations',
     back:       'Back',
     goBtn:      'Go',
     floor:      'Floor',
@@ -27,7 +30,9 @@ const UI = {
     section:    'الوجهات',
     count:      (n) => `${n} وجهة`,
     noResults:  'لا توجد نتائج',
-    noData:     'لا توجد وجهات متاحة',
+    noData:     'لا توجد وجهات',
+    loading:    'جاري تحميل الوجهات...',
+    loadError:  'فشل تحميل الوجهات',
     back:       'رجوع',
     goBtn:      'اذهب',
     floor:      'طابق',
@@ -39,7 +44,9 @@ const UI = {
     section:    'יעדים',
     count:      (n) => `${n} יעד`,
     noResults:  'לא נמצאו יעדים',
-    noData:     'אין יעדים זמינים',
+    noData:     'לא נמצאו יעדים',
+    loading:    'טוען יעדים...',
+    loadError:  'טעינת היעדים נכשלה',
     back:       'חזרה',
     goBtn:      'המשך',
     floor:      'קומה',
@@ -58,7 +65,49 @@ const DestinationSelectionScreen = () => {
   const t      = UI[lang];
 
   const building = location.state?.building ?? null;
-  const rooms    = building ? (ROOMS[building.id] ?? []) : [];
+
+  const [rooms, setRooms]     = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRooms = async () => {
+      if (!building?.id) {
+        setRooms([]);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setError('');
+
+      try {
+        const data = await getRooms({ building_id: building.id });
+
+        if (!cancelled) {
+          setRooms((Array.isArray(data) ? data : []).map(roomToViewModel));
+        }
+      } catch (err) {
+        console.error('Failed to load rooms:', err);
+
+        if (!cancelled) {
+          setRooms([]);
+          setError(t.loadError);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    loadRooms();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [building?.id]);
 
   const filtered = query.trim()
     ? rooms.filter((r) =>
@@ -117,7 +166,11 @@ const DestinationSelectionScreen = () => {
         {/* ── Scrollable room list ── */}
         <div className="s17-content">
 
-          {rooms.length === 0 ? (
+          {loading ? (
+            <div className="s17-empty"><p>{t.loading}</p></div>
+          ) : error ? (
+            <div className="s17-empty"><p>{error}</p></div>
+          ) : rooms.length === 0 ? (
             <div className="s17-empty"><p>{t.noData}</p></div>
           ) : (
             <>

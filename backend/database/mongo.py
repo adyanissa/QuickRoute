@@ -12,6 +12,7 @@ from models.map_model import Map
 from models.room_model import Room
 from models.route_point_model import RoutePoint
 from models.route_edge_model import RouteEdge
+from models.location_code_model import LocationCode
 
 
 # المسار الثابت لملف backend/.env
@@ -51,6 +52,7 @@ async def init_db():
                 Room,
                 RoutePoint,
                 RouteEdge,
+                LocationCode,
             ],
         )
 

@@ -3,11 +3,13 @@ from datetime import datetime
 from typing import List, Optional
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from core.auth_deps import require_global_admin
 from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
 from models.map_model import Map
+from models.user_model import User
 from schemas.route_edge_schema import (
     RouteEdgeCreate,
     RouteEdgeUpdate,
@@ -152,7 +154,10 @@ async def calculate_edge_distance(
     response_model=RouteEdgeResponse,
     status_code=status.HTTP_201_CREATED
 )
-async def create_route_edge(edge_data: RouteEdgeCreate):
+async def create_route_edge(
+    edge_data: RouteEdgeCreate,
+    _admin: User = Depends(require_global_admin),
+):
     if edge_data.from_point_id == edge_data.to_point_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -243,7 +248,8 @@ async def get_route_edge_by_id(edge_id: PydanticObjectId):
 )
 async def update_route_edge(
     edge_id: PydanticObjectId,
-    edge_data: RouteEdgeUpdate
+    edge_data: RouteEdgeUpdate,
+    _admin: User = Depends(require_global_admin),
 ):
     edge = await RouteEdge.get(edge_id)
 
@@ -304,7 +310,10 @@ async def update_route_edge(
     "/{edge_id}",
     status_code=status.HTTP_200_OK
 )
-async def delete_route_edge(edge_id: PydanticObjectId):
+async def delete_route_edge(
+    edge_id: PydanticObjectId,
+    _admin: User = Depends(require_global_admin),
+):
     edge = await RouteEdge.get(edge_id)
 
     if not edge:

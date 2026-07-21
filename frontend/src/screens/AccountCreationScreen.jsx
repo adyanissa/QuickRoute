@@ -2,41 +2,65 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
+import { signupUser } from '../api/authApi';
 import '../styles/AccountCreationScreen.css';
+
+const INVITATION_CODE_KEY = 'quickroute_invitation_code';
 
 const UI = {
   en: {
     title:           'Create Account',
-    groupUser:       'Username',
+    groupUser:       'Your Details',
     groupPass:       'Password',
-    username:        'New username',
-    confirmUsername: 'Confirm username',
+    fullName:        'Full name',
+    email:           'Email address',
     password:        'New password',
     confirmPassword: 'Confirm password',
     finish:          'Finish',
     back:            'Back',
+    creating:        'Creating account...',
+    success:         'Account created. You can now log in.',
+    missingCode:     'Your invitation code was lost. Please verify it again.',
+    required:        'Please fill in every field',
+    mismatch:        'Passwords do not match',
+    tooShort:        'Password must be at least 6 characters',
+    failed:          'Could not create the account. Please try again.',
   },
   ar: {
     title:           'إنشاء حساب',
-    groupUser:       'اسم المستخدم',
+    groupUser:       'بياناتك',
     groupPass:       'كلمة المرور',
-    username:        'اسم مستخدم جديد',
-    confirmUsername: 'تأكيد اسم المستخدم',
+    fullName:        'الاسم الكامل',
+    email:           'البريد الإلكتروني',
     password:        'كلمة مرور جديدة',
     confirmPassword: 'تأكيد كلمة المرور',
     finish:          'إنهاء',
     back:            'رجوع',
+    creating:        'جاري إنشاء الحساب...',
+    success:         'تم إنشاء الحساب. يمكنك الآن تسجيل الدخول.',
+    missingCode:     'فُقد رمز الدعوة الخاص بك. الرجاء التحقق منه مرة أخرى.',
+    required:        'الرجاء تعبئة جميع الحقول',
+    mismatch:        'كلمتا المرور غير متطابقتين',
+    tooShort:        'يجب أن تتكون كلمة المرور من 6 أحرف على الأقل',
+    failed:          'تعذر إنشاء الحساب. حاول مرة أخرى.',
   },
   he: {
     title:           'יצירת חשבון',
-    groupUser:       'שם משתמש',
+    groupUser:       'הפרטים שלך',
     groupPass:       'סיסמה',
-    username:        'שם משתמש חדש',
-    confirmUsername: 'אימות שם משתמש',
+    fullName:        'שם מלא',
+    email:           'כתובת אימייל',
     password:        'סיסמה חדשה',
     confirmPassword: 'אימות סיסמה',
     finish:          'סיום',
     back:            'חזרה',
+    creating:        'יוצר חשבון...',
+    success:         'החשבון נוצר. ניתן כעת להתחבר.',
+    missingCode:     'קוד ההזמנה שלך אבד. יש לאמת אותו שוב.',
+    required:        'יש למלא את כל השדות',
+    mismatch:        'הסיסמאות אינן תואמות',
+    tooShort:        'הסיסמה חייבת להכיל לפחות 6 תווים',
+    failed:          'לא ניתן היה ליצור את החשבון. נסה שוב.',
   },
 };
 
@@ -93,12 +117,70 @@ const AccountCreationScreen = () => {
   const isRTL     = lang === 'ar' || lang === 'he';
   const t         = UI[lang];
 
-  const [username,        setUsername]        = useState('');
-  const [confirmUsername, setConfirmUsername] = useState('');
+  const [fullName,        setFullName]        = useState('');
+  const [email,           setEmail]           = useState('');
   const [password,        setPassword]        = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPass,        setShowPass]        = useState(false);
   const [showConfPass,    setShowConfPass]    = useState(false);
+
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const [success, setSuccess] = useState(false);
+
+  const handleFinish = async () => {
+    setError('');
+
+    const trimmedName  = fullName.trim();
+    const trimmedEmail = email.trim();
+
+    if (!trimmedName || !trimmedEmail || !password || !confirmPassword) {
+      setError(t.required);
+      return;
+    }
+
+    if (password.length < 6) {
+      setError(t.tooShort);
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setError(t.mismatch);
+      return;
+    }
+
+    const code = localStorage.getItem(INVITATION_CODE_KEY);
+
+    if (!code) {
+      setError(t.missingCode);
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      await signupUser({
+        full_name: trimmedName,
+        email: trimmedEmail,
+        password,
+        code,
+      });
+
+      // The code is single-use on the backend too, but clearing it locally
+      // keeps this device from trying to reuse it.
+      localStorage.removeItem(INVITATION_CODE_KEY);
+
+      setSuccess(true);
+
+      // Give the person a moment to see the success state before moving on.
+      // Signup succeeded, so navigating to login now is safe.
+      setTimeout(() => navigate('/screen/02'), 900);
+    } catch (err) {
+      setError(err.message || t.failed);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="layout-wrapper">
@@ -134,7 +216,7 @@ const AccountCreationScreen = () => {
         {/* ── Form ── */}
         <div className="s04-form">
 
-          {/* Username group */}
+          {/* Details group */}
           <div className="s04-field-group">
             <span className="s04-group-label">{t.groupUser}</span>
 
@@ -145,10 +227,10 @@ const AccountCreationScreen = () => {
               <input
                 className={`s04-input${isRTL ? ' s04-input-rtl' : ''}`}
                 type="text"
-                autoComplete="username"
-                placeholder={t.username}
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="name"
+                placeholder={t.fullName}
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
                 dir={isRTL ? 'rtl' : 'ltr'}
               />
             </div>
@@ -159,11 +241,11 @@ const AccountCreationScreen = () => {
               </span>
               <input
                 className={`s04-input${isRTL ? ' s04-input-rtl' : ''}`}
-                type="text"
-                autoComplete="username"
-                placeholder={t.confirmUsername}
-                value={confirmUsername}
-                onChange={(e) => setConfirmUsername(e.target.value)}
+                type="email"
+                autoComplete="email"
+                placeholder={t.email}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 dir={isRTL ? 'rtl' : 'ltr'}
               />
             </div>
@@ -222,13 +304,26 @@ const AccountCreationScreen = () => {
             </div>
           </div>
 
+          {error && (
+            <p style={{ color: '#b42318', textAlign: 'center', marginTop: '8px' }}>
+              {error}
+            </p>
+          )}
+
+          {success && (
+            <p style={{ color: '#1a7f37', textAlign: 'center', marginTop: '8px' }}>
+              {t.success}
+            </p>
+          )}
+
           {/* Finish */}
           <button
             className="s04-finish-btn"
             aria-label={t.finish}
-            onClick={() => navigate('/screen/02')}
+            onClick={handleFinish}
+            disabled={loading || success}
           >
-            {t.finish}
+            {loading ? t.creating : t.finish}
           </button>
 
         </div>

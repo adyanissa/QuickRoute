@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
+import { useAuth, ADMIN_ROLES } from '../context/AuthContext';
 import { loginUser } from '../api/authApi';
 import '../styles/LoginScreen.css';
 
@@ -80,6 +81,7 @@ const BackArrowRTL = () => (
 const LoginScreen = () => {
   const { lang } = useLang();
   const navigate = useNavigate();
+  const { login } = useAuth();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -109,10 +111,12 @@ const LoginScreen = () => {
 
       const user = data.user;
 
-      localStorage.setItem('quickroute_user', JSON.stringify(user));
-      localStorage.setItem('quickroute_admin', JSON.stringify(user));
+      login(user, data.access_token);
 
-      navigate('/screen/05');
+      // Admin-ish roles land on the admin dashboard; regular users go to
+      // the normal end-user home screen. Nobody is sent to /admin/* pages
+      // they can't use.
+      navigate(ADMIN_ROLES.includes(user.role) ? '/screen/05' : '/screen/15');
     } catch (err) {
       setError(err.message || t.failed);
     } finally {

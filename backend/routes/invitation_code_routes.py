@@ -14,6 +14,16 @@ from schemas.invitation_code_schema import (
     ValidateInvitationCodeResponse
 )
 
+# NOTE: /generate, /validate and /dev-create are intentionally left
+# unauthenticated. There is currently no seed script or first-admin
+# bootstrap mechanism anywhere in this project, so /dev-create is the
+# only way to create the first super_admin/global_manager invitation
+# code and get an admin account into the system at all. Gating it
+# behind an admin-only token would make the system permanently
+# unbootstrappable. This is a known development-only gap — before any
+# real deployment, /dev-create must be removed or placed behind a
+# one-time setup flag.
+
 
 router = APIRouter(
     prefix="/api/invitation-codes",

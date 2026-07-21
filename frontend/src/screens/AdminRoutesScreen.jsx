@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
+import { getCurrentMap } from '../api/mapsApi';
+import {
+  getRoutePoints,
+  createRoutePoint,
+  updateRoutePoint,
+  deleteRoutePoint,
+} from '../api/routePointsApi';
 import '../styles/adminScreens.css';
-
-const API_BASE_URL = 'http://127.0.0.1:8000';
-
-const CURRENT_MAP_ID = '6a4cf16aa921ae9dc1c84616';
 
 const LANGUAGES = [
   { code: 'ar', label: 'عربي' },
@@ -41,12 +44,14 @@ const UI = {
     confirmDelete: 'Delete this route point?',
     yes: 'Yes, Delete',
 
-    empty: 'No route points yet',
+    empty: 'No routes found',
     emptyHint: 'Tap "Add Route Point" to create one',
 
     count: (n) => `${n} node${n !== 1 ? 's' : ''}`,
     nodeLabel: 'Node',
     floorLabel: 'Floor',
+    noMap: 'No map set up yet',
+    noMapHint: 'Upload a map in Map Management first',
   },
 
   ar: {
@@ -76,12 +81,14 @@ const UI = {
     confirmDelete: 'حذف نقطة المسار هذه؟',
     yes: 'نعم، احذف',
 
-    empty: 'لا توجد نقاط مسار',
+    empty: 'لا توجد مسارات',
     emptyHint: 'اضغط "إضافة نقطة مسار" للإنشاء',
 
     count: (n) => `${n} نقطة`,
     nodeLabel: 'عقدة',
     floorLabel: 'طابق',
+    noMap: 'لا توجد خريطة بعد',
+    noMapHint: 'ارفع خريطة في إدارة الخريطة أولاً',
   },
 
   he: {
@@ -111,12 +118,14 @@ const UI = {
     confirmDelete: 'למחוק נקודת מסלול זו?',
     yes: 'כן, מחק',
 
-    empty: 'אין נקודות מסלול',
+    empty: 'לא נמצאו מסלולים',
     emptyHint: 'לחץ "הוסף נקודת מסלול" ליצירה',
 
     count: (n) => `${n} נקודות`,
     nodeLabel: 'צומת',
     floorLabel: 'קומה',
+    noMap: 'עדיין לא הוגדרה מפה',
+    noMapHint: 'העלה מפה תחת ניהול מפה תחילה',
   },
 };
 
@@ -258,6 +267,9 @@ const AdminRoutesScreen = () => {
 
   const [error, setError] = useState('');
 
+  const [currentMapId, setCurrentMapId] = useState(null);
+  const [mapLoading, setMapLoading] = useState(true);
+
   const setField = (key, value) => {
     setForm((previous) => ({
       ...previous,
@@ -265,20 +277,12 @@ const AdminRoutesScreen = () => {
     }));
   };
 
-  const loadRoutePoints = async () => {
+  const loadRoutePoints = async (mapId) => {
     try {
       setLoading(true);
       setError('');
 
-      const response = await fetch(
-        `${API_BASE_URL}/api/route-points?map_id=${CURRENT_MAP_ID}`
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to load route points');
-      }
-
-      const data = await response.json();
+      const data = await getRoutePoints({ map_id: mapId });
 
       setRoutePoints(data);
     } catch (err) {
@@ -289,9 +293,34 @@ const AdminRoutesScreen = () => {
     }
   };
 
+  // The current map is no longer a hardcoded id - it's whatever map is
+  // marked as current in the backend (set from Map Management).
   useEffect(() => {
-    loadRoutePoints();
+    const loadCurrentMapId = async () => {
+      setMapLoading(true);
+
+      try {
+        const data = await getCurrentMap();
+        setCurrentMapId(data?.id ?? null);
+      } catch (err) {
+        console.error('Failed to load current map:', err);
+        setCurrentMapId(null);
+      } finally {
+        setMapLoading(false);
+      }
+    };
+
+    loadCurrentMapId();
   }, []);
+
+  useEffect(() => {
+    if (currentMapId) {
+      loadRoutePoints(currentMapId);
+    } else {
+      setRoutePoints([]);
+      setLoading(false);
+    }
+  }, [currentMapId]);
 
   const openAdd = () => {
     setForm({
@@ -318,11 +347,13 @@ const AdminRoutesScreen = () => {
   };
 
   const handleSave = async () => {
+    if (!currentMapId) return;
+
     try {
       setError('');
 
       const payload = {
-        map_id: CURRENT_MAP_ID,
+        map_id: currentMapId,
         name: form.name.trim(),
         point_type: form.point_type,
         x: Number(form.x),
@@ -333,44 +364,13 @@ const AdminRoutesScreen = () => {
         is_accessible: Boolean(form.is_accessible),
       };
 
-      let response;
-
       if (view === 'add') {
-        response = await fetch(
-          `${API_BASE_URL}/api/route-points`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-          }
-        );
+        await createRoutePoint(payload);
       } else {
-        response = await fetch(
-          `${API_BASE_URL}/api/route-points/${form.id}`,
-          {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-          }
-        );
+        await updateRoutePoint(form.id, payload);
       }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => null);
-
-        console.error(
-          'Save route point error:',
-          errorData
-        );
-
-        throw new Error('Failed to save route point');
-      }
-
-      await loadRoutePoints();
+      await loadRoutePoints(currentMapId);
 
       setView('list');
     } catch (err) {
@@ -383,20 +383,11 @@ const AdminRoutesScreen = () => {
     try {
       setError('');
 
-      const response = await fetch(
-        `${API_BASE_URL}/api/route-points/${id}`,
-        {
-          method: 'DELETE',
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to delete route point');
-      }
+      await deleteRoutePoint(id);
 
       setConfirmId(null);
 
-      await loadRoutePoints();
+      await loadRoutePoints(currentMapId);
     } catch (err) {
       console.error(err);
       setError(t.deleteError);
@@ -478,7 +469,23 @@ const AdminRoutesScreen = () => {
             </div>
           )}
 
-          {view === 'list' && (
+          {view === 'list' && mapLoading && (
+            <div className="adm-empty">
+              <div className="adm-empty-txt">{t.loading}</div>
+            </div>
+          )}
+
+          {view === 'list' && !mapLoading && !currentMapId && (
+            <div className="adm-empty">
+              <div className="adm-empty-icon">
+                <RouteIcon />
+              </div>
+              <div className="adm-empty-txt">{t.noMap}</div>
+              <div className="adm-empty-hint">{t.noMapHint}</div>
+            </div>
+          )}
+
+          {view === 'list' && !mapLoading && currentMapId && (
             <>
               <div className="adm-btn-row">
                 <button

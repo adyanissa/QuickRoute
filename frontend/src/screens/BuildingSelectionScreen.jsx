@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import HospSearchBar from '../components/HospSearchBar';
 import DestinationCard from '../components/DestinationCard';
 import BackButton from '../components/BackButton';
 import { useLang } from '../context/LangContext';
-import { BUILDINGS } from '../data/hospitalData';
+import { getBuildings } from '../api/buildingsApi';
+import { buildingToViewModel } from '../utils/viewModels';
 import '../styles/BuildingSelectionScreen.css';
 
 // ── Translations ──────────────────────────────────────────────────────────────
@@ -17,6 +18,9 @@ const UI = {
     section:   'Buildings',
     count:     (n) => `${n} location${n !== 1 ? 's' : ''}`,
     noResults: 'No buildings found',
+    noData:    'No buildings found',
+    loading:   'Loading buildings...',
+    loadError: 'Failed to load buildings',
     wordmark:  ['Quick', 'Route'],
     back:      'Back',
   },
@@ -27,6 +31,9 @@ const UI = {
     section:   'المباني',
     count:     (n) => `${n} موقع`,
     noResults: 'لا توجد نتائج',
+    noData:    'لا توجد مبانٍ',
+    loading:   'جاري تحميل المباني...',
+    loadError: 'فشل تحميل المباني',
     wordmark:  ['Quick', 'Route'],
     back:      'رجوع',
   },
@@ -37,6 +44,9 @@ const UI = {
     section:   'מבנים',
     count:     (n) => `${n} מיקום`,
     noResults: 'לא נמצאו מבנים',
+    noData:    'לא נמצאו מבנים',
+    loading:   'טוען מבנים...',
+    loadError: 'טעינת המבנים נכשלה',
     wordmark:  ['Quick', 'Route'],
     back:      'חזרה',
   },
@@ -62,16 +72,53 @@ const BuildingSelectionScreen = () => {
   const navigate          = useNavigate();
   const [query, setQuery] = useState('');
 
+  const [buildings, setBuildings] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState('');
+
   const isRTL = lang === 'ar' || lang === 'he';
   const t     = UI[lang];
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadBuildings = async () => {
+      setLoading(true);
+      setError('');
+
+      try {
+        const data = await getBuildings();
+
+        if (!cancelled) {
+          setBuildings((Array.isArray(data) ? data : []).map(buildingToViewModel));
+        }
+      } catch (err) {
+        console.error('Failed to load buildings:', err);
+
+        if (!cancelled) {
+          setBuildings([]);
+          setError(t.loadError);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    loadBuildings();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const filtered = query.trim()
-    ? BUILDINGS.filter((b) =>
+    ? buildings.filter((b) =>
         b.name.toLowerCase().includes(query.toLowerCase()) ||
         b.nameEn.toLowerCase().includes(query.toLowerCase()) ||
         b.tag.toLowerCase().includes(query.toLowerCase())
       )
-    : BUILDINGS;
+    : buildings;
 
   const handleSelect = (building) => {
     navigate('/screen/17', { state: { building } });
@@ -149,7 +196,19 @@ const BuildingSelectionScreen = () => {
             <span className="s16-section-count">{t.count(filtered.length)}</span>
           </div>
 
-          {filtered.length === 0 ? (
+          {loading ? (
+            <div className="s16-empty">
+              <p>{t.loading}</p>
+            </div>
+          ) : error ? (
+            <div className="s16-empty">
+              <p>{error}</p>
+            </div>
+          ) : buildings.length === 0 ? (
+            <div className="s16-empty">
+              <p>{t.noData}</p>
+            </div>
+          ) : filtered.length === 0 ? (
             <div className="s16-empty">
               <svg width="46" height="46" viewBox="0 0 24 24" fill="none" opacity="0.30">
                 <circle cx="11" cy="11" r="8" stroke="#8aaacb" strokeWidth="1.5"/>

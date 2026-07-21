@@ -21,6 +21,9 @@ from routes.route_edge_routes import (
 from routes.route_point_routes import (
     router as route_point_router,
 )
+from routes.location_code_routes import (
+    router as location_code_router,
+)
 from services.map_image_service import (
     UPLOADS_DIR,
     ensure_map_directories,
@@ -79,6 +82,7 @@ app.include_router(map_router)
 app.include_router(room_router)
 app.include_router(route_point_router)
 app.include_router(route_edge_router)
+app.include_router(location_code_router)
 
 
 @app.get("/")

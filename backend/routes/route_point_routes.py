@@ -2,12 +2,16 @@ from datetime import datetime
 from typing import List, Optional
 
 from beanie import PydanticObjectId
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from core.auth_deps import require_global_admin
 from models.route_point_model import RoutePoint
+from models.route_edge_model import RouteEdge
+from models.location_code_model import LocationCode
 from models.map_model import Map
 from models.building_model import Building
 from models.room_model import Room
+from models.user_model import User
 from schemas.route_point_schema import (
     RoutePointCreate,
     RoutePointUpdate,
@@ -74,7 +78,10 @@ async def validate_related_ids(
     response_model=RoutePointResponse,
     status_code=status.HTTP_201_CREATED
 )
-async def create_route_point(point_data: RoutePointCreate):
+async def create_route_point(
+    point_data: RoutePointCreate,
+    _admin: User = Depends(require_global_admin),
+):
     await validate_related_ids(
         map_id=point_data.map_id,
         building_id=point_data.building_id,
@@ -151,7 +158,8 @@ async def get_route_point_by_id(point_id: PydanticObjectId):
 )
 async def update_route_point(
     point_id: PydanticObjectId,
-    point_data: RoutePointUpdate
+    point_data: RoutePointUpdate,
+    _admin: User = Depends(require_global_admin),
 ):
     point = await RoutePoint.get(point_id)
 
@@ -182,13 +190,53 @@ async def update_route_point(
     "/{point_id}",
     status_code=status.HTTP_200_OK
 )
-async def delete_route_point(point_id: PydanticObjectId):
+async def delete_route_point(
+    point_id: PydanticObjectId,
+    _admin: User = Depends(require_global_admin),
+):
     point = await RoutePoint.get(point_id)
 
     if not point:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Route point not found"
+        )
+
+    point_id_str = str(point_id)
+
+    # A point that still has edges attached is load-bearing for the
+    # navigation graph — deleting it would silently break every route that
+    # passes through it. Reject instead of a wide implicit cascade; the
+    # admin deletes the edges first (e.g. by re-drawing that corridor).
+    linked_edge = await RouteEdge.find_one(
+        {
+            "$or": [
+                {"from_point_id": point_id_str},
+                {"to_point_id": point_id_str},
+            ]
+        }
+    )
+
+    if linked_edge:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This route point still has connected edges. "
+                "Delete the connecting edges before deleting the point."
+            ),
+        )
+
+    linked_location_code = await LocationCode.find_one(
+        LocationCode.route_point_id == point_id_str
+    )
+
+    if linked_location_code:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This route point is used as a location code's start "
+                "point. Delete or reassign that location code first."
+            ),
         )
 
     await point.delete()

@@ -251,6 +251,14 @@
   box-shadow: 0 5px 18px rgba(26, 58, 107, 0.22);
 }
 
+.s01-barcode-error {
+  font-size: 12.5px;
+  color: #d64545;
+  font-weight: 600;
+  text-align: center;
+  margin-top: -2px;
+}
+
 /* ── Auth section ───────────────────────────────────────────────────────── */
 
 .s01-auth {

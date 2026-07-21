@@ -30,6 +30,7 @@ class LoginRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
+    id: str
     full_name: str
     email: EmailStr
     role: UserRole
@@ -41,3 +42,9 @@ class AuthResponse(BaseModel):
     success: bool
     message: str
     user: UserResponse
+
+    # Present on signup/register/login so the frontend can attach the
+    # token to subsequent admin requests without a second round trip.
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: str

@@ -48,16 +48,23 @@ def load_json_file(filename):
 
 
 # -----------------------------
-# Old temporary JSON APIs
+# DEPRECATED — old temporary JSON-file-backed endpoints from before the
+# MongoDB Atlas migration. Confirmed unused by the current frontend
+# (grepped frontend/src for calls to /buildings, /buildings/{id}/rooms,
+# /rooms/{id}, /graph, /route — none exist; every screen now calls the
+# real /api/... endpoints instead). Left in place rather than deleted so
+# no existing API route is removed, but these should not be built upon —
+# use /api/locations/buildings, /api/rooms, /api/route-points,
+# /api/route-edges and /api/navigation/route instead.
 # -----------------------------
 
-@router.get("/buildings")
+@router.get("/buildings", deprecated=True)
 def get_buildings():
     buildings = load_json_file("buildings.json")
     return buildings
 
 
-@router.get("/buildings/{building_id}/rooms")
+@router.get("/buildings/{building_id}/rooms", deprecated=True)
 def get_rooms_by_building(building_id: str):
     rooms = load_json_file("rooms.json")
 
@@ -67,7 +74,7 @@ def get_rooms_by_building(building_id: str):
     return rooms[building_id]
 
 
-@router.get("/rooms/{room_id}")
+@router.get("/rooms/{room_id}", deprecated=True)
 def get_room_by_id(room_id: str):
     rooms = load_json_file("rooms.json")
 
@@ -79,13 +86,13 @@ def get_room_by_id(room_id: str):
     raise HTTPException(**ROOM_NOT_FOUND)
 
 
-@router.get("/graph")
+@router.get("/graph", deprecated=True)
 def get_graph():
     graph = load_json_file("map_graph.json")
     return graph
 
 
-@router.get("/route")
+@router.get("/route", deprecated=True)
 def get_smart_route(
     start: str = Query(..., alias="from"),
     end: str = Query(..., alias="to")

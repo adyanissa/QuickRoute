@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
 import { useAdmin } from '../context/AdminContext';
+import { useAuth } from '../context/AuthContext';
 import '../styles/adminScreens.css';
 
 // ── Translations ──────────────────────────────────────────────────────────────
@@ -147,6 +148,12 @@ const Screen05 = () => {
   const { lang, setLang } = useLang();
   const navigate          = useNavigate();
   const { buildings, rooms, routePoints, mapData } = useAdmin();
+  const { logout } = useAuth();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/screen/02');
+  };
 
   const isRTL = lang === 'ar' || lang === 'he';
   const t     = UI[lang];
@@ -291,7 +298,7 @@ const Screen05 = () => {
           </div>
 
           {/* Logout */}
-          <button className="adm-logout-btn" onClick={() => navigate('/screen/02')}>
+          <button className="adm-logout-btn" onClick={handleLogout}>
             <LogoutIcon /> {t.logout}
           </button>
 
