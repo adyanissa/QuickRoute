@@ -1,11 +1,19 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
+import { useAuth } from '../context/AuthContext';
 import { signupUser } from '../api/authApi';
+import {
+  buildSignupPayload,
+  getPostAuthRedirectPath,
+  shouldLockEmailField,
+  getInitialEmail,
+} from '../utils/invitationCodeFormHelpers';
 import '../styles/AccountCreationScreen.css';
 
 const INVITATION_CODE_KEY = 'quickroute_invitation_code';
+const INVITATION_PREVIEW_KEY = 'quickroute_invitation_preview';
 
 const UI = {
   en: {
@@ -19,12 +27,13 @@ const UI = {
     finish:          'Finish',
     back:            'Back',
     creating:        'Creating account...',
-    success:         'Account created. You can now log in.',
+    success:         'Account created — signing you in...',
     missingCode:     'Your invitation code was lost. Please verify it again.',
     required:        'Please fill in every field',
     mismatch:        'Passwords do not match',
     tooShort:        'Password must be at least 6 characters',
     failed:          'Could not create the account. Please try again.',
+    emailLockedHint: 'This invitation code is restricted to this email address',
   },
   ar: {
     title:           'إنشاء حساب',
@@ -37,12 +46,13 @@ const UI = {
     finish:          'إنهاء',
     back:            'رجوع',
     creating:        'جاري إنشاء الحساب...',
-    success:         'تم إنشاء الحساب. يمكنك الآن تسجيل الدخول.',
+    success:         'تم إنشاء الحساب — جاري تسجيل الدخول...',
     missingCode:     'فُقد رمز الدعوة الخاص بك. الرجاء التحقق منه مرة أخرى.',
     required:        'الرجاء تعبئة جميع الحقول',
     mismatch:        'كلمتا المرور غير متطابقتين',
     tooShort:        'يجب أن تتكون كلمة المرور من 6 أحرف على الأقل',
     failed:          'تعذر إنشاء الحساب. حاول مرة أخرى.',
+    emailLockedHint: 'رمز الدعوة هذا مقصور على هذا البريد الإلكتروني',
   },
   he: {
     title:           'יצירת חשבון',
@@ -55,12 +65,13 @@ const UI = {
     finish:          'סיום',
     back:            'חזרה',
     creating:        'יוצר חשבון...',
-    success:         'החשבון נוצר. ניתן כעת להתחבר.',
+    success:         'החשבון נוצר — מתחבר...',
     missingCode:     'קוד ההזמנה שלך אבד. יש לאמת אותו שוב.',
     required:        'יש למלא את כל השדות',
     mismatch:        'הסיסמאות אינן תואמות',
     tooShort:        'הסיסמה חייבת להכיל לפחות 6 תווים',
     failed:          'לא ניתן היה ליצור את החשבון. נסה שוב.',
+    emailLockedHint: 'קוד הזמנה זה מוגבל לכתובת אימייל זו',
   },
 };
 
@@ -114,6 +125,7 @@ const BackArrowRTL = () => (
 const AccountCreationScreen = () => {
   const { lang }  = useLang();
   const navigate  = useNavigate();
+  const { login } = useAuth();
   const isRTL     = lang === 'ar' || lang === 'he';
   const t         = UI[lang];
 
@@ -127,6 +139,25 @@ const AccountCreationScreen = () => {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [success, setSuccess] = useState(false);
+  const [emailLocked, setEmailLocked] = useState(false);
+
+  // If the invitation code restricts signup to one specific email
+  // (validated on Screen 03), prefill it here and lock the field so the
+  // account created always matches the code's intended_email — the same
+  // restriction the backend enforces independently at signup time.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(INVITATION_PREVIEW_KEY);
+      const preview = raw ? JSON.parse(raw) : null;
+
+      if (shouldLockEmailField(preview)) {
+        setEmail(getInitialEmail(preview));
+        setEmailLocked(true);
+      }
+    } catch {
+      // Ignore malformed/missing preview — email field just stays editable.
+    }
+  }, []);
 
   const handleFinish = async () => {
     setError('');
@@ -159,22 +190,26 @@ const AccountCreationScreen = () => {
     try {
       setLoading(true);
 
-      await signupUser({
-        full_name: trimmedName,
-        email: trimmedEmail,
-        password,
-        code,
-      });
+      // Only full_name/email/password/code are ever sent — role/building
+      // permissions are never editable here; they come only from the
+      // invitation code, resolved on the backend.
+      const data = await signupUser(
+        buildSignupPayload({ fullName: trimmedName, email: trimmedEmail, password }, code)
+      );
 
       // The code is single-use on the backend too, but clearing it locally
       // keeps this device from trying to reuse it.
       localStorage.removeItem(INVITATION_CODE_KEY);
+      localStorage.removeItem(INVITATION_PREVIEW_KEY);
 
       setSuccess(true);
 
-      // Give the person a moment to see the success state before moving on.
-      // Signup succeeded, so navigating to login now is safe.
-      setTimeout(() => navigate('/screen/02'), 900);
+      // Signup already returns a valid session (same shape as login) — log
+      // the new account straight in and land on the right home screen for
+      // its role, instead of sending the person back to a login form.
+      login(data.user, data.access_token);
+
+      setTimeout(() => navigate(getPostAuthRedirectPath(data.user.role)), 900);
     } catch (err) {
       setError(err.message || t.failed);
     } finally {
@@ -247,8 +282,15 @@ const AccountCreationScreen = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 dir={isRTL ? 'rtl' : 'ltr'}
+                disabled={emailLocked}
+                title={emailLocked ? t.emailLockedHint : undefined}
               />
             </div>
+            {emailLocked && (
+              <p style={{ fontSize: 12, color: '#5a7aaa', margin: '2px 4px 0' }}>
+                {t.emailLockedHint}
+              </p>
+            )}
           </div>
 
           <div className="s04-divider" />

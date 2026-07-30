@@ -1,0 +1,93 @@
+/* ─── NavigationRouteMap — end-user route map (Section 4.E) ──────────────── */
+/* Deliberately minimal: this component never needs pan/zoom/edit styling —
+   those interactions stay in AdminMapScreen.jsx's own styles. */
+
+.s18-route-map {
+  position: relative;
+  width: 100%;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #eef3f9;
+  border: 1px solid rgba(74, 122, 200, 0.18);
+  box-shadow: 0 4px 18px rgba(20, 55, 105, 0.08);
+  aspect-ratio: 4 / 3;
+  margin: 14px 0;
+}
+
+.s18-route-map--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: 20px;
+  text-align: center;
+  color: rgba(26, 58, 107, 0.55);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.s18-route-map-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+}
+
+.s18-route-map-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.s18-route-line {
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Completed section — visually muted (Section 4.E route visual hierarchy) */
+.s18-route-line--completed {
+  stroke: #a9bdd8;
+  stroke-width: 5;
+  opacity: 0.55;
+}
+
+/* Upcoming section — strongest route emphasis */
+.s18-route-line--upcoming {
+  stroke: #4a7ac8;
+  stroke-width: 6;
+}
+
+.s18-route-marker--start {
+  fill: #27ae60;
+  stroke: #ffffff;
+  stroke-width: 3;
+}
+
+/* Destination — clearly distinguishable from every other marker */
+.s18-route-marker--destination {
+  fill: #c0392b;
+  stroke: #ffffff;
+  stroke-width: 3;
+}
+
+.s18-route-marker-flag {
+  fill: #c0392b;
+}
+
+.s18-route-marker--connector {
+  fill: #7a8ca8;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+/* Confirmed current-progress point ("you are here") */
+.s18-route-marker--you {
+  fill: #4a7ac8;
+  stroke: #ffffff;
+  stroke-width: 2.5;
+}

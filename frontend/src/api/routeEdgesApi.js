@@ -37,3 +37,22 @@ export function deleteRouteEdge(edgeId) {
     method: "DELETE",
   });
 }
+
+// "Auto Connect Destinations to Corridors" — preview/apply pair.
+// previewOptions: { map_id, floor, max_distance_px, scope, lang }
+// 100% read-only server-side — never creates a RouteEdge.
+export function previewAutoConnectDestinations(previewOptions) {
+  return apiRequest("/api/route-edges/auto-connect-destinations/preview", {
+    method: "POST",
+    body: JSON.stringify(previewOptions),
+  });
+}
+
+// applyOptions: { map_id, accepted: [{ destination_point_id, corridor_point_id }] }
+// Creates exactly the accepted pairs — every pair is revalidated server-side.
+export function applyAutoConnectDestinations(applyOptions) {
+  return apiRequest("/api/route-edges/auto-connect-destinations/apply", {
+    method: "POST",
+    body: JSON.stringify(applyOptions),
+  });
+}

@@ -10,6 +10,17 @@ access. It never touches the real quickroute_db.
 """
 
 import asyncio
+import os
+
+# Must be set before `routes.invitation_code_routes` is ever imported (it
+# reads this env var exactly once, at module import time, to decide
+# whether the dev-only bootstrap endpoint (/api/invitation-codes/dev-create)
+# is enabled at all). The test suite's `client()` fixture below is what
+# first imports `app` (and therefore that route module), so setting this
+# here — before any test module runs — is early enough. This only affects
+# the in-memory test app process; it has no effect on a real deployment,
+# which never sets this variable.
+os.environ.setdefault("ALLOW_DEV_INVITATION_ENDPOINTS", "true")
 
 import pytest
 import pytest_asyncio
@@ -38,10 +49,17 @@ from models.user_model import User
 from models.invitation_code_model import InvitationCode
 from models.building_model import Building
 from models.map_model import Map
+from models.map_group_model import MapGroup
 from models.room_model import Room
 from models.route_point_model import RoutePoint
 from models.route_edge_model import RouteEdge
 from models.location_code_model import LocationCode
+from models.vertical_connector_model import VerticalConnector
+from models.semantic_map_analysis_model import SemanticMapAnalysis
+from models.semantic_map_publication_model import (
+    SemanticMapPublication,
+    SemanticEntity,
+)
 
 
 @pytest.fixture(scope="session")
@@ -62,10 +80,15 @@ async def init_test_database():
             InvitationCode,
             Building,
             Map,
+            MapGroup,
             Room,
             RoutePoint,
             RouteEdge,
             LocationCode,
+            VerticalConnector,
+            SemanticMapAnalysis,
+            SemanticMapPublication,
+            SemanticEntity,
         ],
     )
 
@@ -103,9 +126,14 @@ async def clean_collections():
         InvitationCode,
         Building,
         Map,
+        MapGroup,
         Room,
         RoutePoint,
         RouteEdge,
         LocationCode,
+        VerticalConnector,
+        SemanticMapAnalysis,
+        SemanticMapPublication,
+        SemanticEntity,
     ]:
         await model.delete_all()

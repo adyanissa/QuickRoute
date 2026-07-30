@@ -236,8 +236,13 @@ export const formatFloor = (floor) => {
 // variant="building" → building list card (Screen 16)
 // variant="room"     → room list card    (Screen 17)
 // selected           → highlighted state  (Screen 17)
+// disabled           → room has no valid graph connection yet (Screen 17) —
+//                       the card is shown (never hidden) but not clickable,
+//                       with `disabledLabel` shown in place of the chevron
+//                       instead of any admin-style "NO GRAPH CONNECTION"
+//                       badge (QuickRoute UX Final Cleanup, Part 5).
 
-const DestinationCard = ({ variant = 'building', data, onClick, selected = false }) => {
+const DestinationCard = ({ variant = 'building', data, onClick, selected = false, disabled = false, disabledLabel = '' }) => {
   if (variant === 'building') {
     return (
       <button
@@ -277,10 +282,12 @@ const DestinationCard = ({ variant = 'building', data, onClick, selected = false
 
   return (
     <button
-      className={`dcard dcard-room${selected ? ' dcard-selected' : ''}`}
-      onClick={onClick}
+      className={`dcard dcard-room${selected ? ' dcard-selected' : ''}${disabled ? ' dcard-disabled' : ''}`}
+      onClick={disabled ? undefined : onClick}
       type="button"
       aria-pressed={selected}
+      aria-disabled={disabled}
+      disabled={disabled}
     >
       <div className="dcard-icon-box dcard-icon-sm" style={{ background: selected ? ts.bg : ts.bg }}>
         <TypeIcon type={data.type} color={ts.color} />
@@ -288,24 +295,30 @@ const DestinationCard = ({ variant = 'building', data, onClick, selected = false
 
       <div className="dcard-body">
         <span className="dcard-name">{data.name}</span>
-        {data.description && <span className="dcard-sub">{data.description}</span>}
+        {disabled
+          ? <span className="dcard-disabled-note">{disabledLabel}</span>
+          : (data.description && <span className="dcard-sub">{data.description}</span>)}
       </div>
 
       <div className="dcard-room-meta">
         <span className="dcard-floor-badge" style={{ color: ts.color, background: ts.bg }}>
           {formatFloor(data.floor)}
         </span>
-        <span className="dcard-type-chip" style={{ color: ts.color }}>
-          {data.type.replace('_', '\u00A0')}
-        </span>
+        {!disabled && (
+          <span className="dcard-type-chip" style={{ color: ts.color }}>
+            {data.type.replace('_', '\u00A0')}
+          </span>
+        )}
       </div>
 
-      <span className="dcard-chevron" aria-hidden="true">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-          <path d="M9 18l6-6-6-6" stroke="currentColor" strokeWidth="2.2"
-            strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-      </span>
+      {!disabled && (
+        <span className="dcard-chevron" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <path d="M9 18l6-6-6-6" stroke="currentColor" strokeWidth="2.2"
+              strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </span>
+      )}
     </button>
   );
 };

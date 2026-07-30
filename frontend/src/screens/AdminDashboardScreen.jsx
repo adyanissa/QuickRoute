@@ -1,8 +1,11 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
 import { useAdmin } from '../context/AdminContext';
 import { useAuth } from '../context/AuthContext';
+import { runBackfillBuildings } from '../api/maintenanceApi';
+import { classifyInitializeError, summarizeInitializeResult } from '../utils/maintenanceHelpers';
 import '../styles/adminScreens.css';
 
 // ── Translations ──────────────────────────────────────────────────────────────
@@ -23,8 +26,30 @@ const UI = {
     loc: { title: 'Locations', desc: 'Add and manage buildings & centers' },
     room: { title: 'Rooms & Destinations', desc: 'Manage clinics, wards, labs and offices' },
     route: { title: 'Route Points', desc: 'Manage navigation nodes and path data' },
+    codes: { title: 'Location Codes', desc: 'Barcode/QR codes for user start points' },
+    invites: { title: 'Invitation Codes', desc: 'Create one-time signup codes and assign admin roles and building responsibilities' },
     section: 'Management',
     mapStatus: { active: 'Map uploaded', none: 'No map uploaded', hint: 'Tap Map Management to upload a floor plan' },
+    init: {
+      title: 'Initialize Project Data',
+      desc: 'Creates or reuses buildings and links existing maps and route points that are missing a building.',
+      action: 'Initialize Project Data',
+      running: 'Running...',
+      confirmMessage:
+        'This will create or reuse buildings for any map missing one, and link existing maps and route points to them.\n\n' +
+        'Existing valid data will not be deleted or changed.\n' +
+        'Missing building relationships will be added.\n' +
+        'This operation is safe to run more than once.\n\n' +
+        'Continue?',
+      sessionExpired: 'Your session has expired. Please log in again.',
+      forbidden: 'Only super admins and global managers can run this operation.',
+      failed: 'Failed to initialize project data',
+      resultMapsUpdated: 'Maps updated',
+      resultPointsUpdated: 'Route points updated',
+      resultBuildings: 'Buildings created / reused',
+      resultRoomsWarning: (n) => `${n} room(s) still missing a valid building — review manually.`,
+      resultCodesWarning: (n) => `${n} location code(s) have inconsistent building references — review manually.`,
+    },
     logout: 'Logout',
   },
   ar: {
@@ -37,8 +62,30 @@ const UI = {
     loc: { title: 'المواقع', desc: 'إضافة وإدارة المباني والمراكز' },
     room: { title: 'الغرف والوجهات', desc: 'إدارة العيادات والأجنحة والمختبرات' },
     route: { title: 'نقاط المسار', desc: 'إدارة عقد التنقل والمسارات' },
+    codes: { title: 'رموز المواقع', desc: 'رموز باركود/QR لنقاط بدء المستخدم' },
+    invites: { title: 'رموز الدعوة', desc: 'إنشاء رموز تسجيل لمرة واحدة وتحديد أدوار الإدارة ومسؤوليات المباني' },
     section: 'الإدارة',
     mapStatus: { active: 'الخريطة محملة', none: 'لا توجد خريطة', hint: 'انقر إدارة الخريطة لتحميل مخطط' },
+    init: {
+      title: 'تهيئة بيانات المشروع',
+      desc: 'إنشاء أو إعادة استخدام المباني وربط الخرائط ونقاط المسار الحالية التي تفتقر إلى مبنى.',
+      action: 'تهيئة بيانات المشروع',
+      running: 'جارٍ التنفيذ...',
+      confirmMessage:
+        'سيؤدي هذا إلى إنشاء أو إعادة استخدام المباني لأي خريطة تفتقر إلى مبنى، وربط الخرائط ونقاط المسار الحالية بها.\n\n' +
+        'لن يتم حذف أو تغيير أي بيانات صالحة موجودة.\n' +
+        'سيتم إضافة علاقات المباني المفقودة فقط.\n' +
+        'هذه العملية آمنة ويمكن تشغيلها أكثر من مرة.\n\n' +
+        'هل تريد المتابعة؟',
+      sessionExpired: 'انتهت صلاحية جلستك. يرجى تسجيل الدخول مرة أخرى.',
+      forbidden: 'فقط المشرف العام أو مدير النظام يمكنه تنفيذ هذه العملية.',
+      failed: 'فشلت تهيئة بيانات المشروع',
+      resultMapsUpdated: 'الخرائط المحدثة',
+      resultPointsUpdated: 'نقاط المسار المحدثة',
+      resultBuildings: 'المباني التي تم إنشاؤها/إعادة استخدامها',
+      resultRoomsWarning: (n) => `${n} غرفة/غرف ما زالت بدون مبنى صالح — يلزم المراجعة اليدوية.`,
+      resultCodesWarning: (n) => `${n} رمز/رموز مواقع بها تعارض في بيانات المبنى — يلزم المراجعة اليدوية.`,
+    },
     logout: 'تسجيل خروج',
   },
   he: {
@@ -51,8 +98,30 @@ const UI = {
     loc: { title: 'מיקומים', desc: 'הוספה וניהול מבנים ומרכזים' },
     room: { title: 'חדרים ויעדים', desc: 'ניהול מרפאות, אגפים ומעבדות' },
     route: { title: 'נקודות מסלול', desc: 'ניהול צמתי ניווט ומסלולים' },
+    codes: { title: 'קודי מיקום', desc: 'קודי ברקוד/QR לנקודות התחלה' },
+    invites: { title: 'קודי הזמנה', desc: 'צור קודי הרשמה חד-פעמיים והקצה תפקידי ניהול ואחריות מבנים' },
     section: 'ניהול',
     mapStatus: { active: 'מפה הועלתה', none: 'אין מפה', hint: 'לחץ ניהול מפה להעלאת תוכנית קומה' },
+    init: {
+      title: 'אתחול נתוני הפרויקט',
+      desc: 'יוצר או משתמש מחדש במבנים ומקשר מפות ונקודות מסלול קיימות שחסר להן מבנה.',
+      action: 'אתחל נתוני פרויקט',
+      running: 'מתבצע...',
+      confirmMessage:
+        'פעולה זו תיצור או תשתמש מחדש במבנים עבור כל מפה שחסר לה מבנה, ותקשר אליהם מפות ונקודות מסלול קיימות.\n\n' +
+        'נתונים תקפים קיימים לא יימחקו או ישתנו.\n' +
+        'קשרי מבנה חסרים יתווספו.\n' +
+        'הפעולה בטוחה להרצה יותר מפעם אחת.\n\n' +
+        'להמשיך?',
+      sessionExpired: 'תוקף ההתחברות שלך פג. יש להתחבר מחדש.',
+      forbidden: 'רק מנהל-על או מנהל גלובלי יכולים להריץ פעולה זו.',
+      failed: 'אתחול נתוני הפרויקט נכשל',
+      resultMapsUpdated: 'מפות שעודכנו',
+      resultPointsUpdated: 'נקודות מסלול שעודכנו',
+      resultBuildings: 'מבנים שנוצרו / נעשה בהם שימוש חוזר',
+      resultRoomsWarning: (n) => `${n} חדרים עדיין ללא מבנה תקין — נדרשת בדיקה ידנית.`,
+      resultCodesWarning: (n) => `${n} קודי מיקום עם התייחסות מבנה לא עקבית — נדרשת בדיקה ידנית.`,
+    },
     logout: 'התנתק',
   },
 };
@@ -116,6 +185,29 @@ const RouteIcon = () => (
   </svg>
 );
 
+const CodeIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <rect x="3" y="3" width="7" height="7" rx="1.2" stroke="currentColor" strokeWidth="1.8"/>
+    <rect x="14" y="3" width="7" height="7" rx="1.2" stroke="currentColor" strokeWidth="1.8"/>
+    <rect x="3" y="14" width="7" height="7" rx="1.2" stroke="currentColor" strokeWidth="1.8"/>
+    <path d="M14 14h3v3h-3zM18 18h3v3h-3zM18 14h3M14 18v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+  </svg>
+);
+
+const KeyIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <circle cx="8" cy="15" r="4" stroke="currentColor" strokeWidth="1.8"/>
+    <path d="M11 12l8-8M17 6l2 2M14 9l2 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
+const SetupIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+    <path d="M14.7 6.3a4 4 0 0 1-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 1 5.4-5.4l-2.3 2.3-2-2 2.3-2.3z"
+      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
 const LogoutIcon = () => (
   <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
@@ -147,8 +239,16 @@ const NavCard = ({ icon, title, desc, count, countLabel, gradient, onClick, isRT
 const Screen05 = () => {
   const { lang, setLang } = useLang();
   const navigate          = useNavigate();
-  const { buildings, rooms, routePoints, mapData } = useAdmin();
-  const { logout } = useAuth();
+  const {
+    buildings, rooms, routePoints, mapData,
+    loadMaps, loadBuildings, loadRooms, loadRoutePoints,
+  } = useAdmin();
+  const { logout, user } = useAuth();
+  const canManageInvitationCodes = user?.role === 'super_admin' || user?.role === 'global_manager';
+
+  const [isInitializing, setIsInitializing] = useState(false);
+  const [initResult, setInitResult] = useState(null);
+  const [initError, setInitError] = useState('');
 
   const handleLogout = () => {
     logout();
@@ -159,6 +259,50 @@ const Screen05 = () => {
   const t     = UI[lang];
 
   const totalRooms = Object.values(rooms).reduce((sum, arr) => sum + arr.length, 0);
+
+  const resultSummary = initResult ? summarizeInitializeResult(initResult) : null;
+
+  const handleInitializeProjectData = async () => {
+    // Belt-and-suspenders against double-clicks: the button is already
+    // disabled while running, but guard the handler itself too in case
+    // it fires again before the re-render lands.
+    if (isInitializing) return;
+
+    const confirmed = window.confirm(t.init.confirmMessage);
+    if (!confirmed) return;
+
+    setIsInitializing(true);
+    setInitError('');
+    setInitResult(null);
+
+    try {
+      const result = await runBackfillBuildings();
+      setInitResult(result);
+
+      // Refresh everything the dashboard (and screens it links to) shows
+      // counts/data for, so the admin sees the effect immediately without
+      // a full page reload.
+      await Promise.all([
+        loadMaps(),
+        loadBuildings(),
+        loadRooms(),
+        loadRoutePoints(),
+      ]);
+    } catch (error) {
+      const classified = classifyInitializeError(error, t.init);
+      setInitError(classified.message);
+
+      if (classified.kind === 'sessionExpired') {
+        // Token was already cleared by apiRequest(); also clear the
+        // in-memory auth state and send the admin back to login instead of
+        // leaving a stale "logged in" UI around a dead session.
+        logout();
+        navigate('/screen/02');
+      }
+    } finally {
+      setIsInitializing(false);
+    }
+  };
 
   return (
     <div className="layout-wrapper">
@@ -250,6 +394,61 @@ const Screen05 = () => {
             </div>
           )}
 
+          {/* Initialize Project Data */}
+          <div className="adm-setup-card">
+            <div className="adm-setup-card-top">
+              <div className="adm-setup-card-icon"><SetupIcon /></div>
+              <div className="adm-setup-card-body">
+                <div className="adm-setup-card-title">{t.init.title}</div>
+                <div className="adm-setup-card-desc">{t.init.desc}</div>
+              </div>
+            </div>
+
+            <button
+              className="adm-btn adm-btn-primary adm-setup-card-btn"
+              onClick={handleInitializeProjectData}
+              disabled={isInitializing}
+            >
+              {isInitializing ? t.init.running : t.init.action}
+            </button>
+
+            {initError && (
+              <div className="adm-setup-card-error">{initError}</div>
+            )}
+
+            {resultSummary && (
+              <div className="adm-setup-card-result">
+                <div className="adm-setup-card-result-row">
+                  <span>{t.init.resultMapsUpdated}</span>
+                  <strong>{resultSummary.mapsUpdated}</strong>
+                </div>
+                <div className="adm-setup-card-result-row">
+                  <span>{t.init.resultPointsUpdated}</span>
+                  <strong>{resultSummary.pointsUpdated}</strong>
+                </div>
+                <div className="adm-setup-card-result-row">
+                  <span>{t.init.resultBuildings}</span>
+                  <strong>{resultSummary.buildingsTouchedCount}</strong>
+                </div>
+                {resultSummary.buildingsTouchedNames.length > 0 && (
+                  <div className="adm-setup-card-result-names">
+                    {resultSummary.buildingsTouchedNames.join(', ')}
+                  </div>
+                )}
+                {resultSummary.roomsWithMissingBuilding > 0 && (
+                  <div className="adm-setup-card-result-warn">
+                    {t.init.resultRoomsWarning(resultSummary.roomsWithMissingBuilding)}
+                  </div>
+                )}
+                {resultSummary.locationCodesInconsistent > 0 && (
+                  <div className="adm-setup-card-result-warn">
+                    {t.init.resultCodesWarning(resultSummary.locationCodesInconsistent)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Section label */}
           <div className="adm-section-row">
             <span className="adm-section-lbl">{t.section}</span>
@@ -295,6 +494,24 @@ const Screen05 = () => {
               onClick={() => navigate('/admin/routes')}
               isRTL={isRTL}
             />
+            <NavCard
+              icon={<CodeIcon />}
+              title={t.codes.title}
+              desc={t.codes.desc}
+              gradient="linear-gradient(135deg, #1f6f6f, #2a9d9d)"
+              onClick={() => navigate('/admin/location-codes')}
+              isRTL={isRTL}
+            />
+            {canManageInvitationCodes && (
+              <NavCard
+                icon={<KeyIcon />}
+                title={t.invites.title}
+                desc={t.invites.desc}
+                gradient="linear-gradient(135deg, #6b3f1a, #c08030)"
+                onClick={() => navigate('/admin/invitation-codes')}
+                isRTL={isRTL}
+              />
+            )}
           </div>
 
           {/* Logout */}

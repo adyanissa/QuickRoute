@@ -14,4 +14,12 @@ PyMuPDF
 Pillow
 numpy
 openai
+anthropic
 boto3
+
+# Local OCR for map-based destination name suggestions (services/ocr_service.py).
+# pytesseract is only a wrapper — it also requires the system `tesseract-ocr`
+# package to be installed (e.g. `apt-get install tesseract-ocr` on Debian/
+# Ubuntu). If that binary isn't present, ocr_service degrades gracefully
+# (available=False) instead of failing the map-based placement flow.
+pytesseract

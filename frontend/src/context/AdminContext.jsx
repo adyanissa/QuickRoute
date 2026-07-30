@@ -37,18 +37,81 @@ const buildingToApiPayload = (b) => ({
 const roomToViewModel = (r) => ({
   id: r.id,
   name: r.name_en || '',
-  type: r.room_type || 'clinic',
+  type: r.room_type || 'room',
   floor: r.floor ?? 0,
   description: r.description || '',
+
+  // Independently-editable AR/HE translations (Section 4/5 of the
+  // multilingual spec) — sourced from the same nested `names` object the
+  // end-user-facing screens read via utils/viewModels.js, never a second
+  // independently-drifting field. `name` above stays the legacy EN value
+  // (name_en) for full backward compatibility with the rest of this
+  // admin screen; `names` is the raw object kept alongside it so a
+  // Correct/edit form can show empty languages clearly instead of
+  // guessing them from name_en.
+  names: r.names || null,
+  nameAr: r.names?.ar || '',
+  nameHe: r.names?.he || '',
+  // Traceability link to the semantic entity this Destination was
+  // created from (Section 6) — null for a manually-entered Room.
+  semanticPublicationId: r.semantic_publication_id ?? null,
+  semanticEntityExternalId: r.semantic_entity_external_id ?? null,
+  semanticEntityType: r.semantic_entity_type ?? null,
+
+  // Map-based destination placement — null/false for a room created
+  // through the manual-only fallback flow.
+  mapId: r.map_id ?? null,
+  mapGroupId: r.map_group_id ?? r.mapGroupId ?? null,
+  x: r.x ?? null,
+  y: r.y ?? null,
+  routePointId: r.route_point_id ?? null,
+  // One-shot signal — only meaningful on the exact create/update response
+  // that just performed the map-linking step; the backend always returns
+  // it as false on a plain GET (see backend/schemas/room_schema.py). Do
+  // not use this to render a room's connection status in a plain list —
+  // use isNavigable below instead, which the backend computes live from
+  // the real current RoutePoint/RouteEdge state on every response.
+  routePointWasReused: Boolean(r.route_point_was_reused),
+  routePointConnected: Boolean(r.route_point_connected),
+  isNavigable: Boolean(r.is_navigable),
+  navigationUnavailableReason: r.navigation_unavailable_reason ?? null,
 });
 
-const roomToApiPayload = (r, buildingId) => ({
-  building_id: buildingId,
-  name_en: r.name,
-  room_type: r.type || null,
-  floor: r.floor === '' || r.floor === undefined ? null : Number(r.floor),
-  description: r.description || null,
-});
+const roomToApiPayload = (r, buildingId) => {
+  const payload = {
+    building_id: buildingId,
+    name_en: r.name,
+    // The AR/HE/EN Correct-style inputs are edited together as one form
+    // (same convention as AdminMapAnalysisScreen's per-language Correct
+    // UI), so the whole `names` object is sent every save — this is a
+    // deliberate full overwrite of these three keys, never a silent
+    // partial guess. name_en (EN, required) is kept in sync with
+    // names.en so both the legacy field and the new structure agree.
+    names: { en: r.name || null, ar: r.nameAr || null, he: r.nameHe || null },
+    room_type: r.type || null,
+    floor: r.floor === '' || r.floor === undefined ? null : Number(r.floor),
+    description: r.description || null,
+  };
+
+  // Semantic-entity traceability (Section 6) — only ever forwarded when
+  // this room was actually created from/already linked to a published
+  // semantic entity; never invented for an ordinary manual room, and
+  // never cleared by an unrelated edit (only sent when present).
+  if (r.semanticPublicationId) payload.semantic_publication_id = r.semanticPublicationId;
+  if (r.semanticEntityExternalId) payload.semantic_entity_external_id = r.semanticEntityExternalId;
+  if (r.semanticEntityType) payload.semantic_entity_type = r.semanticEntityType;
+
+  // Map placement is opt-in and all-or-nothing on the backend: only send
+  // map_id/x/y when a location was actually picked on the map, so a
+  // manual-only save behaves exactly as before (no RoutePoint created).
+  if (r.mapId && r.x !== null && r.x !== undefined && r.y !== null && r.y !== undefined) {
+    payload.map_id = r.mapId;
+    payload.x = Number(r.x);
+    payload.y = Number(r.y);
+  }
+
+  return payload;
+};
 
 // ── Map view-model <-> backend shape adapter ────────────────────────────────
 // Handles both the old simple map fields (image_url, scale, floor_scales)
@@ -66,6 +129,23 @@ const normalizeMap = (map) => {
     campus: map.campus || map.location || '',
     address: map.address || '',
     description: map.description || '',
+
+    // Was silently dropped here before — this object literal only ever
+    // returned the fields explicitly listed, so any screen reading
+    // `map.buildingId`/`map.building_id` off AdminContext's `maps` (e.g.
+    // Location Codes' Building -> Map dependent dropdown) always saw
+    // `undefined` and could never match a selected building, even though
+    // the backend has correctly returned building_id since the automatic
+    // building-setup work. building_id is always stringified so it
+    // compares equal to a Building.id (also always a string) without a
+    // separate normalization step at every call site.
+    buildingId: map.building_id != null ? String(map.building_id)
+      : map.buildingId != null ? String(map.buildingId)
+      : null,
+    floor: map.floor ?? null,
+    floor_label: map.floor_label ?? map.floorLabel ?? null,
+    map_group_id: map.map_group_id ?? map.mapGroupId ?? null,
+    map_group_code: map.map_group_code ?? map.mapGroupCode ?? null,
 
     imageUrl: map.imageUrl || map.image_url || null,
     sourceImageUrl: map.sourceImageUrl || map.source_image_url || null,
@@ -256,10 +336,15 @@ export const AdminProvider = ({ children }) => {
       method: 'POST',
       body: JSON.stringify(roomToApiPayload(r, buildingId)),
     });
+    const viewModel = roomToViewModel(created);
     setRooms((prev) => ({
       ...prev,
-      [buildingId]: [...(prev[buildingId] || []), roomToViewModel(created)],
+      [buildingId]: [...(prev[buildingId] || []), viewModel],
     }));
+    // Returned (not just stored) so the map-based placement flow can show
+    // a real result summary — RoutePoint created/reused, graph connected
+    // or not — straight from the backend's actual response.
+    return viewModel;
   };
 
   const updateRoom = async (buildingId, r) => {
@@ -267,12 +352,14 @@ export const AdminProvider = ({ children }) => {
       method: 'PUT',
       body: JSON.stringify(roomToApiPayload(r, buildingId)),
     });
+    const viewModel = roomToViewModel(updated);
     setRooms((prev) => ({
       ...prev,
       [buildingId]: (prev[buildingId] || []).map((x) =>
-        x.id === r.id ? roomToViewModel(updated) : x
+        x.id === r.id ? viewModel : x
       ),
     }));
+    return viewModel;
   };
 
   const deleteRoom = async (buildingId, id) => {
@@ -295,17 +382,20 @@ export const AdminProvider = ({ children }) => {
 
         buildings,
         buildingsLoading,
+        loadBuildings,
         addBuilding,
         updateBuilding,
         deleteBuilding,
 
         rooms,
         roomsLoading,
+        loadRooms,
         addRoom,
         updateRoom,
         deleteRoom,
 
         routePoints,
+        loadRoutePoints,
       }}
     >
       {children}

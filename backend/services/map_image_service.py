@@ -34,6 +34,17 @@ SOURCE_DIR = MAPS_DIR / "source"
 DISPLAY_DIR = MAPS_DIR / "display"
 TEMP_DIR = MAPS_DIR / "temporary"
 
+# Permanent, byte-for-byte copy of every uploaded map's ORIGINAL file
+# (before any PDF-to-PNG flattening/normalization). Purely additive: no
+# existing map-processing code reads from this directory, so its presence
+# changes nothing about how a map is displayed or processed. It exists
+# solely so semantic map analysis (see services/semantic_analysis_service.
+# py) can later inspect a PDF's real, un-flattened pages — the existing
+# pipeline's own SOURCE_DIR PNG is always a single flattened page and
+# cannot be used for genuine multi-page PDF analysis. See
+# preserve_original_source_file() below.
+ORIGINALS_DIR = MAPS_DIR / "originals"
+
 load_dotenv(BACKEND_DIR / ".env")
 
 
@@ -181,6 +192,7 @@ def ensure_map_directories() -> None:
     SOURCE_DIR.mkdir(parents=True, exist_ok=True)
     DISPLAY_DIR.mkdir(parents=True, exist_ok=True)
     TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def delete_file_safely(file_path: Path) -> None:
@@ -189,6 +201,45 @@ def delete_file_safely(file_path: Path) -> None:
             file_path.unlink()
     except OSError:
         pass
+
+
+def preserve_original_source_file(
+    map_id: str, uploaded_path: Path
+) -> Optional[Path]:
+    """
+    Best-effort, additive copy of the just-uploaded file's exact original
+    bytes into ORIGINALS_DIR, called from process_map_in_background()
+    BEFORE its existing `finally: delete_file_safely(uploaded_path)` step
+    removes the temporary upload. Never raises — a failure here must never
+    break map upload/processing, which has already succeeded by the time
+    this runs; it only means semantic analysis will fall back to the
+    normalized SOURCE_DIR PNG (first page only for a PDF) instead of the
+    true original.
+    """
+
+    try:
+        ensure_map_directories()
+        extension = uploaded_path.suffix.lower() or ".bin"
+        destination = ORIGINALS_DIR / f"{map_id}{extension}"
+        shutil.copyfile(uploaded_path, destination)
+        return destination
+    except OSError:
+        return None
+
+
+def get_preserved_original_path(map_id: str) -> Optional[Path]:
+    """
+    Returns the permanently-preserved original upload for this map, if
+    one exists (every map processed after this feature was added). None
+    for maps processed before this existed, or if preservation failed —
+    callers must fall back to SOURCE_DIR / f"{map_id}.png" in that case.
+    """
+
+    if not ORIGINALS_DIR.exists():
+        return None
+
+    matches = sorted(ORIGINALS_DIR.glob(f"{map_id}.*"))
+    return matches[0] if matches else None
 
 
 # =========================================================

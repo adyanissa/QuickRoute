@@ -37,3 +37,19 @@ export function deleteRoom(roomId) {
     method: "DELETE",
   });
 }
+
+// Admin-only bulk repair (destination data flow, Section 4): "Sync Rooms
+// from Route Points". Scoped by exactly one of building_id/map_group_id —
+// creates/updates linked Rooms for existing "room"/"store" RoutePoints
+// that predate automatic Room creation, so the admin never has to open
+// Add Room once per point. Never touches Dijkstra/routing/graph topology
+// — see backend/routes/room_routes.py's sync_rooms_from_route_points.
+export function syncRoomsFromRoutePoints({ building_id, map_group_id } = {}) {
+  return apiRequest("/api/rooms/sync-from-route-points", {
+    method: "POST",
+    body: JSON.stringify({
+      building_id: building_id || null,
+      map_group_id: map_group_id || null,
+    }),
+  });
+}

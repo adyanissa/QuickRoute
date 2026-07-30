@@ -479,6 +479,107 @@
   flex-shrink: 0;
 }
 
+/* ── Initialize Project Data card ──────────────────────────────────────── */
+
+.adm-setup-card {
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(208, 228, 247, 0.65);
+  background: rgba(248, 251, 255, 0.80);
+}
+
+.adm-setup-card-top {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-bottom: 12px;
+}
+
+.adm-setup-card-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 13px;
+  background: linear-gradient(135deg, #1f6f6f, #2a9d9d);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  flex-shrink: 0;
+  box-shadow: 0 4px 14px rgba(31, 111, 111, 0.22);
+}
+
+.adm-setup-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.adm-setup-card-title {
+  font-family: var(--font-brand);
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a3a6b;
+  margin-bottom: 3px;
+}
+
+.adm-setup-card-desc {
+  font-size: 12px;
+  color: #5a7aaa;
+  line-height: 1.4;
+}
+
+.adm-setup-card-btn {
+  width: 100%;
+}
+
+.adm-setup-card-error {
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(192, 57, 43, 0.08);
+  border: 1px solid rgba(192, 57, 43, 0.22);
+  color: #a0200d;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.adm-setup-card-result {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(42, 170, 138, 0.08);
+  border: 1px solid rgba(42, 170, 138, 0.22);
+}
+
+.adm-setup-card-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: #1d7a5a;
+  padding: 2px 0;
+}
+
+.adm-setup-card-result-row strong {
+  color: #1a3a6b;
+  font-weight: 800;
+}
+
+.adm-setup-card-result-names {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: #5a7aaa;
+  line-height: 1.4;
+}
+
+.adm-setup-card-result-warn {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: #9a6a1a;
+  line-height: 1.4;
+}
+
 /* ── Section row ────────────────────────────────────────────────────────── */
 
 .adm-section-row {
@@ -780,6 +881,12 @@
   border: none;
 }
 
+.adm-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
 .adm-btn-primary,
 .adm-btn-save {
   background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 50%, #3b6dbf 100%);
@@ -972,6 +1079,19 @@
   line-height: 1.5;
 }
 
+/* Destination data flow — hint shown under Point Type when "room"/"store"
+   is selected, telling the admin this point will also become a user
+   destination (no second Add Room step required). */
+.adm-point-destination-hint {
+  margin-top: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #2a7a52;
+  background: rgba(42, 122, 82, 0.08);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
 .adm-form-input:focus,
 .adm-form-select:focus,
 .adm-form-textarea:focus,
@@ -983,6 +1103,74 @@
   box-shadow:
     0 3px 16px rgba(42, 82, 152, 0.10),
     0 0 0 3px rgba(42, 82, 152, 0.07);
+}
+
+.adm-form-hint {
+  font-size: 11.5px;
+  color: #7a9abf;
+  line-height: 1.4;
+}
+
+/* ── Map-based destination picker ──────────────────────────────────────── */
+
+.adm-map-picker {
+  position: relative;
+  width: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1.5px solid rgba(208, 228, 247, 0.90);
+  background: #eef3f9;
+  margin-bottom: 6px;
+}
+
+.adm-map-picker-img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+  background: white;
+  cursor: crosshair;
+}
+
+.adm-map-picker-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.adm-map-picker-empty {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: #8aaacb;
+  border-radius: 14px;
+  border: 1.5px dashed rgba(208, 228, 247, 0.90);
+  background: rgba(248, 251, 255, 0.80);
+  margin-bottom: 6px;
+}
+
+.adm-ocr-box {
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(74, 122, 200, 0.06);
+  border: 1px solid rgba(74, 122, 200, 0.18);
+}
+
+.adm-ocr-box-text {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1a3a6b;
+}
+
+.adm-ocr-box-warn {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: #9a6a1a;
+  line-height: 1.4;
 }
 
 .adm-form-row {
@@ -1212,6 +1400,9 @@
   gap: 14px;
   max-height: 60vh;
   overflow-y: auto;
+  /* Keep a scroll gesture that reaches the top/bottom of this modal's own
+     content from chaining into the page behind the backdrop. */
+  overscroll-behavior: contain;
 }
 
 .adm-modal-foot {
@@ -1538,4 +1729,245 @@
   .adm-list {
     grid-template-columns: repeat(3, minmax(300px, 1fr));
   }
+}
+
+/* ── Full-map floating tool panel ──────────────────────────────────────────
+   Draggable/collapsible Add Point / Draw Walkable Path / Test Route panel
+   (frontend/src/components/FloatingToolPanel.jsx). Replaces the old
+   fixed top:76/left:20 panel that permanently blocked part of the map. */
+
+.tool-panel {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+  /* Explicit (rather than relying on implicit z-index:auto stacking order)
+     so the full-map modal's close button — rendered after the panel in
+     source order with its own explicit z-index: 2 — is deterministically
+     guaranteed to paint above the panel even in the rare case a docked or
+     dragged panel position overlaps that corner of the workspace. */
+  z-index: 1;
+  max-width: calc(100vw - 40px);
+  /* The panel can be taller than the map viewport on short screens
+     (e.g. a phone in landscape) — scroll its own content rather than
+     letting it grow past the visible area, which would make the
+     Save/Cancel actions at the bottom unreachable. */
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Dragging updates left/top on every pointermove — turning off layout-
+     affecting transitions on those two properties keeps the drag feeling
+     1:1 with the cursor instead of visibly lagging behind it. touch-action
+     is scoped to the drag handle only (below), not the whole panel, so
+     scrolling a tall form inside .tool-panel-body still works normally on
+     touch devices. */
+  transition: none;
+}
+
+.tool-panel-collapsed {
+  border-radius: 999px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.30);
+}
+
+.tool-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 10px 10px 14px;
+  background: linear-gradient(135deg, #1a3a6b, #2a5298);
+  border-radius: 16px 16px 0 0;
+  flex-shrink: 0;
+}
+
+.tool-panel-collapsed .tool-panel-header {
+  border-radius: 999px;
+  padding: 8px 10px 8px 14px;
+}
+
+.tool-panel-drag-handle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  cursor: grab;
+  /* Prevents the browser's native touch scroll/pan gesture from
+     hijacking a touch-drag on the handle before our own pointer
+     handlers get a chance to run. */
+  touch-action: none;
+  user-select: none;
+  border-radius: 8px;
+  padding: 2px 4px;
+  outline: none;
+}
+
+.tool-panel-drag-handle:active {
+  cursor: grabbing;
+}
+
+.tool-panel-drag-handle:focus-visible {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+}
+
+.tool-panel-grip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.tool-panel-grip span {
+  display: block;
+  width: 14px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.tool-panel-title {
+  color: white;
+  font-weight: 800;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.tool-panel-snap-btn,
+.tool-panel-collapse-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.16);
+  color: white;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease;
+}
+
+.tool-panel-snap-btn:hover,
+.tool-panel-collapse-btn:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.tool-panel-snap-btn:focus-visible,
+.tool-panel-collapse-btn:focus-visible {
+  outline: 2px solid white;
+  outline-offset: 1px;
+}
+
+.tool-panel-body {
+  padding: 16px;
+  /* flex: 1 1 auto + min-height: 0 is the actual fix for "long form,
+     unreachable Save button": as a plain flex item this would default to
+     min-height: auto (its content's full natural height), which lets it
+     grow past .tool-panel's max-height instead of ever scrolling — the
+     parent's overflow: hidden would then simply clip whatever doesn't
+     fit, with no way to reach it. min-height: 0 lets this item actually
+     shrink to the space left over after the header (and footer, if any),
+     so overflow-y: auto here has real constrained space to scroll within. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* A scroll gesture that reaches the top/bottom of this panel's own
+     content must not "chain" into scrolling/zooming the map or page
+     underneath. */
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Sticky action footer (Save/Cancel and similar primary actions) — a flex
+   sibling of .tool-panel-body, not a child of it, so it is never part of
+   the scrollable area and stays reachable regardless of how tall the form
+   above it grows. */
+.tool-panel-footer {
+  flex-shrink: 0;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(23, 59, 112, 0.14);
+  /* Opaque background + its own stacking context: the body sits above it
+     in source order but never overlaps it (flex column, not absolute
+     positioning), so z-index isn't load-bearing for correctness — this is
+     defense-in-depth against any future change that makes .tool-panel-body
+     absolutely positioned or otherwise able to render on top of it. */
+  background: white;
+  position: relative;
+  z-index: 1;
+  border-radius: 0 0 16px 16px;
+}
+
+/* RTL: mirror the header layout (title/handle stay on the reading-start
+   side, actions on the reading-end side) — the container's own dir
+   attribute plus flexbox's automatic row-reverse under RTL already
+   handles this without any extra rules, this just tightens the corner
+   radii for the mirrored corner. */
+.tool-panel[dir='rtl'] .tool-panel-header {
+  border-radius: 16px 16px 0 0;
+}
+
+.tool-panel[dir='rtl'].tool-panel-collapsed .tool-panel-header {
+  border-radius: 999px;
+}
+
+/* ── Small screens ──────────────────────────────────────────────────────── */
+/* The panel must never cover most of the map on a narrow viewport. Its
+   width already caps at calc(100vw - 40px) above; here the body also gets
+   a stricter own max-height so a tall form (e.g. Add Point with the
+   room/store fields showing) scrolls internally instead of pushing the
+   whole panel past the bottom of the screen. */
+@media (max-width: 640px) {
+  .tool-panel {
+    max-width: calc(100vw - 24px);
+    max-height: min(70vh, calc(100vh - 24px));
+  }
+
+  /* No separate max-height needed here: .tool-panel-body is `flex: 1 1
+     auto; min-height: 0`, so it already fills exactly whatever room is
+     left inside .tool-panel's own (smaller, on this screen size) max-height
+     after the header and any footer take their natural space. */
+}
+/* ── Admin Map Analysis Review screen (Final Submission Part 5) ─────────── */
+.adm-table {
+  border-collapse: collapse;
+  background: white;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(23, 59, 112, 0.08);
+}
+
+.adm-table th {
+  text-align: left;
+  padding: 8px 10px;
+  background: #eef4fb;
+  color: #315b8f;
+  font-weight: 700;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.adm-table td {
+  padding: 6px 10px;
+  border-top: 1px solid #eef2f7;
+  vertical-align: middle;
+}
+
+.adm-table tbody tr:hover {
+  background: #f7fafd;
+}
+
+[dir="rtl"] .adm-table th {
+  text-align: right;
 }

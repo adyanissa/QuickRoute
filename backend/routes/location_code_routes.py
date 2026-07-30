@@ -11,10 +11,13 @@ from models.route_point_model import RoutePoint
 from models.user_model import User
 from schemas.location_code_schema import (
     LocationCodeCreate,
+    LocationCodeGenerate,
     LocationCodeUpdate,
     LocationCodeResponse,
     LocationCodeResolveResponse,
 )
+import secrets
+import string
 from core.auth_deps import get_current_user, user_can_manage_building
 from core.errors import (
     LOCATION_CODE_NOT_FOUND,
@@ -32,13 +35,63 @@ router = APIRouter(
 )
 
 
-def location_code_to_response(entry: LocationCode) -> LocationCodeResponse:
+async def resolve_location_code_group_and_floor(map_id: str, route_point_id: str):
+    """
+    Resolved fresh from the linked Map/RoutePoint every time — never
+    stored on LocationCode itself (see LocationCodeResponse.map_group_id/
+    floor docstrings) — so a code always reflects its point's real,
+    current floor rather than a value that could silently go stale.
+
+    "Treat map_id as the authoritative floor source" — same rule already
+    established for RoutePoint/RouteEdge floor consistency (see
+    routes/route_point_routes.py's create_route_point). This was the
+    actual bug behind "the code card says Floor 1 but the user's Current
+    floor shows —": this function used to read ONLY route_point.floor,
+    which can be null/stale for a point that predates floor tracking or
+    was never backfilled, while the admin list's own display already
+    fell back to the Map's floor (`entry.floor ?? map?.floor` in
+    AdminLocationCodesScreen.jsx) — so the two disagreed. Falls back to
+    the RoutePoint's own floor only when the Map itself has no floor
+    recorded at all (a legacy map that predates floor tracking).
+    """
+
+    map_group_id = None
+    map_floor = None
+    point_floor = None
+
+    try:
+        map_item = await Map.get(PydanticObjectId(map_id))
+        if map_item:
+            map_group_id = map_item.map_group_id
+            map_floor = map_item.floor
+    except Exception:
+        pass
+
+    try:
+        route_point = await RoutePoint.get(PydanticObjectId(route_point_id))
+        if route_point:
+            point_floor = route_point.floor
+    except Exception:
+        pass
+
+    floor = map_floor if map_floor is not None else point_floor
+
+    return map_group_id, floor
+
+
+async def location_code_to_response(entry: LocationCode) -> LocationCodeResponse:
+    map_group_id, floor = await resolve_location_code_group_and_floor(
+        entry.map_id, entry.route_point_id
+    )
+
     return LocationCodeResponse(
         id=str(entry.id),
         code=entry.code,
         building_id=entry.building_id,
         map_id=entry.map_id,
         route_point_id=entry.route_point_id,
+        map_group_id=map_group_id,
+        floor=floor,
         label=entry.label,
         is_active=entry.is_active,
         created_at=entry.created_at,
@@ -78,6 +131,30 @@ async def validate_location_code_references(
             detail="route_point_id does not belong to the given map_id"
         )
 
+    # And the map/point must actually belong to the claimed building —
+    # older maps/points created before building_id existed have None here
+    # and are intentionally not rejected (they still need to work until
+    # backfilled), but an explicit mismatch is always a real error.
+    if map_item.building_id and map_item.building_id != building_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="map_id does not belong to the given building_id",
+        )
+
+    if route_point.building_id and route_point.building_id != building_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "route_point_id does not belong to the given building_id"
+            ),
+        )
+
+    if not route_point.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="route_point_id is not an active point",
+        )
+
 
 # ---------------------------------------------------------
 # Public resolve endpoint
@@ -110,11 +187,24 @@ async def resolve_location_code(code: str):
             detail="This code's route point is no longer available"
         )
 
+    map_item = await Map.get(PydanticObjectId(entry.map_id))
+
+    # Same Map-floor-is-authoritative rule as
+    # resolve_location_code_group_and_floor() above — reused here rather
+    # than re-fetching, since map_item/route_point are already loaded by
+    # this endpoint's own defensive re-check.
+    resolved_floor = (
+        map_item.floor if map_item and map_item.floor is not None
+        else route_point.floor
+    )
+
     return LocationCodeResolveResponse(
         code=entry.code,
         building_id=entry.building_id,
         map_id=entry.map_id,
         route_point_id=entry.route_point_id,
+        map_group_id=map_item.map_group_id if map_item else None,
+        floor=resolved_floor,
         label=entry.label,
     )
 
@@ -159,7 +249,82 @@ async def create_location_code(
     )
 
     await new_entry.insert()
-    return location_code_to_response(new_entry)
+    return await location_code_to_response(new_entry)
+
+
+def _generate_code_candidate() -> str:
+    # 8 unambiguous uppercase alphanumeric characters (no 0/O/1/I) — short
+    # enough to type from a printed label, long enough that collisions are
+    # rare even before the uniqueness retry loop below.
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(8))
+
+
+@router.post(
+    "/generate",
+    response_model=LocationCodeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_location_code(
+    data: LocationCodeGenerate,
+    user: User = Depends(get_current_user),
+):
+    """
+    Auto-generates a unique code for an existing RoutePoint (typically an
+    entrance) instead of requiring the admin to invent one. building_id
+    and map_id are always derived from the RoutePoint itself, so the
+    result can never reference a mismatched building/map/point trio.
+    """
+
+    if user.role == "regular_user":
+        raise HTTPException(**FORBIDDEN_ROLE)
+
+    route_point = await RoutePoint.get(
+        PydanticObjectId(data.route_point_id)
+    )
+
+    if not route_point:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Route point not found",
+        )
+
+    if not route_point.building_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "This route point has no building_id yet — its map must "
+                "be associated with a building before a location code can "
+                "be generated for it."
+            ),
+        )
+
+    if not user_can_manage_building(user, route_point.building_id):
+        raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
+    for _attempt in range(10):
+        candidate = _generate_code_candidate()
+        existing = await LocationCode.find_one(
+            LocationCode.code == candidate
+        )
+
+        if not existing:
+            new_entry = LocationCode(
+                code=candidate,
+                building_id=route_point.building_id,
+                map_id=route_point.map_id,
+                route_point_id=str(route_point.id),
+                label=data.label or route_point.name,
+                is_active=data.is_active,
+            )
+
+            await new_entry.insert()
+            return await location_code_to_response(new_entry)
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Could not generate a unique location code, try again",
+    )
 
 
 @router.get(
@@ -183,7 +348,7 @@ async def get_all_location_codes(
         query["is_active"] = is_active
 
     entries = await LocationCode.find(query).to_list()
-    return [location_code_to_response(entry) for entry in entries]
+    return [await location_code_to_response(entry) for entry in entries]
 
 
 @router.get(
@@ -196,7 +361,7 @@ async def get_location_code_by_id(code_id: PydanticObjectId):
     if not entry:
         raise HTTPException(**LOCATION_CODE_NOT_FOUND)
 
-    return location_code_to_response(entry)
+    return await location_code_to_response(entry)
 
 
 @router.put(
@@ -256,7 +421,7 @@ async def update_location_code(
     entry.updated_at = datetime.utcnow()
 
     await entry.save()
-    return location_code_to_response(entry)
+    return await location_code_to_response(entry)
 
 
 @router.delete(

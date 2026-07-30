@@ -21,14 +21,93 @@
 .s18-header {
   flex-shrink: 0;
   background: linear-gradient(158deg, #778aaa 0%, #1a3a6b 50%, #2a5298 100%);
-  padding: 50px 20px 18px;
+  padding: 44px 20px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   position: relative;
   z-index: 2;
   width: 100%;
   align-items: center;
+}
+
+.s18-header-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* ── Language switcher ─────────────────────────────────────────────────── */
+
+.s18-lang-pill {
+  display: flex;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 100px;
+  padding: 3px;
+  gap: 2px;
+  backdrop-filter: blur(12px);
+  flex-shrink: 0;
+}
+
+.s18-lang-btn {
+  border: none;
+  background: transparent;
+  border-radius: 100px;
+  padding: 5px 11px;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  font-family: var(--font-body);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.s18-lang-btn.active {
+  background: rgba(255, 255, 255, 0.95);
+  color: #1a3a6b;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* ── Brand row ─────────────────────────────────────────────────────────── */
+
+.s18-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.s18-logo-card {
+  width: 26px;
+  height: 26px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.s18-wordmark {
+  font-family: var(--font-brand);
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: -0.02em;
+  direction: ltr;
+  unicode-bidi: embed;
+}
+
+.s18-wordmark span {
+  color: rgba(145, 193, 255, 0.90);
+  font-weight: 600;
 }
 
 .s18-back-btn {
@@ -100,17 +179,6 @@
   text-overflow: ellipsis;
 }
 
-/* ── Map section ────────────────────────────────────────────────────────── */
-
-.s18-map-wrap {
-  position: relative;
-  flex-shrink: 0;
-  padding: 16px 16px 0;
-  background: transparent;
-  display: flex;
-  justify-content: center;
-}
-
 /* Route ready badge */
 
 .s18-route-badge {
@@ -151,82 +219,6 @@
   }
 }
 
-/* ── Map container ──────────────────────────────────────────────────────── */
-
-.s18-map-container {
-  position: relative;
-  width: 100%;
-  height: 48vw;
-  max-height: 46vh;
-  min-height: 165px;
-  border-radius: 22px;
-  overflow: hidden;
-  background: var(--bg-primary, #eef3f9);
-  box-shadow:
-    0 10px 40px rgba(26, 58, 107, 0.22),
-    0 3px 14px rgba(42, 82, 152, 0.14);
-  transition:
-    height 0.5s cubic-bezier(0.4, 0, 0.2, 1),
-    max-height 0.5s cubic-bezier(0.4, 0, 0.2, 1),
-    min-height 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.s18-map-container--nav {
-  height: 28vw;
-  max-height: 26vh;
-  min-height: 110px;
-}
-
-.s18-map-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
-  display: block;
-  user-select: none;
-  pointer-events: none;
-}
-
-/* ── Empty / loading state when there is no real map or no real route ──── */
-
-.s18-map-empty {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: #7a9abf;
-  text-align: center;
-  padding: 16px;
-  font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-/* ── SVG route overlay ──────────────────────────────────────────────────── */
-
-.s18-route-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-.s18-route-path {
-  stroke-dasharray: 600;
-  stroke-dashoffset: 600;
-  animation: s18DrawPath 1.8s cubic-bezier(0.4, 0, 0.2, 1) 0.3s forwards;
-}
-
-@keyframes s18DrawPath {
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-
 .s18-pulse-ring {
   animation: s18Pulse 2s ease-in-out infinite;
   transform-origin: 192px 213px;
@@ -242,6 +234,375 @@
     transform: scale(1.5);
     opacity: 0.2;
   }
+}
+
+/* ── Floor stepper (PHASE 13) ───────────────────────────────────────────── */
+
+.s18-floor-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px 0;
+  overflow-x: auto;
+  flex-shrink: 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.s18-floor-stepper::-webkit-scrollbar {
+  display: none;
+}
+
+.s18-floor-tab {
+  flex-shrink: 0;
+  border: 1px solid rgba(74, 122, 200, 0.22);
+  background: rgba(255, 255, 255, 0.85);
+  color: #5a7aaa;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 14px;
+  border-radius: 100px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+
+.s18-floor-tab:hover {
+  background: rgba(74, 122, 200, 0.08);
+}
+
+.s18-floor-tab--active {
+  background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 100%);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(26, 58, 107, 0.22);
+}
+
+/* ── Route mode / avoid-preferences card (PHASE 14) ─────────────────────── */
+
+.s18-mode-card {
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 18px;
+  padding: 12px 14px;
+  margin-top: 10px;
+  border: 1px solid rgba(208, 228, 247, 0.60);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.s18-mode-row {
+  display: flex;
+  gap: 6px;
+}
+
+.s18-mode-btn {
+  flex: 1;
+  border: 1px solid rgba(74, 122, 200, 0.22);
+  background: transparent;
+  color: #5a7aaa;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 6px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.s18-mode-btn--active {
+  background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 100%);
+  border-color: transparent;
+  color: #ffffff;
+}
+
+/* Section 7 — single-choice vertical-transport preference segmented
+   control (any / elevator / stairs), replacing the old
+   .s18-avoid-row/.s18-avoid-option checkbox row. Styled to match the
+   existing .s18-mode-row/.s18-mode-btn segmented control above it. */
+.s18-vertpref-row {
+  display: flex;
+  gap: 6px;
+}
+
+.s18-vertpref-btn {
+  flex: 1;
+  border: 1px solid rgba(74, 122, 200, 0.22);
+  background: transparent;
+  color: #5a7aaa;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 8px 6px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.s18-vertpref-btn--active {
+  background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 100%);
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.s18-type-chip--warn {
+  background: rgba(230, 162, 60, 0.16);
+  color: #a86a1c;
+}
+
+/* ── Transition card (PHASE 10/13) ──────────────────────────────────────── */
+
+.s18-transition-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(74, 122, 200, 0.08);
+  border: 1px solid rgba(74, 122, 200, 0.22);
+  border-radius: 18px;
+  padding: 14px 16px;
+  margin-top: 10px;
+  flex-shrink: 0;
+}
+
+.s18-transition-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(74, 122, 200, 0.16);
+  color: #2a5298;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.s18-transition-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.s18-transition-name {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  color: #4a7ac8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0;
+}
+
+.s18-transition-text {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  color: #1a3a6b;
+  margin: 0;
+}
+
+.s18-transition-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: #5a7aaa;
+}
+
+.s18-transition-btn {
+  align-self: flex-start;
+  border: none;
+  background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 100%);
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 16px;
+  border-radius: 100px;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.s18-transition-btn:active {
+  transform: scale(0.96);
+}
+
+.s18-status-row {
+  display: flex;
+  justify-content: center;
+  padding: 10px 20px 0;
+  flex-shrink: 0;
+}
+
+/* ── Primary "current instruction" card (Part 8/9/10) ────────────────────
+   The map-free default navigating experience: one big arrow, one current
+   instruction, progress, remaining time/distance, Previous/Reached-Next. */
+.s18-current-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: #ffffff;
+  border: 1px solid rgba(74, 122, 200, 0.18);
+  border-radius: 22px;
+  padding: 20px 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 6px 24px rgba(23, 59, 112, 0.10);
+  flex-shrink: 0;
+}
+
+.s18-current-arrow {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(74, 122, 200, 0.10);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.s18-current-body {
+  text-align: center;
+}
+
+.s18-current-step-of {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #7891ac;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 0 0 4px;
+}
+
+.s18-current-text {
+  font-family: var(--font-body);
+  font-size: 17px;
+  font-weight: 800;
+  color: #1a3a6b;
+  margin: 0;
+  line-height: 1.35;
+}
+
+.s18-current-distance {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #5f7fa6;
+  margin: 4px 0 0;
+}
+
+.s18-current-progress {
+  width: 100%;
+}
+
+.s18-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 100px;
+  background: rgba(74, 122, 200, 0.14);
+  overflow: hidden;
+}
+
+.s18-progress-fill {
+  height: 100%;
+  border-radius: 100px;
+  background: linear-gradient(90deg, #4a7ac8, #2a5298);
+  transition: width 0.3s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .s18-progress-fill {
+    transition: none;
+  }
+}
+
+.s18-current-remaining {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #315b8f;
+  margin-top: 6px;
+}
+
+.s18-steps-remaining {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  color: #4a7ac8;
+  text-align: center;
+  margin: 8px 0 0;
+}
+
+.s18-progress-hint {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  color: #96abc7;
+  text-align: center;
+  margin: 6px 0 0;
+}
+
+.s18-current-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.s18-repeat-btn {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid rgba(74, 122, 200, 0.22);
+  background: rgba(74, 122, 200, 0.08);
+  color: #2a5298;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.s18-repeat-btn:active {
+  transform: scale(0.92);
+}
+
+.s18-current-btn {
+  flex: 1;
+  border: none;
+  border-radius: 100px;
+  padding: 11px 14px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.s18-current-btn:active {
+  transform: scale(0.96);
+}
+
+.s18-current-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.s18-current-btn--secondary {
+  background: rgba(74, 122, 200, 0.10);
+  color: #2a5298;
+}
+
+.s18-current-btn--primary {
+  background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 100%);
+  color: #ffffff;
 }
 
 /* ── Bottom section ─────────────────────────────────────────────────────── */
@@ -327,6 +688,42 @@
   background: rgba(138, 170, 203, 0.13);
   color: #7a9ec8;
   text-transform: capitalize;
+}
+
+/* ── Journey summary grid (Part 2.B) ───────────────────────────────────── */
+
+.s18-journey-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 14px;
+  padding: 10px 0 2px;
+  border-top: 1px solid rgba(74, 122, 200, 0.10);
+}
+
+.s18-journey-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.s18-journey-label {
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 700;
+  color: #96abc7;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.s18-journey-value {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  color: #2a5298;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Stats row ──────────────────────────────────────────────────────────── */
@@ -521,6 +918,17 @@
   color: #3a8a5a;
 }
 
+.s18-arrival-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  color: #1a6b3a;
+  margin-top: 4px;
+}
+
 .s18-info-card--arrived {
   opacity: 0.72;
 }
@@ -596,24 +1004,7 @@
 @media (min-width: 760px) and (max-width: 1099px) {
   .s18-header {
     width: 100%;
-    padding: 44px 28px 24px;
-  }
-
-  .s18-map-wrap {
-    padding: 24px 28px 0;
-  }
-
-  .s18-map-container {
-    height: 44vh;
-    min-height: 330px;
-    max-height: 460px;
-    border-radius: 26px;
-  }
-
-  .s18-map-container--nav {
-    height: 44vh;
-    min-height: 330px;
-    max-height: 460px;
+    padding: 40px 28px 20px;
   }
 
   .s18-bottom {
@@ -624,7 +1015,13 @@
   }
 }
 
-/* ── Desktop / Web layout: wider map, details stay on the side ───────────── */
+/* ── Desktop / Web layout — the guided-navigation card stack (including
+   the route map, Section 4.E) is centered at a comfortable reading width.
+   A prior revision removed the map and widened this column to avoid a
+   blank gap; this task brings the map back as another card in the same
+   centered stack rather than reintroducing a separate side-by-side map
+   column (see NavigationRouteMap.jsx / Section 15.13 "remaining
+   limitations" in the final report for this task). ─────────────────── */
 
 @media (min-width: 1100px) {
   .s18-shell {
@@ -643,7 +1040,7 @@
 
   .s18-header {
     width: 100%;
-    padding: 42px 40px 34px;
+    padding: 36px 40px 22px;
     border-radius: 0;
     display: flex;
     align-items: center;
@@ -651,14 +1048,16 @@
     background: linear-gradient(158deg, #1a3a6b 0%, #263f77 52%, #3b65b5 100%);
   }
 
-  .s18-back-btn {
-    align-self: flex-start;
+  .s18-header-top,
+  .s18-brand-row,
+  .s18-header-info,
+  .s18-nav-destination {
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
   }
 
   .s18-header-info {
-    width: 100%;
-    max-width: 1320px;
-    margin: 0 auto;
     justify-content: center;
   }
 
@@ -672,53 +1071,19 @@
     font-size: 14px;
   }
 
-  .s18-map-wrap {
-    width: 100%;
-    max-width: 1460px;
-    margin: 0 auto;
-    padding: 42px 32px 48px;
-    background: transparent;
-    display: grid;
-    grid-template-columns: minmax(720px, 1.8fr) minmax(360px, 430px);
-    gap: 34px;
-    align-items: start;
-  }
-
-  .s18-map-container {
-    width: 100%;
-    height: 64vh;
-    min-height: 500px;
-    max-height: 700px;
-    border-radius: 28px;
-    box-shadow:
-      0 24px 70px rgba(26, 58, 107, 0.18),
-      0 8px 24px rgba(42, 82, 152, 0.12);
-  }
-
-  .s18-map-container--nav {
-    height: 64vh;
-    min-height: 500px;
-    max-height: 700px;
-  }
-
   .s18-route-badge {
-    top: 58px;
-    inset-inline-end: 58px;
+    position: static;
+  }
+
+  .s18-status-row {
+    padding: 16px 20px 0;
   }
 
   .s18-bottom {
     width: 100%;
-    min-height: 500px;
-    max-height: 700px;
-    height: 64vh;
-    padding: 26px;
-    overflow-y: auto;
-    background: rgba(255, 255, 255, 0.96);
-    border: 1px solid rgba(208, 228, 247, 0.72);
-    border-radius: 30px;
-    box-shadow:
-      0 24px 70px rgba(42, 82, 152, 0.12),
-      inset 0 1px 0 rgba(255, 255, 255, 0.90);
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 26px 0 48px;
   }
 
   .s18-info-card {
@@ -747,30 +1112,131 @@
 /* ── Bigger desktop screens ─────────────────────────────────────────────── */
 
 @media (min-width: 1450px) {
-  .s18-map-wrap {
-    max-width: 1560px;
-    grid-template-columns: minmax(850px, 1.9fr) minmax(380px, 440px);
-    gap: 40px;
+  .s18-bottom,
+  .s18-header-top,
+  .s18-brand-row,
+  .s18-header-info,
+  .s18-nav-destination {
+    max-width: 800px;
   }
+}
 
-  .s18-map-container,
-  .s18-map-container--nav,
-  .s18-bottom {
-    height: 66vh;
-    min-height: 540px;
-    max-height: 740px;
-  }
+/* ── Section A: Destination header (professional navigation UX redesign) ── */
+
+.s18-nav-destination {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.s18-nav-destination-to {
+  font-family: var(--font-brand);
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  text-align: center;
+  margin: 0;
+}
+
+.s18-nav-destination-label {
+  color: rgba(255, 255, 255, 0.65);
+  font-weight: 600;
+}
+
+.s18-nav-destination-floor {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(210, 226, 250, 0.85);
+  margin: 0;
+}
+
+/* Reuses .s18-route-badge's existing look, but flows naturally in this
+   header block instead of the absolute positioning that class otherwise
+   uses (Section A groups the badge with the destination name/floor). */
+.s18-nav-destination .s18-route-badge {
+  position: static;
+  top: auto;
+  inset-inline-end: auto;
+  margin-top: 4px;
+}
+
+/* ── Header "stop navigation" icon button (Section A) ───────────────────── */
+
+.s18-stop-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.18s ease, transform 0.12s ease;
+}
+
+.s18-stop-nav-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.s18-stop-nav-btn:active {
+  transform: scale(0.94);
+}
+
+/* ── Section 4.F: floor-switch confirmation banner ──────────────────────── */
+
+.s18-floor-confirm {
+  margin: 8px 20px 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(39, 174, 96, 0.12);
+  border: 1px solid rgba(39, 174, 96, 0.35);
+  color: #1a3a6b;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* ── Section C: Next-instruction preview ────────────────────────────────── */
+
+.s18-next-preview {
+  margin: 8px 0 0;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: rgba(26, 58, 107, 0.75);
+}
+
+.s18-next-preview-label {
+  font-weight: 700;
+  color: #4a7ac8;
+}
+
+.s18-next-preview-text {
+  font-weight: 500;
+}
+
+/* ── Section G: Arrival state's destination floor line ──────────────────── */
+
+.s18-arrival-floor {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(26, 58, 107, 0.7);
+  margin: 2px 0 0;
 }
 
 /* ── Mobile polish ──────────────────────────────────────────────────────── */
 
 @media (max-width: 520px) {
   .s18-header {
-    padding: 48px 20px 18px;
-  }
-
-  .s18-map-wrap {
-    padding: 16px 16px 0;
+    padding: 42px 20px 14px;
   }
 
   .s18-bottom {

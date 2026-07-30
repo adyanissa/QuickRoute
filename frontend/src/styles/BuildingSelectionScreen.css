@@ -179,37 +179,7 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-/* ── Location badge ────────────────────────────────────────────────────── */
-
-.s16-location-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  background: rgba(255, 255, 255, 0.13);
-  border: 1px solid rgba(255, 255, 255, 0.20);
-  border-radius: 100px;
-  padding: 5px 11px 5px 9px;
-  backdrop-filter: blur(8px);
-  margin-bottom: 18px;
-  position: relative;
-  z-index: 2;
-}
-
-.s16-location-badge svg {
-  color: #ff8c8c;
-  flex-shrink: 0;
-}
-
-.s16-location-badge span {
-  font-family: var(--font-body);
-  font-size: 11px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.88);
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
-
-/* ── Title ─────────────────────────────────────────────────────────────── */
+/* ── Hero heading (Part 4.B) ───────────────────────────────────────────── */
 
 .s16-title {
   font-family: var(--font-brand);
@@ -222,6 +192,19 @@
   position: relative;
   z-index: 2;
   text-align: center;
+  margin-top: 16px;
+}
+
+.s16-hero-subtitle {
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: rgba(210, 227, 250, 0.82);
+  position: relative;
+  z-index: 2;
+  text-align: center;
+  margin-top: 8px;
+  max-width: 320px;
 }
 
 /* ── Sticky search area ────────────────────────────────────────────────── */
@@ -259,37 +242,8 @@
   overflow: visible;
 }
 
-/* ── Section row ───────────────────────────────────────────────────────── */
-
-.s16-section-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-  padding: 0 2px;
-}
-
-.s16-section-label {
-  font-family: var(--font-brand);
-  font-size: 13px;
-  font-weight: 700;
-  color: #5a7aaa;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.s16-section-count {
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 600;
-  color: #8aaacb;
-  background: rgba(74, 122, 200, 0.09);
-  padding: 3px 10px;
-  border-radius: 100px;
-}
-
-/* ── Building list ─────────────────────────────────────────────────────── */
+/* ── Location grid — Part 4.D: professional responsive grid, no
+   "BUILDINGS" heading above it ─────────────────────────────────────── */
 
 .s16-list {
   width: 100%;
@@ -304,16 +258,64 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 44px 24px;
 }
 
-.s16-empty p {
+.s16-empty-title {
+  font-family: var(--font-brand);
+  font-size: 15px;
+  font-weight: 700;
+  color: #5a7aaa;
+  text-align: center;
+}
+
+.s16-empty-desc {
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: #b0ccdf;
   text-align: center;
+  max-width: 300px;
+}
+
+/* ── Skeleton loading cards (Part 4.F) ────────────────────────────────── */
+
+.s16-skeleton-list {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.s16-skeleton-card {
+  width: 100%;
+  height: 78px;
+  border-radius: 18px;
+  background: linear-gradient(
+    100deg,
+    rgba(208, 228, 247, 0.35) 30%,
+    rgba(208, 228, 247, 0.65) 50%,
+    rgba(208, 228, 247, 0.35) 70%
+  );
+  background-size: 200% 100%;
+  animation: s16Shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes s16Shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .s16-skeleton-card {
+    animation: none;
+  }
 }
 
 /* ── Desktop / laptop layout ───────────────────────────────────────────── */
@@ -370,12 +372,8 @@
     padding: 40px 28px 60px;
   }
 
-  .s16-section-row {
-    max-width: 760px;
-    margin-inline: auto;
-  }
-
-  .s16-list {
+  .s16-list,
+  .s16-skeleton-list {
     max-width: 760px;
     margin-inline: auto;
     gap: 18px;
@@ -395,10 +393,6 @@
 
   .s16-search-wrap > * {
     max-width: 820px;
-  }
-
-  .s16-section-row {
-    max-width: 100%;
   }
 
   .s16-list {

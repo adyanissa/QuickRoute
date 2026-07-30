@@ -30,6 +30,7 @@ const UI = {
     checking:   'Checking code...',
     required:   'Please enter a barcode number',
     invalid:    'Invalid or inactive barcode. Please try again.',
+    noBuilding: 'This location code is not linked to a valid building.',
   },
   ar: {
     welcome:    'أهلاً وسهلاً',
@@ -42,6 +43,7 @@ const UI = {
     checking:   'جاري التحقق من الرمز...',
     required:   'الرجاء إدخال رقم الباركود',
     invalid:    'رمز الباركود غير صحيح أو غير مفعّل. حاول مرة أخرى.',
+    noBuilding: 'رمز الموقع هذا غير مرتبط بمبنى صالح.',
   },
   he: {
     welcome:    'ברוכים הבאים',
@@ -54,6 +56,7 @@ const UI = {
     checking:   'בודק קוד...',
     required:   'יש להזין מספר ברקוד',
     invalid:    'ברקוד לא תקין או לא פעיל. נסה שוב.',
+    noBuilding: 'קוד המיקום הזה אינו מקושר לבניין תקף.',
   },
 };
 
@@ -120,23 +123,44 @@ const BarcodeEntryScreen = () => {
       // code is active, so a successful response is safe to trust.
       const resolved = await resolveLocationCode(code);
 
+      // A Location Code with no building relationship is a distinct,
+      // honest error state — never silently fall back to a
+      // frontend-guessed building (QuickRoute UX Final Cleanup, Part 3
+      // rule 7).
+      if (!resolved?.building_id) {
+        setError(t.noBuilding);
+        return;
+      }
+
       const buildingRaw = await getBuildingById(resolved.building_id);
       const building = buildingToViewModel(buildingRaw);
 
-      // Persist the resolved starting location so IndoorNavigationScreen
-      // can use it instead of always defaulting to the map's first
-      // entrance point.
+      // Persist the full resolved starting location — including the
+      // map group, floor and human-readable label the backend already
+      // resolves fresh on every call — so IndoorNavigationScreen and the
+      // Destination Selection header can show real "starting location"
+      // and "current floor" values instead of always defaulting to a
+      // generic entrance point (Part 3 / Part 2.B).
       localStorage.setItem(
         START_LOCATION_KEY,
         JSON.stringify({
           routePointId: resolved.route_point_id,
           mapId: resolved.map_id,
+          mapGroupId: resolved.map_group_id ?? null,
+          floor: resolved.floor ?? null,
           buildingId: resolved.building_id,
           code: resolved.code,
+          label: resolved.label ?? null,
         }),
       );
 
-      navigate('/screen/17', { state: { building } });
+      navigate('/screen/17', {
+        state: {
+          building,
+          startLabel: resolved.label ?? null,
+          startFloor: resolved.floor ?? null,
+        },
+      });
     } catch (err) {
       console.error('Failed to resolve location code:', err);
       setError(t.invalid);

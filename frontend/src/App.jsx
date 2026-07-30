@@ -4,6 +4,7 @@ import { LangProvider } from './context/LangContext';
 import { LocationProvider } from './context/LocationContext';
 import { AuthProvider } from './context/AuthContext';
 import RequireRole from './components/RequireRole';
+import RequireGlobalAdmin from './components/RequireGlobalAdmin';
 
 // Import renamed screens
 import BarcodeEntryScreen from './screens/BarcodeEntryScreen';
@@ -17,8 +18,11 @@ import DestinationSelectionScreen from './screens/DestinationSelectionScreen';
 import IndoorNavigationScreen from './screens/IndoorNavigationScreen';
 import AdminMapScreen from './screens/AdminMapScreen';
 import AdminLocationsScreen from './screens/AdminLocationsScreen';
+import AdminLocationCodesScreen from './screens/AdminLocationCodesScreen';
+import AdminInvitationCodesScreen from './screens/AdminInvitationCodesScreen';
 import AdminRoomsScreen from './screens/AdminRoomsScreen';
 import AdminRoutesScreen from './screens/AdminRoutesScreen';
+import AdminMapAnalysisScreen from './screens/AdminMapAnalysisScreen';
 import { AdminProvider } from './context/AdminContext';
 
 import './styles/global.css';
@@ -68,6 +72,22 @@ function App() {
           }
         />
         <Route
+          path="/admin/location-codes"
+          element={
+            <RequireRole>
+              <AdminLocationCodesScreen />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/admin/invitation-codes"
+          element={
+            <RequireGlobalAdmin>
+              <AdminInvitationCodesScreen />
+            </RequireGlobalAdmin>
+          }
+        />
+        <Route
           path="/admin/rooms"
           element={
             <RequireRole>
@@ -80,6 +100,14 @@ function App() {
           element={
             <RequireRole>
               <AdminRoutesScreen />
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/admin/map-analysis"
+          element={
+            <RequireRole>
+              <AdminMapAnalysisScreen />
             </RequireRole>
           }
         />

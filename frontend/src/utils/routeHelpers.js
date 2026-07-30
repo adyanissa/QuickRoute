@@ -1,15 +1,18 @@
 /**
  * routeHelpers.js
  *
- * Pure formatting + step-building helpers for indoor navigation.
+ * Pure formatting helpers for indoor navigation display text.
  *
- * This file no longer contains any hardcoded campus coordinates or
- * canned routes — those came from `data/routeData.js`, which has been
- * removed from the navigation flow. Real paths now come from the
- * backend's `POST /api/navigation/route` endpoint (see `api/navigationApi.js`),
- * which returns a real `path_details` list of RoutePoint records and a
- * real `total_distance`. The helpers below turn that real response into
- * display text; they invent no data of their own.
+ * This file no longer contains any hardcoded campus coordinates, canned
+ * routes, or step-building logic — the old `buildStepsFromPath` /
+ * `estimateTimeFromDistance` helpers and their `STEP_LABELS` /
+ * `STEP_ICON_BY_POINT_TYPE` tables were removed (QuickRoute User
+ * Experience Final Cleanup, Part 6) because IndoorNavigationScreen now
+ * builds its step list from the real multi-floor route response via
+ * `utils/multiFloorRouteHelpers.js`'s `instructionToStep`, which passes
+ * the backend's own instruction text straight through. Only the two
+ * generic formatters below remain, and both are still used by
+ * IndoorNavigationScreen.jsx to format real backend distance/time values.
  */
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
@@ -25,92 +28,17 @@ export function formatTime(minutes) {
   return `~${minutes} min`;
 }
 
-// Walking-time estimate from a real distance (no data invented — just a
-// generic average walking speed applied to the backend's own distance).
-export function estimateTimeFromDistance(meters) {
-  if (!meters && meters !== 0) return 0;
-  return Math.max(1, Math.round(meters / 80));
-}
+// Rough, DISPLAY-ONLY walking-step estimate from the real backend
+// distance-in-meters value — never stored in MongoDB, never used as a
+// Dijkstra/routing weight (meters stays the one canonical distance unit
+// everywhere else in the app). 0.75 m is a simple average adult stride
+// length; this is intentionally a coarse estimate, not a measurement, and
+// callers must always label it as such (see IndoorNavigationScreen.jsx's
+// "estimatedSteps" translation, which appends an explicit "(est.)"-style
+// suffix next to this value).
+const AVERAGE_STRIDE_METERS = 0.75;
 
-// ── Turn-by-turn step generation from a real path ──────────────────────────
-
-// Maps a real RoutePoint.point_type to a RouteSteps icon type.
-const STEP_ICON_BY_POINT_TYPE = {
-  entrance: 'enter',
-  hallway: 'walk',
-  junction: 'turn',
-  room: 'arrive',
-  store: 'arrive',
-  stairs: 'turn',
-  elevator: 'elevator',
-};
-
-const STEP_LABELS = {
-  en: {
-    start: (name) => `Start at ${name}`,
-    stairs: (name) => `Take the stairs to ${name}`,
-    elevator: (name) => `Take the elevator to ${name}`,
-    enter: (name) => `Enter ${name}`,
-    head: (name) => `Continue to ${name}`,
-    arrive: (name) => `Arrive at ${name}`,
-  },
-  ar: {
-    start: (name) => `ابدأ من ${name}`,
-    stairs: (name) => `اصعد الدرج إلى ${name}`,
-    elevator: (name) => `استخدم المصعد إلى ${name}`,
-    enter: (name) => `ادخل إلى ${name}`,
-    head: (name) => `تابع إلى ${name}`,
-    arrive: (name) => `وصلت إلى ${name}`,
-  },
-  he: {
-    start: (name) => `התחל ב-${name}`,
-    stairs: (name) => `עלה במדרגות אל ${name}`,
-    elevator: (name) => `קח את המעלית אל ${name}`,
-    enter: (name) => `היכנס אל ${name}`,
-    head: (name) => `המשך אל ${name}`,
-    arrive: (name) => `הגעת אל ${name}`,
-  },
-};
-
-/**
- * Builds a { type, text }[] step list directly from the real
- * `path_details` array returned by POST /api/navigation/route.
- * Returns [] when there is no real path — callers must not fall back
- * to invented steps.
- */
-export function buildStepsFromPath(pathDetails, lang = 'en') {
-  if (!Array.isArray(pathDetails) || pathDetails.length === 0) return [];
-
-  const labels = STEP_LABELS[lang] || STEP_LABELS.en;
-
-  return pathDetails.map((point, index) => {
-    const isFirst = index === 0;
-    const isLast = index === pathDetails.length - 1;
-    const name = point.name || '';
-
-    if (isFirst) {
-      return { type: 'exit', text: labels.start(name) };
-    }
-
-    if (isLast) {
-      return { type: 'arrive', text: labels.arrive(name) };
-    }
-
-    if (point.point_type === 'stairs') {
-      return { type: 'turn', text: labels.stairs(name) };
-    }
-
-    if (point.point_type === 'elevator') {
-      return { type: 'elevator', text: labels.elevator(name) };
-    }
-
-    if (point.point_type === 'entrance') {
-      return { type: 'enter', text: labels.enter(name) };
-    }
-
-    return {
-      type: STEP_ICON_BY_POINT_TYPE[point.point_type] || 'walk',
-      text: labels.head(name),
-    };
-  });
+export function estimateSteps(meters) {
+  if (meters == null || Number.isNaN(meters) || meters < 0) return null;
+  return Math.round(meters / AVERAGE_STRIDE_METERS);
 }

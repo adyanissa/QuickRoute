@@ -9,10 +9,17 @@ from models.user_model import User
 from models.invitation_code_model import InvitationCode
 from models.building_model import Building
 from models.map_model import Map
+from models.map_group_model import MapGroup
 from models.room_model import Room
 from models.route_point_model import RoutePoint
 from models.route_edge_model import RouteEdge
 from models.location_code_model import LocationCode
+from models.vertical_connector_model import VerticalConnector
+from models.semantic_map_analysis_model import SemanticMapAnalysis
+from models.semantic_map_publication_model import (
+    SemanticMapPublication,
+    SemanticEntity,
+)
 
 
 # المسار الثابت لملف backend/.env
@@ -49,10 +56,15 @@ async def init_db():
                 InvitationCode,
                 Building,
                 Map,
+                MapGroup,
                 Room,
                 RoutePoint,
                 RouteEdge,
                 LocationCode,
+                VerticalConnector,
+                SemanticMapAnalysis,
+                SemanticMapPublication,
+                SemanticEntity,
             ],
         )
 

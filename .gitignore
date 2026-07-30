@@ -42,3 +42,8 @@ backend/uploads/
 *.njsproj
 *.sln
 *.sw?
+# Temporary local verification files
+frontend/_tmp*.mjs
+frontend/_*synchk*.mjs
+frontend/eslint.config.temp.js
+frontend/deleteConnectionTestOutput.txt

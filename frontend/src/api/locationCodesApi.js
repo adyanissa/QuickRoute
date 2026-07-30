@@ -35,6 +35,16 @@ export function createLocationCode(data) {
   });
 }
 
+// data: { route_point_id, label?, is_active? } — building_id/map_id/code
+// are all derived server-side from the route point, and a unique code is
+// generated automatically.
+export function generateLocationCode(data) {
+  return apiRequest("/api/location-codes/generate", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
 export function updateLocationCode(codeId, data) {
   return apiRequest(`/api/location-codes/${codeId}`, {
     method: "PUT",
