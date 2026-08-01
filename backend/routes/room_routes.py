@@ -63,57 +63,48 @@ async def resolve_room_map_group_id(map_id: Optional[str]) -> Optional[str]:
 
 async def compute_room_navigability(room: Room) -> Tuple[bool, Optional[str]]:
     """
-    The single, LIVE source of truth for "can a normal user actually
-    navigate to this destination right now" — deliberately never trusts a
-    stored/one-shot boolean (route_point_connected below is only ever
-    populated on the specific create/update response that just performed
-    the map-linking step; every plain GET previously left it at its
-    default False, which is the exact bug this function fixes: Admin
-    correctly reports "CONNECTED TO WALKABLE GRAPH" right after creating
-    the RouteEdge, but the end-user Rooms list — a separate GET — kept
-    reporting not-connected forever after).
+    The single, live source of truth for whether a normal user can
+    navigate to this destination right now.
 
-    Recomputed from the real current RoutePoint/RouteEdge state on every
-    single response (list/get/create/update alike), so a graph edit made
-    at any later time (a new edge connecting the point, or the point/edge
-    being deactivated) is reflected on the very next GET with no special
-    cache-busting required on the caller's part.
+    The reason returned should preserve the original cause:
+      1. missing_route_point
+      2. route_point_not_found
+      3. inactive_route_point
+      4. inactive_destination
+      5. disconnected_from_graph
 
-    Checks, in order, exactly as specified:
-      1. missing_route_point       — room.route_point_id is not set at all.
-      2. route_point_not_found     — the id is set but no such RoutePoint exists.
-      3. inactive_route_point      — the RoutePoint exists but is soft-deactivated.
-      4. disconnected_from_graph   — the RoutePoint exists/active but has no
-                                      active RouteEdge referencing it at all.
-      5. inactive_destination      — the Room itself is deactivated (checked
-                                      first, since a deactivated Room is never
-                                      navigable regardless of its point/graph).
-    Returns (True, None) only when every one of those checks passes.
+    A RoutePoint deactivation may also synchronize Room.is_active=False.
+    When the linked RoutePoint still exists and is inactive, the more
+    specific reason is therefore inactive_route_point. If the point was
+    deleted and the Room was soft-deactivated, the reason remains
+    inactive_destination.
     """
+
+    if not room.route_point_id:
+        if not room.is_active:
+            return False, "inactive_destination"
+
+        return False, "missing_route_point"
+
+    point = None
+
+    try:
+        point = await RoutePoint.get(
+            PydanticObjectId(room.route_point_id)
+        )
+    except Exception:
+        point = None
+
+    if point is not None and not point.is_active:
+        return False, "inactive_route_point"
 
     if not room.is_active:
         return False, "inactive_destination"
 
-    if not room.route_point_id:
-        return False, "missing_route_point"
-
-    point = None
-    try:
-        point = await RoutePoint.get(PydanticObjectId(room.route_point_id))
-    except Exception:
-        point = None
-
-    if not point:
+    if point is None:
         return False, "route_point_not_found"
 
-    if not point.is_active:
-        return False, "inactive_route_point"
-
-    # Any active edge referencing this point — from either end — counts.
-    # Not filtered by map_id: a Room's destination point lives on exactly
-    # one map, so every edge that references it already belongs to that
-    # point's own graph regardless of which side of a (rare) cross-floor
-    # transition edge it happens to be recorded as.
+    # Any active edge referencing this point, from either end, counts.
     connected_edge = await RouteEdge.find_one(
         {
             "is_active": True,

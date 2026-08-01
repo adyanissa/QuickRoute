@@ -62,6 +62,8 @@ from services.semantic_analysis_service import (
 )
 from services.storage_backend import (
     delete_generated_file,
+    ensure_generated_file_local,
+    resolve_generated_file_url,
     sync_generated_file,
 )
 from models.route_edge_model import RouteEdge
@@ -183,6 +185,23 @@ def _build_map_response(
     map_group_code: Optional[str] = None,
     **extra_fields,
 ):
+    source_image_url = resolve_generated_file_url(
+        map_item.source_image_url
+    )
+
+    display_image_url = resolve_generated_file_url(
+        map_item.display_image_url
+    )
+
+    if map_item.image_url == map_item.display_image_url:
+        image_url = display_image_url
+    elif map_item.image_url == map_item.source_image_url:
+        image_url = source_image_url
+    else:
+        image_url = resolve_generated_file_url(
+            map_item.image_url
+        )
+
     return response_cls(
         id=str(map_item.id),
         title=map_item.title,
@@ -195,9 +214,9 @@ def _build_map_response(
         map_group_id=map_item.map_group_id,
         map_group_code=map_group_code,
 
-        image_url=map_item.image_url,
-        source_image_url=map_item.source_image_url,
-        display_image_url=map_item.display_image_url,
+        image_url=image_url,
+        source_image_url=source_image_url,
+        display_image_url=display_image_url,
 
         source_filename=map_item.source_filename,
         source_content_type=map_item.source_content_type,
@@ -263,8 +282,12 @@ def map_to_processing_response(
         processing_progress=map_item.processing_progress,
         processing_error=map_item.processing_error,
         generation_method=map_item.generation_method,
-        source_image_url=map_item.source_image_url,
-        display_image_url=map_item.display_image_url,
+        source_image_url=resolve_generated_file_url(
+            map_item.source_image_url
+        ),
+        display_image_url=resolve_generated_file_url(
+            map_item.display_image_url
+        ),
         processed_at=map_item.processed_at,
     )
 
@@ -860,16 +883,25 @@ async def retry_map_processing(
             ),
         )
 
-    source_path = (
-        SOURCE_DIR / f"{map_id}.png"
+    source_path = SOURCE_DIR / f"{map_id}.png"
+
+    stored_source_url = (
+        map_item.source_image_url
+        or map_item.image_url
     )
 
-    if not source_path.exists():
+    source_available = await asyncio.to_thread(
+        ensure_generated_file_local,
+        stored_source_url,
+        source_path,
+    )
+
+    if not source_available:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "The original processed source image "
-                "does not exist. Upload the map again."
+                "The original processed source image could not "
+                "be restored from storage. Upload the map again."
             ),
         )
 
@@ -952,12 +984,23 @@ async def generate_map_graph(
 
     source_path = SOURCE_DIR / f"{map_id}.png"
 
-    if not source_path.exists():
+    stored_source_url = (
+        map_item.source_image_url
+        or map_item.image_url
+    )
+
+    source_available = await asyncio.to_thread(
+        ensure_generated_file_local,
+        stored_source_url,
+        source_path,
+    )
+
+    if not source_available:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                "The processed source image for this map no longer "
-                "exists on disk."
+                "The processed source image could not be restored "
+                "from storage."
             ),
         )
 
@@ -1050,6 +1093,31 @@ async def ocr_suggest_destination_name(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to manage this building",
+        )
+
+    source_path = SOURCE_DIR / f"{map_id}.png"
+
+    stored_source_url = (
+        map_item.source_image_url
+        or map_item.image_url
+    )
+
+    source_available = await asyncio.to_thread(
+        ensure_generated_file_local,
+        stored_source_url,
+        source_path,
+    )
+
+    if not source_available:
+        return OcrSuggestResponse(
+            available=False,
+            text="",
+            confidence=0.0,
+            low_confidence=True,
+            reason=(
+                "This map's processed source image could not "
+                "be restored from storage."
+            ),
         )
 
     kwargs = {}

@@ -27,6 +27,7 @@ migration (see the model file) — new records use `provider_response_id`.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import io
@@ -52,6 +53,7 @@ from services.semantic_prompt_loader import (
     get_prompt_info,
     get_prompt_text,
 )
+from services.storage_backend import ensure_generated_file_local
 
 try:
     import anthropic
@@ -1100,6 +1102,19 @@ async def resolve_source_files_for_map(map_id: str) -> List[SourceFile]:
         ]
 
     fallback_path = SOURCE_DIR / f"{map_id}.png"
+
+    if not fallback_path.exists() and map_item:
+        stored_source_url = (
+            map_item.source_image_url
+            or map_item.image_url
+        )
+
+        await asyncio.to_thread(
+            ensure_generated_file_local,
+            stored_source_url,
+            fallback_path,
+        )
+
     if fallback_path.exists():
         return [
             SourceFile(

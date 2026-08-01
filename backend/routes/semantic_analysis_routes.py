@@ -11,6 +11,7 @@ AI drafts, prompt text, evidence, or validation errors (Section 19).
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +28,7 @@ from models.user_model import User
 from schemas.localization_schema import get_localized_text
 from services import semantic_analysis_service as svc
 from services.semantic_prompt_loader import get_prompt_info
+from services.storage_backend import ensure_generated_file_local
 from services.semantic_publication_service import (
     publish_analysis,
     validate_reviewed_result_for_publish,
@@ -134,18 +136,33 @@ async def start_map_semantic_analysis(
 
     from services.map_image_service import SOURCE_DIR, get_preserved_original_path
 
-    source_path = get_preserved_original_path(map_id) or (
-        SOURCE_DIR / f"{map_id}.png"
-    )
-    if not source_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "This map has no processed source file yet — wait for "
-                "map processing to complete before starting semantic "
-                "analysis."
-            ),
+    preserved_path = get_preserved_original_path(map_id)
+
+    if preserved_path and preserved_path.exists():
+        source_path = preserved_path
+    else:
+        source_path = SOURCE_DIR / f"{map_id}.png"
+
+        stored_source_url = (
+            map_item.source_image_url
+            or map_item.image_url
         )
+
+        source_available = await asyncio.to_thread(
+            ensure_generated_file_local,
+            stored_source_url,
+            source_path,
+        )
+
+        if not source_available:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This map has no processed source file available "
+                    "locally or in storage. Wait for processing to "
+                    "complete or upload the map again."
+                ),
+            )
 
     analysis = await svc.enqueue_analysis_for_map(
         map_id=map_id,
@@ -506,14 +523,31 @@ async def start_map_group_semantic_analysis(
     source_map_ids: List[str] = []
 
     for floor_map in sorted(floor_maps, key=lambda m: (m.floor is None, m.floor)):
-        path = get_preserved_original_path(str(floor_map.id)) or (
-            SOURCE_DIR / f"{floor_map.id}.png"
-        )
-        if not path.exists():
-            continue
+        floor_map_id = str(floor_map.id)
+        preserved_path = get_preserved_original_path(floor_map_id)
+
+        if preserved_path and preserved_path.exists():
+            path = preserved_path
+        else:
+            path = SOURCE_DIR / f"{floor_map_id}.png"
+
+            stored_source_url = (
+                floor_map.source_image_url
+                or floor_map.image_url
+            )
+
+            source_available = await asyncio.to_thread(
+                ensure_generated_file_local,
+                stored_source_url,
+                path,
+            )
+
+            if not source_available:
+                continue
+
         file_bytes_list.append(path.read_bytes())
         filenames.append(floor_map.source_filename or path.name)
-        source_map_ids.append(str(floor_map.id))
+        source_map_ids.append(floor_map_id)
 
     if not file_bytes_list:
         raise HTTPException(

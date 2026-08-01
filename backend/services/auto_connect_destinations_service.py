@@ -46,7 +46,11 @@ from models.map_model import Map
 from models.room_model import Room
 from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
-from services.graph_connection_service import _get_wall_mask, has_clear_line
+from services.graph_connection_service import (
+    _ensure_map_source_available,
+    _get_wall_mask,
+    has_clear_line,
+)
 
 
 # Reuses graph_connection_service's own already-established "how far is too
@@ -243,6 +247,10 @@ async def _scan_one_map(
     grid = _SpatialGrid(_GRID_CELL_SIZE_PX)
     for point in transit_points:
         grid.add(point)
+
+    # ECS task storage is temporary. Restore the normalized source image
+    # from S3 once per scanned map before building the wall mask.
+    await _ensure_map_source_available(map_id)
 
     wall_mask_available = _get_wall_mask(map_id) is not None
     is_calibrated = bool(map_item.is_calibrated)

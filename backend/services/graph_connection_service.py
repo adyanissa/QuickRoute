@@ -16,6 +16,7 @@ selection falls back to distance + exclusion rules alone.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -23,9 +24,11 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from models.map_model import Map
 from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
 from services.map_image_service import SOURCE_DIR, _build_navigation_line_mask
+from services.storage_backend import ensure_generated_file_local
 
 
 DEFAULT_MAX_CANDIDATES = 3
@@ -81,6 +84,45 @@ def _get_wall_mask(map_id: str) -> Optional[Tuple[np.ndarray, float]]:
     _WALL_MASK_CACHE[map_id] = (mtime, wall_mask, downscale)
 
     return wall_mask, downscale
+
+
+async def _ensure_map_source_available(map_id: str) -> bool:
+    """
+    Ensures the normalized source PNG is present on this process's local
+    disk before wall detection runs.
+
+    ECS task storage is temporary. If the file disappeared after a restart,
+    restore it from the map's durable S3 URL. Maps created without an upload
+    keep the historical behavior: no source image means wall checking is
+    unavailable rather than every connection being rejected.
+    """
+
+    source_path = SOURCE_DIR / f"{map_id}.png"
+
+    if source_path.exists():
+        return True
+
+    try:
+        map_item = await Map.get(map_id)
+    except Exception:
+        map_item = None
+
+    if not map_item:
+        return False
+
+    stored_source_url = (
+        map_item.source_image_url
+        or map_item.image_url
+    )
+
+    if not stored_source_url:
+        return False
+
+    return await asyncio.to_thread(
+        ensure_generated_file_local,
+        stored_source_url,
+        source_path,
+    )
 
 
 def has_clear_line(
@@ -222,6 +264,10 @@ async def auto_connect_point(
 
     if mode == "off":
         return summary
+
+    # Restore the source image once before evaluating candidates. This
+    # prevents an ECS restart from silently disabling wall checks.
+    await _ensure_map_source_available(point.map_id)
 
     candidates = await find_connection_candidates(point, max_distance_px)
     summary["neighbors_considered"] = len(candidates)
