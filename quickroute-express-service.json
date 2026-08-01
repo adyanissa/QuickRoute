@@ -1,0 +1,66 @@
+{
+    "serviceName":  "quickroute-backend",
+    "cluster":  "default",
+    "executionRoleArn":  "arn:aws:iam::538379555357:role/QuickRouteEcsExecutionRole",
+    "infrastructureRoleArn":  "arn:aws:iam::538379555357:role/QuickRouteEcsInfrastructureRole",
+    "taskRoleArn":  "arn:aws:iam::538379555357:role/QuickRouteEcsTaskRole",
+    "healthCheckPath":  "/",
+    "cpu":  "1024",
+    "memory":  "2048",
+    "primaryContainer":  {
+                             "image":  "538379555357.dkr.ecr.eu-central-1.amazonaws.com/quickroute-backend:3b4a48c",
+                             "containerPort":  8000,
+                             "awsLogsConfiguration":  {
+                                                          "logGroup":  "/ecs/quickroute-backend",
+                                                          "logStreamPrefix":  "ecs"
+                                                      },
+                             "environment":  [
+                                                 {
+                                                     "name":  "MAP_STORAGE_BACKEND",
+                                                     "value":  "s3"
+                                                 },
+                                                 {
+                                                     "name":  "AWS_S3_BUCKET",
+                                                     "value":  "quickroute-maps-538379555357-eu-central-1"
+                                                 },
+                                                 {
+                                                     "name":  "AWS_REGION",
+                                                     "value":  "eu-central-1"
+                                                 },
+                                                 {
+                                                     "name":  "CORS_ALLOWED_ORIGINS",
+                                                     "value":  "https://dy18iemulrjcj.cloudfront.net"
+                                                 }
+                                             ],
+                             "secrets":  [
+                                             {
+                                                 "name":  "MONGO_URI",
+                                                 "valueFrom":  "arn:aws:ssm:eu-central-1:538379555357:parameter/quickroute/prod/MONGO_URI"
+                                             },
+                                             {
+                                                 "name":  "JWT_SECRET_KEY",
+                                                 "valueFrom":  "arn:aws:ssm:eu-central-1:538379555357:parameter/quickroute/prod/JWT_SECRET_KEY"
+                                             },
+                                             {
+                                                 "name":  "ANTHROPIC_API_KEY",
+                                                 "valueFrom":  "arn:aws:ssm:eu-central-1:538379555357:parameter/quickroute/prod/ANTHROPIC_API_KEY"
+                                             }
+                                         ]
+                         },
+    "scalingTarget":  {
+                          "minTaskCount":  1,
+                          "maxTaskCount":  2,
+                          "autoScalingMetric":  "AVERAGE_CPU",
+                          "autoScalingTargetValue":  60
+                      },
+    "tags":  [
+                 {
+                     "key":  "Project",
+                     "value":  "QuickRoute"
+                 },
+                 {
+                     "key":  "Environment",
+                     "value":  "Production"
+                 }
+             ]
+}
