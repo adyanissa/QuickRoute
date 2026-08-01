@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -137,14 +138,38 @@ app = FastAPI(
 )
 
 
+# ------------------------------------------------------------------
+# CORS configuration
+#
+# Local development uses the localhost origins below by default.
+# Production can override them through CORS_ALLOWED_ORIGINS.
+#
+# Example:
+# CORS_ALLOWED_ORIGINS=https://dy18iemulrjcj.cloudfront.net
+#
+# Multiple origins must be separated by commas.
+# ------------------------------------------------------------------
+
+default_cors_origins = (
+    "http://localhost:5173,"
+    "http://127.0.0.1:5173,"
+    "http://localhost:5174,"
+    "http://127.0.0.1:5174"
+)
+
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        default_cors_origins,
+    ).split(",")
+    if origin.strip()
+]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5174",
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
