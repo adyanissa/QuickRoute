@@ -74,6 +74,8 @@ const UI = {
     statusQueued: 'Queued…',
     statusProcessing: (p) => `Analyzing… ${p}%`,
     statusCompleted: 'Analysis complete',
+    analysisNoGraphMutationNotice:
+      'Semantic analysis completed. No navigation points or connections were created.',
     statusFailed: 'Analysis failed',
     statusInvalid: 'The AI response failed validation',
     statusConfigRequired: 'Configuration required (missing ANTHROPIC_API_KEY)',
@@ -144,6 +146,8 @@ const UI = {
     statusQueued: 'في الانتظار…',
     statusProcessing: (p) => `جارٍ التحليل… ${p}%`,
     statusCompleted: 'اكتمل التحليل',
+    analysisNoGraphMutationNotice:
+      'اكتمل التحليل الدلالي. لم يتم إنشاء نقاط أو روابط للمسارات.',
     statusFailed: 'فشل التحليل',
     statusInvalid: 'فشل التحقق من استجابة الذكاء الاصطناعي',
     statusConfigRequired: 'مطلوب إعداد (مفتاح ANTHROPIC_API_KEY مفقود)',
@@ -214,6 +218,8 @@ const UI = {
     statusQueued: 'בהמתנה…',
     statusProcessing: (p) => `מנתח… ${p}%`,
     statusCompleted: 'הניתוח הושלם',
+    analysisNoGraphMutationNotice:
+      'הניתוח הסמנטי הושלם. לא נוצרו נקודות או חיבורים לניווט.',
     statusFailed: 'הניתוח נכשל',
     statusInvalid: 'אימות תגובת ה-AI נכשל',
     statusConfigRequired: 'נדרשת תצורה (חסר ANTHROPIC_API_KEY)',
@@ -676,6 +682,21 @@ const AdminMapAnalysisScreen = () => {
                 </div>
                 {analysis.errorMessage && (
                   <div style={{ marginTop: 8, fontSize: 12.5, color: '#a92323' }}>{analysis.errorMessage}</div>
+                )}
+                {analysis.status === 'completed' && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      fontSize: 12.5,
+                      color: '#1f6d3f',
+                      background: '#eafaf1',
+                      border: '1px solid #bfe8cf',
+                      borderRadius: 8,
+                      padding: '6px 10px',
+                    }}
+                  >
+                    {t.analysisNoGraphMutationNotice}
+                  </div>
                 )}
                 <div style={{ marginTop: 8, fontSize: 11.5, color: '#6c7a8c' }}>
                   {t.promptVersion}: {analysis.promptVersion} · {t.promptHash}: {analysis.promptSha256?.slice(0, 12)}…

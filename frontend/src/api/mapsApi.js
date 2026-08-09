@@ -143,21 +143,117 @@ export async function retryMapProcessing(mapId, useOpenai = true) {
   );
 }
 
-// Runs (or re-runs) automatic walkable-graph generation against this
-// map's already-processed source image. See backend generate_map_graph —
-// safe to call repeatedly, never duplicates a previous auto-generated
-// graph, and never touches manually drawn points/edges.
-export async function generateMapGraph(mapId) {
+// "Generate Route Graph" — explicit two-step workflow (navigation-data
+// cleanup task, Section 1.3). Preview NEVER writes anything to MongoDB;
+// it re-runs the exact same extraction the apply step uses so the admin
+// reviews exactly what would be created.
+export async function previewMapGraph(mapId) {
+  return apiRequest(`/api/maps/${mapId}/generate-graph/preview`, {
+    method: "POST",
+  });
+}
+
+// Writes RoutePoints/RouteEdges ONLY when called with confirm=true — the
+// admin must have already reviewed previewMapGraph's result. Safe to call
+// repeatedly: never duplicates a previous auto-generated graph, and never
+// touches manually drawn points/edges.
+export async function generateMapGraph(mapId, { confirm = false } = {}) {
   const data = await apiRequest(`/api/maps/${mapId}/generate-graph`, {
     method: "POST",
+    body: JSON.stringify({ confirm: Boolean(confirm) }),
   });
   return normalizeMap(data);
 }
 
-// Removes only this map's auto-generated points/edges.
+// Removes only this map's auto-generated points/edges (legacy immediate
+// endpoint retained for backward compatibility — prefer the preview/apply
+// cleanup pair below for new UI).
 export async function clearGeneratedMapGraph(mapId) {
   return apiRequest(`/api/maps/${mapId}/generated-graph`, {
     method: "DELETE",
+  });
+}
+
+// "Preview Generated Graph Cleanup" (Section 1.6) — read-only, scoped to
+// one map. Identifies only records proven auto-generated
+// (is_auto_generated=True); never includes manual/semantic/vertical
+// points, and reports name-only-suspicious legacy records separately as
+// unclassified rather than proposing them for deletion.
+export async function previewGeneratedGraphCleanup(mapId) {
+  return apiRequest(`/api/maps/${mapId}/generate-graph/cleanup/preview`);
+}
+
+// Deletes ONLY records proven auto-generated on this one map — requires
+// confirm=true, mirroring generateMapGraph's confirmation gate. Idempotent.
+export async function applyGeneratedGraphCleanup(mapId, { confirm = false } = {}) {
+  return apiRequest(`/api/maps/${mapId}/generate-graph/cleanup/apply`, {
+    method: "POST",
+    body: JSON.stringify({ confirm: Boolean(confirm) }),
+  });
+}
+
+// ── Navigation-data-problem task, Part 3B/4 — Full Navigation Reset +
+//    multi-Map cleanup (Super Admin only). ────────────────────────────────
+
+// Read-only. Reports EVERY route point/connection on this one map (not
+// just proven-generated ones) plus linked Rooms/vertical connectors/
+// location codes, so the admin sees exactly what a Full Reset would wipe.
+export async function previewFullMapReset(mapId) {
+  return apiRequest(`/api/navigation-cleanup/maps/${mapId}/full-reset/preview`);
+}
+
+// Deletes EVERY route point/connection on this one map, including
+// manually-added ones. Requires confirm=true AND confirmationText equal
+// to either the map's own exact name or the fixed phrase
+// "RESET NAVIGATION DATA".
+export async function applyFullMapReset(mapId, { confirm = false, confirmationText = "" } = {}) {
+  return apiRequest(`/api/navigation-cleanup/maps/${mapId}/full-reset/apply`, {
+    method: "POST",
+    body: JSON.stringify({
+      map_id: mapId,
+      confirm: Boolean(confirm),
+      confirmation_text: confirmationText,
+    }),
+  });
+}
+
+// Read-only summary of every Map's navigation-data footprint, for the
+// Super Admin multi-Map cleanup screen's map picker/table.
+export async function getMapsNavigationOverview() {
+  return apiRequest(`/api/navigation-cleanup/maps-overview`);
+}
+
+export async function previewMultiMapGeneratedCleanup(mapIds) {
+  return apiRequest(`/api/navigation-cleanup/multi/generated-cleanup/preview`, {
+    method: "POST",
+    body: JSON.stringify({ map_ids: mapIds }),
+  });
+}
+
+export async function applyMultiMapGeneratedCleanup(mapIds) {
+  return apiRequest(`/api/navigation-cleanup/multi/generated-cleanup/apply`, {
+    method: "POST",
+    body: JSON.stringify({ map_ids: mapIds }),
+  });
+}
+
+export async function previewMultiMapFullReset(mapIds) {
+  return apiRequest(`/api/navigation-cleanup/multi/full-reset/preview`, {
+    method: "POST",
+    body: JSON.stringify({ map_ids: mapIds }),
+  });
+}
+
+// Requires confirm=true AND confirmationPhrase exactly equal to
+// "RESET SELECTED NAVIGATION DATA".
+export async function applyMultiMapFullReset(mapIds, { confirm = false, confirmationPhrase = "" } = {}) {
+  return apiRequest(`/api/navigation-cleanup/multi/full-reset/apply`, {
+    method: "POST",
+    body: JSON.stringify({
+      map_ids: mapIds,
+      confirm: Boolean(confirm),
+      confirmation_phrase: confirmationPhrase,
+    }),
   });
 }
 

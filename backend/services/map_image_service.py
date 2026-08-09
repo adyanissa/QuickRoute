@@ -243,6 +243,179 @@ def get_preserved_original_path(map_id: str) -> Optional[Path]:
 
 
 # =========================================================
+# Canonical, single-source-of-truth analysis-source resolution
+# (source-file path bug fix).
+#
+# Before this, "where is this Map's semantic-analysis source file"
+# was answered independently, by filename convention, in three separate
+# places: routes/semantic_analysis_routes.py's start_map_semantic_analysis,
+# its map-group sibling start_map_group_semantic_analysis, and
+# services/semantic_analysis_service.resolve_source_files_for_map (called
+# by the background worker). All three re-derived the same
+# ORIGINALS_DIR/{map_id}.* glob and SOURCE_DIR/{map_id}.png fallback by
+# hand. That duplication is exactly what let the manual "Start Analysis"
+# click and the worker's own resolution silently disagree in ways this
+# codebase's tests never had covered, and it is why a freshly uploaded
+# map's analysis could reach the worker and still fail with "No source
+# file could be located on disk" even though the same file existed on
+# disk moments earlier for the enqueue step.
+#
+# Every analysis-start code path must now call
+# resolve_analysis_source_path() below, and nothing else, to answer that
+# question.
+# =========================================================
+
+
+def to_storage_relative_path(absolute_path: Path) -> str:
+    """
+    Converts an absolute on-disk path under MAPS_DIR into a stable,
+    portable string safe to persist in MongoDB: POSIX-style (forward
+    slashes) and relative to MAPS_DIR, even when this process is running
+    on Windows (where Path.__str__ would otherwise produce backslashes
+    that are not safe to compare/reconstruct across OSes or tests).
+    """
+
+    return absolute_path.resolve().relative_to(MAPS_DIR.resolve()).as_posix()
+
+
+def from_storage_relative_path(relative_path: str) -> Path:
+    """
+    The inverse of to_storage_relative_path(). Always anchored to the
+    fixed, absolute MAPS_DIR constant (itself derived from
+    Path(__file__).resolve(), never from the process's current working
+    directory) — so a relative path persisted on one machine/process
+    resolves correctly regardless of what directory a later process
+    happens to be launched from, and regardless of whether that later
+    process is running on Windows or Linux.
+    """
+
+    # PurePosixPath parses the forward-slash-only string we stored, then
+    # Path(*.parts) rebuilds it using whatever separator this OS expects.
+    from pathlib import PurePosixPath
+
+    relative_parts = PurePosixPath(relative_path.strip().lstrip("/")).parts
+    return MAPS_DIR.joinpath(*relative_parts) if relative_parts else MAPS_DIR
+
+
+@dataclass
+class AnalysisSourceFile:
+    path: Path
+    source_type: str  # "original_pdf" | "original_image" | "rendered_source_png"
+
+
+def resolve_analysis_source_path(
+    map_item,
+) -> Optional[AnalysisSourceFile]:
+    """
+    THE single canonical resolver for "which physical file backs semantic
+    analysis for this Map". Resolution order:
+
+    1. map_item.analysis_source_path (+ analysis_source_type), if set and
+       the file still genuinely exists there. This is the reliable,
+       explicit path persisted once at upload time — the fix for the
+       original bug. Every other option below is a fallback for Maps that
+       predate this field, and self-heals it once found.
+
+    2. The conventional preserved-original location
+       (ORIGINALS_DIR/{map_id}.<ext>) — the true uploaded PDF/image,
+       any page count, full quality.
+
+    3. The always-present normalized SOURCE_DIR/{map_id}.png — the same
+       full-resolution PNG the admin sees as the map's accurate source
+       image (first page only for a PDF). This is NOT a thumbnail; it is
+       the identical file this pipeline has always used as the accurate
+       working copy. Used only when the true original is unavailable.
+
+    4. None — genuinely no source file exists anywhere on disk for this
+       map (e.g. legacy data whose files were removed some other way).
+       Callers must surface a clear error in this case, never silently
+       substitute a lower-quality file.
+    """
+
+    map_id = str(map_item.id)
+
+    # 1. Explicit persisted pointer.
+    stored_relative_path = getattr(map_item, "analysis_source_path", None)
+    if stored_relative_path:
+        candidate = from_storage_relative_path(stored_relative_path)
+        if candidate.exists():
+            return AnalysisSourceFile(
+                path=candidate,
+                source_type=(
+                    getattr(map_item, "analysis_source_type", None)
+                    or "original_image"
+                ),
+            )
+
+    # 2. Conventional preserved-original discovery (pre-existing maps, or
+    # the field failed to persist for some other reason).
+    preserved_path = get_preserved_original_path(map_id)
+    if preserved_path and preserved_path.exists():
+        source_type = (
+            "original_pdf"
+            if preserved_path.suffix.lower() == ".pdf"
+            else "original_image"
+        )
+        return AnalysisSourceFile(path=preserved_path, source_type=source_type)
+
+    # 3. Always-present normalized full-resolution PNG.
+    fallback_path = SOURCE_DIR / f"{map_id}.png"
+    if fallback_path.exists():
+        return AnalysisSourceFile(
+            path=fallback_path, source_type="rendered_source_png"
+        )
+
+    # 4. Genuinely nothing on disk.
+    return None
+
+
+async def resolve_analysis_source_path_async(
+    map_item,
+) -> Optional[AnalysisSourceFile]:
+    """
+    Same resolution as resolve_analysis_source_path(), plus one additional
+    step: if step 3's normalized PNG is not present on THIS process's
+    local disk (e.g. an ECS container that restarted and lost its
+    ephemeral filesystem) but a stored URL exists, attempts to restore it
+    from the configured shared storage backend (S3) before giving up —
+    matching the restore behavior map display already relies on via
+    services/storage_backend.ensure_generated_file_local. Local-disk-only
+    deployments are unaffected (ensure_generated_file_local is a no-op
+    when S3 storage is not configured).
+    """
+
+    resolved = resolve_analysis_source_path(map_item)
+    if resolved is not None:
+        return resolved
+
+    map_id = str(map_item.id)
+    fallback_path = SOURCE_DIR / f"{map_id}.png"
+
+    if not fallback_path.exists():
+        import asyncio
+
+        from services.storage_backend import ensure_generated_file_local
+
+        stored_source_url = (
+            getattr(map_item, "source_image_url", None)
+            or getattr(map_item, "image_url", None)
+        )
+
+        await asyncio.to_thread(
+            ensure_generated_file_local,
+            stored_source_url,
+            fallback_path,
+        )
+
+    if fallback_path.exists():
+        return AnalysisSourceFile(
+            path=fallback_path, source_type="rendered_source_png"
+        )
+
+    return None
+
+
+# =========================================================
 # Save uploaded file
 # =========================================================
 

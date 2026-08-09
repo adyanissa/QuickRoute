@@ -5,7 +5,15 @@ from typing import List, Optional, Tuple
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from core.auth_deps import get_current_user, user_can_manage_building
+from core.auth_deps import (
+    get_current_user,
+    get_current_user_optional,
+    user_can_manage_building,
+    user_can_access_building,
+    user_can_access_map,
+    get_accessible_building_ids,
+)
+from core.errors import FORBIDDEN_MAP_SCOPE
 from core.errors import FORBIDDEN_BUILDING_SCOPE, FORBIDDEN_ROLE
 from models.room_model import Room
 from models.building_model import Building
@@ -278,7 +286,7 @@ async def create_room(
     if user.role == "regular_user":
         raise HTTPException(**FORBIDDEN_ROLE)
 
-    if not user_can_manage_building(user, room_data.building_id):
+    if not user_can_access_building(user, room_data.building_id):
         raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
 
     building = await Building.get(PydanticObjectId(room_data.building_id))
@@ -326,6 +334,21 @@ async def create_room(
         and room_data.x is not None
         and room_data.y is not None
     ):
+        # RBAC/dashboard cleanup task, Phase 2 continuation: Room
+        # authorization was previously building-level only — a
+        # building_manager restricted via map_group_ids/map_ids could
+        # place a map-linked destination on ANY map within their building,
+        # bypassing the finer scope those fields exist to enforce. Fixed
+        # here by re-checking the specific target Map, not just the
+        # Building, whenever a Room is actually being map-linked.
+        try:
+            target_map = await Map.get(PydanticObjectId(room_data.map_id))
+        except Exception:
+            target_map = None
+        if target_map is None or not user_can_access_map(user, target_map):
+            await new_room.delete()
+            raise HTTPException(**FORBIDDEN_MAP_SCOPE)
+
         try:
             route_point_was_reused, route_point_connected = await _place_room_on_map(
                 new_room,
@@ -384,7 +407,7 @@ async def sync_rooms_from_route_points(
         )
 
     if sync_request.building_id:
-        if not user_can_manage_building(user, sync_request.building_id):
+        if not user_can_access_building(user, sync_request.building_id):
             raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
 
         query = {
@@ -405,7 +428,7 @@ async def sync_rooms_from_route_points(
             m.building_id for m in maps_in_group if m.building_id
         }
         for scoped_building_id in building_ids_in_group:
-            if not user_can_manage_building(user, scoped_building_id):
+            if not user_can_access_building(user, scoped_building_id):
                 raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
 
         query = {
@@ -471,7 +494,21 @@ async def get_all_rooms(
     building_id: Optional[str] = Query(default=None),
     floor: Optional[int] = Query(default=None),
     room_type: Optional[str] = Query(default=None),
+    admin: User = Depends(get_current_user_optional),
 ):
+    """
+    RBAC/dashboard cleanup task, Phase 9 — same optional-auth pattern as
+    GET /api/locations/buildings above: this endpoint is also the one the
+    public, anonymous DestinationSelectionScreen uses to browse rooms for
+    end-user navigation, so an anonymous caller (and a logged-in
+    `regular_user`) see exactly the same unrestricted result as before.
+
+    When the caller IS an authenticated admin-tier user, the result is
+    additionally narrowed to only rooms in buildings they can access —
+    this is what makes the Admin Dashboard's room count correctly scoped
+    per role instead of always reflecting the whole system.
+    """
+
     query = {}
 
     if building_id:
@@ -482,6 +519,19 @@ async def get_all_rooms(
 
     if room_type:
         query["room_type"] = room_type
+
+    if admin is not None and admin.role != "regular_user":
+        accessible_ids = get_accessible_building_ids(admin)
+        if accessible_ids is not None:
+            if building_id:
+                # Caller explicitly asked for one building — honor scope by
+                # rejecting rather than silently ignoring an out-of-scope
+                # request (consistent with the rest of this task's
+                # "never silently re-scope an explicit request" rule).
+                if building_id not in accessible_ids:
+                    raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+            else:
+                query["building_id"] = {"$in": accessible_ids}
 
     rooms = await Room.find(query).to_list()
     return [await room_to_response(room) for room in rooms]
@@ -523,8 +573,20 @@ async def update_room(
     if user.role == "regular_user":
         raise HTTPException(**FORBIDDEN_ROLE)
 
-    if not user_can_manage_building(user, room.building_id):
+    if not user_can_access_building(user, room.building_id):
         raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
+    # RBAC/dashboard cleanup task, Phase 2 continuation: a Room already
+    # linked to a specific Map (map-based destination placement) must also
+    # be checked at map/map-group scope, not just building scope — the
+    # same fix as create_room above, now for editing an existing one.
+    if room.map_id:
+        try:
+            current_map = await Map.get(PydanticObjectId(room.map_id))
+        except Exception:
+            current_map = None
+        if current_map is not None and not user_can_access_map(user, current_map):
+            raise HTTPException(**FORBIDDEN_MAP_SCOPE)
 
     update_data = room_data.model_dump(exclude_unset=True)
 
@@ -551,7 +613,7 @@ async def update_room(
         )
 
     if "building_id" in update_data:
-        if not user_can_manage_building(user, update_data["building_id"]):
+        if not user_can_access_building(user, update_data["building_id"]):
             raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
 
         building = await Building.get(PydanticObjectId(update_data["building_id"]))
@@ -644,7 +706,7 @@ async def delete_room(
     if user.role == "regular_user":
         raise HTTPException(**FORBIDDEN_ROLE)
 
-    if not user_can_manage_building(user, room.building_id):
+    if not user_can_access_building(user, room.building_id):
         raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
 
     # A room that is already connected to the navigation graph (has a

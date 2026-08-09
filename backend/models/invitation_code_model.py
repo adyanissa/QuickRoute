@@ -21,6 +21,14 @@ class InvitationCode(Document):
     building_ids: list[str] = Field(default_factory=list)
     all_buildings: bool = False
 
+    # Additive/backward-compatible (RBAC/dashboard cleanup task, Phase 2)
+    # — mirrors User.map_group_ids/map_ids so a building_manager invitation
+    # can optionally narrow scope below building level. Existing
+    # invitation documents without these fields load with the empty-list
+    # default, no migration needed.
+    map_group_ids: list[str] = Field(default_factory=list)
+    map_ids: list[str] = Field(default_factory=list)
+
     # Optional restriction: only this email may consume the code. Stored
     # trimmed + lowercased so the comparison at signup never depends on
     # the caller's casing/whitespace.

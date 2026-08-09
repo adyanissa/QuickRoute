@@ -225,7 +225,12 @@ export async function previewSemanticDestinations(mapId, { itemExternalIds = nul
 }
 
 // applyOptions: { publicationId, accepted: [{ semantic_item_id, entity_kind,
-// x, y, parent_semantic_item_id, allow_transit_through }] }
+// x, y, parent_semantic_item_id, allow_transit_through }], allOrNothing }
+// allOrNothing (fast batch placement's single "Save All Destinations"):
+// when true, the backend validates the ENTIRE batch before writing
+// anything — see backend/services/semantic_destination_service.py's
+// `all_or_nothing` parameter. Defaults to false, which is byte-for-byte
+// the same request this function has always sent.
 export async function applySemanticDestinations(mapId, applyOptions) {
   return callRealEndpointOrExplainUnavailable(async () => {
     return apiRequest(`/api/maps/${mapId}/semantic-analysis/destinations/apply`, {
@@ -233,6 +238,7 @@ export async function applySemanticDestinations(mapId, applyOptions) {
       body: JSON.stringify({
         publication_id: applyOptions.publicationId ?? null,
         accepted: applyOptions.accepted || [],
+        all_or_nothing: Boolean(applyOptions.allOrNothing),
       }),
     });
   });

@@ -11,7 +11,6 @@ AI drafts, prompt text, evidence, or validation errors (Section 19).
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -19,7 +18,13 @@ from beanie import PydanticObjectId
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from core.auth_deps import require_global_admin
+from core.auth_deps import (
+    require_global_admin,
+    require_any_admin,
+    user_can_access_map,
+    user_can_access_building,
+)
+from core.errors import FORBIDDEN_MAP_SCOPE, FORBIDDEN_BUILDING_SCOPE, MAP_GROUP_FORBIDDEN_SCOPE
 from models.map_model import Map
 from models.map_group_model import MapGroup
 from models.semantic_map_analysis_model import SemanticMapAnalysis
@@ -28,7 +33,6 @@ from models.user_model import User
 from schemas.localization_schema import get_localized_text
 from services import semantic_analysis_service as svc
 from services.semantic_prompt_loader import get_prompt_info
-from services.storage_backend import ensure_generated_file_local
 from services.semantic_publication_service import (
     publish_analysis,
     validate_reviewed_result_for_publish,
@@ -116,6 +120,38 @@ async def _load_map_or_404(map_id: str) -> Map:
     return map_item
 
 
+def _require_map_scope(admin: User, map_item: Map) -> None:
+    """RBAC/dashboard cleanup task, Phase 2 continuation."""
+    if admin.role != "super_admin" and not user_can_access_map(admin, map_item):
+        raise HTTPException(**FORBIDDEN_MAP_SCOPE)
+
+
+async def _require_analysis_scope(admin: User, analysis: SemanticMapAnalysis) -> None:
+    """Same map_id/map_group_id-driven scope rule
+    core/auth_deps.require_semantic_analysis_access implements, inlined
+    here so every route in this file (which already loads the analysis
+    itself, not just an id) doesn't need a second redundant DB fetch."""
+    if admin.role == "super_admin":
+        return
+
+    if analysis.scope_type == "map" and analysis.map_id:
+        try:
+            map_item = await Map.get(PydanticObjectId(analysis.map_id))
+        except Exception:
+            map_item = None
+        if map_item is not None:
+            _require_map_scope(admin, map_item)
+            return
+
+    if not user_can_access_building(admin, analysis.building_id):
+        raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+    if admin.role == "building_manager":
+        if admin.map_group_ids and analysis.map_group_id not in admin.map_group_ids:
+            raise HTTPException(**MAP_GROUP_FORBIDDEN_SCOPE)
+        if admin.map_ids and not admin.map_group_ids:
+            raise HTTPException(**MAP_GROUP_FORBIDDEN_SCOPE)
+
+
 # ---------------------------------------------------------
 # Start (Section 12) — idempotent by default; force=true creates a new
 # revision and supersedes the previous unpublished one.
@@ -130,39 +166,46 @@ class StartAnalysisRequest(BaseModel):
 async def start_map_semantic_analysis(
     map_id: str,
     body: StartAnalysisRequest = Body(default=StartAnalysisRequest()),
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     map_item = await _load_map_or_404(map_id)
+    _require_map_scope(admin, map_item)
 
-    from services.map_image_service import SOURCE_DIR, get_preserved_original_path
+    # Uses the ONE canonical resolver (see map_image_service.
+    # resolve_analysis_source_path_async) — the fix for the "No source
+    # file could be located on disk" bug, which was caused by this
+    # endpoint, its map-group sibling below, and the background worker
+    # each independently re-deriving "where is this map's source file" by
+    # filename convention and being able to silently disagree with each
+    # other.
+    from services.map_image_service import (
+        resolve_analysis_source_path_async,
+        to_storage_relative_path,
+    )
 
-    preserved_path = get_preserved_original_path(map_id)
+    resolved_source = await resolve_analysis_source_path_async(map_item)
 
-    if preserved_path and preserved_path.exists():
-        source_path = preserved_path
-    else:
-        source_path = SOURCE_DIR / f"{map_id}.png"
-
-        stored_source_url = (
-            map_item.source_image_url
-            or map_item.image_url
+    if resolved_source is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This map has no processed source file available "
+                "locally or in storage. Wait for processing to "
+                "complete or upload the map again."
+            ),
         )
 
-        source_available = await asyncio.to_thread(
-            ensure_generated_file_local,
-            stored_source_url,
-            source_path,
-        )
+    source_path = resolved_source.path
 
-        if not source_available:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "This map has no processed source file available "
-                    "locally or in storage. Wait for processing to "
-                    "complete or upload the map again."
-                ),
-            )
+    # Self-heal: a map processed before analysis_source_path existed (or
+    # whose preserved-original copy failed silently at upload time) now
+    # gets the field backfilled the first time resolution succeeds, so
+    # every subsequent read goes straight through the reliable persisted
+    # pointer instead of re-deriving it by convention again.
+    if map_item.analysis_source_path != to_storage_relative_path(source_path):
+        map_item.analysis_source_path = to_storage_relative_path(source_path)
+        map_item.analysis_source_type = resolved_source.source_type
+        await map_item.save()
 
     analysis = await svc.enqueue_analysis_for_map(
         map_id=map_id,
@@ -170,7 +213,7 @@ async def start_map_semantic_analysis(
         map_group_id=map_item.map_group_id,
         source_path=source_path,
         source_filename=map_item.source_filename or source_path.name,
-        created_by=str(_admin.id),
+        created_by=str(admin.id),
         force=body.force,
     )
     return analysis_to_summary(analysis)
@@ -179,8 +222,11 @@ async def start_map_semantic_analysis(
 @router.get("/api/maps/{map_id}/semantic-analysis/latest")
 async def get_latest_map_semantic_analysis(
     map_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
+    map_item = await _load_map_or_404(map_id)
+    _require_map_scope(admin, map_item)
+
     analysis = await SemanticMapAnalysis.find_one(
         {"map_id": map_id}, sort=[("created_at", -1)]
     )
@@ -193,7 +239,7 @@ async def get_latest_map_semantic_analysis(
 async def get_published_semantic_entities_for_map(
     map_id: str,
     entity_type: Optional[str] = Query(default=None),
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     """
     Powers the "Choose name from approved map data" RoutePoint selector
@@ -201,6 +247,9 @@ async def get_published_semantic_entities_for_map(
     publication for this exact map — never AI drafts, never rejected/
     pending entities.
     """
+
+    map_item = await _load_map_or_404(map_id)
+    _require_map_scope(admin, map_item)
 
     query: Dict[str, Any] = {"map_id": map_id, "active": True}
     if entity_type:
@@ -256,18 +305,20 @@ async def get_published_semantic_entities_for_map(
 @router.get("/api/semantic-analyses/{analysis_id}")
 async def get_semantic_analysis(
     analysis_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     analysis = await _load_analysis_or_404(analysis_id)
+    await _require_analysis_scope(admin, analysis)
     return analysis_to_detail(analysis)
 
 
 @router.get("/api/semantic-analyses/{analysis_id}/result")
 async def get_semantic_analysis_result(
     analysis_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     analysis = await _load_analysis_or_404(analysis_id)
+    await _require_analysis_scope(admin, analysis)
 
     # Authoritative semantic floor code (see semantic_publication_service's
     # module docstring): the AI invents its own "floor_001"-style
@@ -309,9 +360,10 @@ async def get_semantic_analysis_result(
 @router.post("/api/semantic-analyses/{analysis_id}/retry")
 async def retry_semantic_analysis(
     analysis_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     analysis = await _load_analysis_or_404(analysis_id)
+    await _require_analysis_scope(admin, analysis)
 
     if analysis.status not in ("failed", "invalid_output", "configuration_required"):
         raise HTTPException(
@@ -340,9 +392,10 @@ async def retry_semantic_analysis(
 @router.post("/api/semantic-analyses/{analysis_id}/cancel")
 async def cancel_semantic_analysis(
     analysis_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     analysis = await _load_analysis_or_404(analysis_id)
+    await _require_analysis_scope(admin, analysis)
 
     if analysis.status in ("completed", "cancelled", "superseded"):
         raise HTTPException(
@@ -370,9 +423,10 @@ class SaveReviewedResultRequest(BaseModel):
 async def save_reviewed_result(
     analysis_id: str,
     body: SaveReviewedResultRequest,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     analysis = await _load_analysis_or_404(analysis_id)
+    await _require_analysis_scope(admin, analysis)
 
     if analysis.status != "completed" and analysis.reviewed_result is None:
         raise HTTPException(
@@ -427,9 +481,10 @@ async def save_reviewed_result(
 @router.post("/api/semantic-analyses/{analysis_id}/validate")
 async def validate_semantic_analysis(
     analysis_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     analysis = await _load_analysis_or_404(analysis_id)
+    await _require_analysis_scope(admin, analysis)
     result = validate_reviewed_result_for_publish(analysis.reviewed_result)
     return result
 
@@ -442,14 +497,15 @@ class PublishRequest(BaseModel):
 async def publish_semantic_analysis(
     analysis_id: str,
     body: PublishRequest = Body(default=PublishRequest()),
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     analysis = await _load_analysis_or_404(analysis_id)
+    await _require_analysis_scope(admin, analysis)
 
     try:
         publication = await publish_analysis(
             analysis,
-            published_by=str(_admin.id),
+            published_by=str(admin.id),
             quickroute_links=body.quickroute_links,
         )
     except ValueError as error:
@@ -469,7 +525,7 @@ async def publish_semantic_analysis(
 @router.post("/api/maps/{map_id}/semantic-analysis/repair-floor-codes")
 async def repair_semantic_analysis_floor_codes(
     map_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     """
     Admin-confirmed, explicit repair action for semantic floor codes on
@@ -484,6 +540,8 @@ async def repair_semantic_analysis_floor_codes(
     if not map_item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Map not found")
 
+    _require_map_scope(admin, map_item)
+
     return await repair_floor_codes_for_map(map_id)
 
 
@@ -496,7 +554,7 @@ async def repair_semantic_analysis_floor_codes(
 async def start_map_group_semantic_analysis(
     map_group_id: str,
     body: StartAnalysisRequest = Body(default=StartAnalysisRequest()),
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     try:
         group = await MapGroup.get(PydanticObjectId(map_group_id))
@@ -509,6 +567,15 @@ async def start_map_group_semantic_analysis(
             status_code=status.HTTP_404_NOT_FOUND, detail="Map group not found"
         )
 
+    if admin.role != "super_admin":
+        if not user_can_access_building(admin, group.building_id):
+            raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+        if admin.role == "building_manager":
+            if admin.map_group_ids and str(group.id) not in admin.map_group_ids:
+                raise HTTPException(**MAP_GROUP_FORBIDDEN_SCOPE)
+            if admin.map_ids and not admin.map_group_ids:
+                raise HTTPException(**MAP_GROUP_FORBIDDEN_SCOPE)
+
     floor_maps = await Map.find(Map.map_group_id == str(group.id)).to_list()
     if not floor_maps:
         raise HTTPException(
@@ -516,7 +583,13 @@ async def start_map_group_semantic_analysis(
             detail="This map group has no floor maps yet.",
         )
 
-    from services.map_image_service import SOURCE_DIR, get_preserved_original_path
+    # Same canonical resolver as the single-map endpoint above — see its
+    # comment for why this used to be a third independent, divergence-
+    # prone implementation of the same lookup.
+    from services.map_image_service import (
+        resolve_analysis_source_path_async,
+        to_storage_relative_path,
+    )
 
     file_bytes_list: List[bytes] = []
     filenames: List[str] = []
@@ -524,26 +597,17 @@ async def start_map_group_semantic_analysis(
 
     for floor_map in sorted(floor_maps, key=lambda m: (m.floor is None, m.floor)):
         floor_map_id = str(floor_map.id)
-        preserved_path = get_preserved_original_path(floor_map_id)
+        resolved_source = await resolve_analysis_source_path_async(floor_map)
 
-        if preserved_path and preserved_path.exists():
-            path = preserved_path
-        else:
-            path = SOURCE_DIR / f"{floor_map_id}.png"
+        if resolved_source is None:
+            continue
 
-            stored_source_url = (
-                floor_map.source_image_url
-                or floor_map.image_url
-            )
+        path = resolved_source.path
 
-            source_available = await asyncio.to_thread(
-                ensure_generated_file_local,
-                stored_source_url,
-                path,
-            )
-
-            if not source_available:
-                continue
+        if floor_map.analysis_source_path != to_storage_relative_path(path):
+            floor_map.analysis_source_path = to_storage_relative_path(path)
+            floor_map.analysis_source_type = resolved_source.source_type
+            await floor_map.save()
 
         file_bytes_list.append(path.read_bytes())
         filenames.append(floor_map.source_filename or path.name)
@@ -599,7 +663,7 @@ async def start_map_group_semantic_analysis(
             if has_api_key
             else "ANTHROPIC_API_KEY is not configured on the server."
         ),
-        created_by=str(_admin.id),
+        created_by=str(admin.id),
     )
     await analysis.insert()
     return analysis_to_summary(analysis)
@@ -633,11 +697,13 @@ async def get_semantic_prompt_info(_admin: User = Depends(require_global_admin))
 async def preview_semantic_analysis_destinations(
     map_id: str,
     request: SemanticDestinationPreviewRequest = Body(default_factory=SemanticDestinationPreviewRequest),
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     map_item = await Map.get(PydanticObjectId(map_id))
     if not map_item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Map not found")
+
+    _require_map_scope(admin, map_item)
 
     result = await preview_semantic_destinations(
         map_id=map_id,
@@ -654,15 +720,18 @@ async def preview_semantic_analysis_destinations(
 async def apply_semantic_analysis_destinations(
     map_id: str,
     request: SemanticDestinationApplyRequest,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     map_item = await Map.get(PydanticObjectId(map_id))
     if not map_item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Map not found")
 
+    _require_map_scope(admin, map_item)
+
     result = await apply_semantic_destinations(
         map_id=map_id,
         publication_id=request.publication_id,
         accepted_items=[item.model_dump() for item in request.accepted],
+        all_or_nothing=request.all_or_nothing,
     )
     return SemanticDestinationApplyResult(**result)

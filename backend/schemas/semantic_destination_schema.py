@@ -154,6 +154,15 @@ class AcceptedDestinationItem(BaseModel):
 class SemanticDestinationApplyRequest(BaseModel):
     publication_id: Optional[str] = None
     accepted: List[AcceptedDestinationItem] = Field(default_factory=list)
+    # Fast batch placement workflow ("Save All Destinations" — one final
+    # confirmation for a whole reviewed batch): when True, the ENTIRE
+    # request is validated up front and, if any item would fail, NOTHING
+    # is written — the response instead reports every failing item's
+    # reason via `item_errors` below. When False (default), behavior is
+    # 100% unchanged from before this flag existed: each item is
+    # independently applied and one item's failure never blocks another
+    # (existing per-card "Accept" workflow keeps this tolerant behavior).
+    all_or_nothing: bool = False
 
 
 class SemanticDestinationApplyResult(BaseModel):
@@ -171,3 +180,7 @@ class SemanticDestinationApplyResult(BaseModel):
     warnings: List[str] = Field(default_factory=list)
     created_room_ids: List[str] = Field(default_factory=list)
     created_route_point_ids: List[str] = Field(default_factory=list)
+    # Populated only when an all_or_nothing request is rejected before any
+    # writes — semantic_item_id -> human-readable reason. Empty on every
+    # other response (success, or a non-batch partial-tolerant apply).
+    item_errors: Dict[str, str] = Field(default_factory=dict)

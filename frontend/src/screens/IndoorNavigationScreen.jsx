@@ -6,7 +6,7 @@ import { formatFloor } from '../components/DestinationCard';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import RouteSteps from '../components/RouteSteps';
 import BackButton from '../components/BackButton';
-import { getRoutePoints, getRoutePointById } from '../api/routePointsApi';
+import { getPublicRoutePoints, getPublicRoutePointById } from '../api/routePointsApi';
 import { calculateMultiFloorRoute } from '../api/navigationApi';
 import { getDestinationRoutePointId } from '../utils/destinationPlacement';
 import {
@@ -502,7 +502,7 @@ const IndoorNavigationScreen = () => {
 
         if (resolvedStart?.routePointId) {
           try {
-            const point = await getRoutePointById(resolvedStart.routePointId);
+            const point = await getPublicRoutePointById(resolvedStart.routePointId);
             if (point) startPoint = point;
           } catch (lookupErr) {
             console.warn('Resolved start point lookup failed:', lookupErr);
@@ -514,9 +514,9 @@ const IndoorNavigationScreen = () => {
           // SELECTED building — never an arbitrary "current map"'s
           // entrance, which could belong to a different building
           // entirely (QuickRoute UX Final Cleanup, Part 3/7).
-          const entrancePoints = await getRoutePoints({
-            building_id: building.id,
-            point_type: 'entrance',
+          const entrancePoints = await getPublicRoutePoints({
+            buildingId: building.id,
+            pointType: 'entrance',
           });
 
           startPoint = Array.isArray(entrancePoints) ? entrancePoints[0] : null;
@@ -554,7 +554,7 @@ const IndoorNavigationScreen = () => {
 
         let endPoint = null;
         try {
-          endPoint = await getRoutePointById(destinationRoutePointId);
+          endPoint = await getPublicRoutePointById(destinationRoutePointId);
         } catch (lookupErr) {
           console.warn('Destination route point lookup failed:', lookupErr);
         }

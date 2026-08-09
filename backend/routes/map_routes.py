@@ -22,10 +22,14 @@ from fastapi import (
 
 from core.auth_deps import (
     get_current_user,
+    get_current_user_optional,
     require_global_admin,
+    require_any_admin,
     user_can_manage_building,
+    user_can_access_building,
+    user_can_access_map,
 )
-from core.errors import FORBIDDEN_ROLE
+from core.errors import FORBIDDEN_ROLE, FORBIDDEN_BUILDING_SCOPE, FORBIDDEN_MAP_SCOPE
 from models.building_model import Building
 from models.map_model import Map
 from models.user_model import User
@@ -39,11 +43,21 @@ from schemas.map_schema import (
     CopyCalibrationRequest,
     OcrSuggestRequest,
     OcrSuggestResponse,
+    GraphGenerationPreviewResponse,
+    GraphGenerationApplyRequest,
+    GraphGenerationApplyResponse,
+    GeneratedGraphCleanupPreviewResponse,
+    GeneratedGraphCleanupApplyRequest,
+    GeneratedGraphCleanupApplyResponse,
 )
 from routes.route_edge_routes import recalculate_walkway_edges_for_map
 from services.building_service import find_or_create_building
 from services.graph_generation_service import (
     generate_and_apply_walkable_graph,
+    extract_walkable_graph,
+    preview_generated_graph_cleanup,
+    apply_generated_graph_cleanup,
+    MIN_CONFIDENCE_TO_APPLY,
     _clear_previous_auto_generated_graph,
 )
 from services.ocr_service import suggest_destination_name
@@ -55,6 +69,7 @@ from services.map_image_service import (
     preserve_original_source_file,
     process_uploaded_map,
     save_upload_to_temporary_file,
+    to_storage_relative_path,
 )
 from services.semantic_analysis_service import (
     enqueue_analysis_for_map,
@@ -82,6 +97,19 @@ router = APIRouter(
 # ---------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------
+
+def _require_map_scope(admin: User, map_item: Map) -> None:
+    """RBAC/dashboard cleanup task, Phase 2: shared scope check for every
+    single-map admin endpoint below (preview/generate-graph, cleanup
+    preview/apply, clear-generated-graph, update/delete/calibrate/copy-
+    calibration/retry-processing). super_admin/global_manager-with-scope
+    pass via user_can_access_map(); a building_manager (or a global_manager
+    now correctly restricted to specific building_ids — see auth_deps.py's
+    module docstring) outside this map's building/map-group/map scope gets
+    403, never a silent pass-through."""
+    if not user_can_access_map(admin, map_item):
+        raise HTTPException(**FORBIDDEN_MAP_SCOPE)
+
 
 def clean_optional_text(value: Optional[str]) -> Optional[str]:
     if value is None:
@@ -421,11 +449,15 @@ async def process_map_in_background(
         # later semantic-analysis job can inspect a PDF's real, un-
         # flattened pages instead of only the single normalized PNG this
         # pipeline has always produced. Never affects map processing
-        # itself — a failure here is silently ignored.
+        # itself — a failure here is silently ignored and handled below
+        # by persisting the normalized-PNG fallback instead.
+        preserved_original_path = None
         try:
-            preserve_original_source_file(map_id, uploaded_path)
+            preserved_original_path = preserve_original_source_file(
+                map_id, uploaded_path
+            )
         except Exception:
-            pass
+            preserved_original_path = None
 
         result = await asyncio.to_thread(
             process_uploaded_map,
@@ -474,6 +506,31 @@ async def process_map_in_background(
         map_item.processed_at = datetime.utcnow()
         map_item.updated_at = datetime.utcnow()
 
+        # Source-file path bug fix: persist an explicit, reliable pointer
+        # to the physical file semantic analysis must read for THIS map,
+        # instead of leaving every future reader to re-derive it by
+        # filename convention. Prefer the true preserved original (any
+        # page count, full quality); fall back to the normalized
+        # full-resolution SOURCE_DIR PNG (never a thumbnail — this is the
+        # same accurate file the admin sees) only when preservation
+        # failed. Setting this field is unconditional here — every map
+        # that finishes processing successfully gets a resolvable
+        # analysis source, never left blank.
+        if preserved_original_path and preserved_original_path.exists():
+            map_item.analysis_source_path = to_storage_relative_path(
+                preserved_original_path
+            )
+            map_item.analysis_source_type = (
+                "original_pdf"
+                if preserved_original_path.suffix.lower() == ".pdf"
+                else "original_image"
+            )
+        else:
+            map_item.analysis_source_path = to_storage_relative_path(
+                result.source_path
+            )
+            map_item.analysis_source_type = "rendered_source_png"
+
         await map_item.save()
 
         # Automatic semantic-map-analysis enqueue (Section 9). Fires only
@@ -487,11 +544,17 @@ async def process_map_in_background(
         if get_auto_analyze_enabled():
             try:
                 from services.map_image_service import (
-                    get_preserved_original_path as _get_preserved_original,
+                    resolve_analysis_source_path as _resolve_analysis_source,
                 )
 
+                # Uses the exact same canonical resolver the manual
+                # "Start Analysis" endpoint and the background worker both
+                # use (see map_image_service.resolve_analysis_source_path)
+                # — the fix for the original bug, where three independent,
+                # convention-based lookups could silently disagree.
+                resolved_source = _resolve_analysis_source(map_item)
                 analysis_source_path = (
-                    _get_preserved_original(map_id) or result.source_path
+                    resolved_source.path if resolved_source else result.source_path
                 )
 
                 await enqueue_analysis_for_map(
@@ -511,22 +574,32 @@ async def process_map_in_background(
                     str(analysis_error),
                 )
 
-        # Automatic walkable-graph generation is best-effort and strictly
-        # additive: image processing has already succeeded and must stay
-        # "completed" no matter what happens here. A failure or a
-        # low-confidence result is recorded on the map (graph_generation_*
-        # fields) and otherwise ignored — manual Draw Walkable Path is
-        # always still available.
+        # SAFETY FIX (navigation-data cleanup task): walkable-graph
+        # generation must NEVER be applied automatically — it used to run
+        # here unconditionally whenever the upload form's "auto-generate"
+        # checkbox was left checked (its default), silently writing
+        # dozens/hundreds of "Auto Point N" RoutePoints and RouteEdges
+        # (including points outside the building, in title-block/metadata
+        # regions, and inaccurate long edges) with no admin review at all.
+        # Graph generation is now an explicit, separate admin workflow:
+        # POST /{map_id}/generate-graph/preview (read-only, no writes) must
+        # be reviewed first, then POST /{map_id}/generate-graph (now
+        # requires confirm=true in the request body) actually writes.
+        # `auto_generate_graph` is still accepted here (and still recorded
+        # on the request) for backward API compatibility with existing
+        # callers/tests, but it no longer triggers ANY automatic write —
+        # this parameter is intentionally inert now. Manual Draw Walkable
+        # Path, and the new explicit preview/confirm workflow, remain the
+        # only ways a walkable graph is ever created for a map.
         if auto_generate_graph:
-            try:
-                await generate_and_apply_walkable_graph(
-                    map_item, result.source_path
-                )
-            except Exception as graph_error:
-                print(
-                    f"Automatic graph generation failed for map {map_id}:",
-                    str(graph_error),
-                )
+            map_item.graph_generation_status = "pending_manual_preview"
+            map_item.graph_generation_note = (
+                "Automatic graph generation is no longer applied on "
+                "upload. Open Generate Route Graph to preview and "
+                "explicitly confirm a proposed graph for this map."
+            )
+            map_item.graph_generated_at = datetime.utcnow()
+            await map_item.save()
 
     except Exception as error:
         try:
@@ -568,8 +641,23 @@ async def process_map_in_background(
 )
 async def create_map(
     map_data: MapCreate,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
+    # RBAC/dashboard cleanup task, Phase 2: building_manager may now reach
+    # this endpoint (previously require_global_admin blocked them
+    # entirely), but only when an explicit building_id they're authorized
+    # for is supplied — a building_manager can never rely on the auto-
+    # create-a-building-from-title/campus fallback below, since that could
+    # silently create a brand-new Building outside any scope at all.
+    if admin.role == "building_manager":
+        if not map_data.building_id:
+            raise HTTPException(
+                status_code=400,
+                detail="building_id is required for this role",
+            )
+        if not user_can_access_building(admin, map_data.building_id):
+            raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
     legacy_image_url = (
         map_data.image_url
         or map_data.display_image_url
@@ -666,14 +754,30 @@ async def upload_map(
     # Otherwise local processing is used automatically.
     use_openai: bool = Form(default=True),
 
-    # Kick off automatic walkable-graph generation once processing
-    # completes. Manual Draw Walkable Path always remains available
-    # either way — this only controls whether an initial graph is
-    # generated for the admin to review/correct.
-    auto_generate_graph: bool = Form(default=True),
+    # DEPRECATED (navigation-data cleanup task): this flag no longer
+    # triggers ANY automatic RoutePoint/RouteEdge write — see
+    # process_map_in_background above. Still accepted for backward
+    # compatibility with existing callers/tests; default changed to False
+    # since it is now inert either way. Use the explicit
+    # POST /{map_id}/generate-graph/preview then
+    # POST /{map_id}/generate-graph (confirm=true) workflow instead.
+    auto_generate_graph: bool = Form(default=False),
 
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
+    # Same building_manager restriction as create_map() above — an
+    # explicit, authorized building_id is required; the auto-create/reuse
+    # fallback (resolve_map_building_id via campus/title) stays available
+    # only to super_admin/global_manager.
+    if admin.role == "building_manager":
+        if not building_id:
+            raise HTTPException(
+                status_code=400,
+                detail="building_id is required for this role",
+            )
+        if not user_can_access_building(admin, building_id):
+            raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
     cleaned_title = title.strip()
 
     if len(cleaned_title) < 2:
@@ -862,7 +966,7 @@ async def retry_map_processing(
     background_tasks: BackgroundTasks,
     use_openai: bool = True,
     auto_generate_graph: bool = False,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     map_item = await Map.get(map_id)
 
@@ -871,6 +975,8 @@ async def retry_map_processing(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Map not found",
         )
+
+    _require_map_scope(admin, map_item)
 
     if map_item.processing_status in {
         "pending",
@@ -945,34 +1051,13 @@ async def retry_map_processing(
 
 
 # ---------------------------------------------------------
-# Automatic walkable-graph generation (Priority 3)
+# Explicit walkable-graph generation — preview (no writes) + confirm-gated
+# apply (navigation-data cleanup task, Section 1.3). This is now the ONLY
+# way a walkable graph is ever created for a map; process_map_in_
+# background above no longer applies anything automatically.
 # ---------------------------------------------------------
 
-@router.post(
-    "/{map_id}/generate-graph",
-    response_model=MapResponse,
-)
-async def generate_map_graph(
-    map_id: PydanticObjectId,
-    _admin: User = Depends(require_global_admin),
-):
-    """
-    Runs (or re-runs) automatic walkable-graph generation for this map's
-    already-processed source image. Safe to call repeatedly: each run
-    clears only this map/floor's previously auto-generated points/edges
-    (never manual ones) before creating the new graph, per the
-    "regeneration must not duplicate" rule. A low-confidence result
-    creates nothing and leaves any existing graph untouched.
-    """
-
-    map_item = await Map.get(map_id)
-
-    if not map_item:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Map not found",
-        )
-
+async def _resolve_map_source_path(map_item: Map) -> Path:
     if map_item.processing_status != "completed":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -982,12 +1067,9 @@ async def generate_map_graph(
             ),
         )
 
-    source_path = SOURCE_DIR / f"{map_id}.png"
+    source_path = SOURCE_DIR / f"{map_item.id}.png"
 
-    stored_source_url = (
-        map_item.source_image_url
-        or map_item.image_url
-    )
+    stored_source_url = map_item.source_image_url or map_item.image_url
 
     source_available = await asyncio.to_thread(
         ensure_generated_file_local,
@@ -1004,10 +1086,192 @@ async def generate_map_graph(
             ),
         )
 
-    await generate_and_apply_walkable_graph(map_item, source_path)
+    return source_path
+
+
+@router.post(
+    "/{map_id}/generate-graph/preview",
+    response_model=GraphGenerationPreviewResponse,
+)
+async def preview_map_graph(
+    map_id: PydanticObjectId,
+    admin: User = Depends(require_any_admin),
+):
+    """
+    Step 2-4 of "Generate Route Graph" (Section 1.3): runs the exact same
+    extraction the apply step uses, on this map's already-processed source
+    image, and returns proposed nodes/edges for admin review. NEVER writes
+    a RoutePoint, RouteEdge, or anything else to MongoDB — the only
+    mutation on this map document itself is none at all.
+    """
+
+    map_item = await Map.get(map_id)
+
+    if not map_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Map not found",
+        )
+
+    _require_map_scope(admin, map_item)
+
+    source_path = await _resolve_map_source_path(map_item)
+
+    extraction = await asyncio.to_thread(extract_walkable_graph, source_path)
+
+    return GraphGenerationPreviewResponse(
+        map_id=str(map_id),
+        nodes=[
+            {"x": node.x, "y": node.y, "kind": node.kind}
+            for node in extraction.nodes
+        ],
+        edges=[
+            {
+                "from_index": edge.from_index,
+                "to_index": edge.to_index,
+                "pixel_length": edge.pixel_length,
+            }
+            for edge in extraction.edges
+        ],
+        confidence=extraction.confidence,
+        walkable_fraction=extraction.walkable_fraction,
+        component_count=extraction.component_count,
+        note=extraction.note,
+        meets_confidence_threshold=extraction.confidence >= MIN_CONFIDENCE_TO_APPLY,
+    )
+
+
+@router.post(
+    "/{map_id}/generate-graph",
+    response_model=GraphGenerationApplyResponse,
+)
+async def generate_map_graph(
+    map_id: PydanticObjectId,
+    apply_request: GraphGenerationApplyRequest = GraphGenerationApplyRequest(),
+    admin: User = Depends(require_any_admin),
+):
+    """
+    Step 7-8 of "Generate Route Graph" (Section 1.3): writes RoutePoints/
+    RouteEdges ONLY when `confirm: true` is explicitly sent in the request
+    body — the admin must have already reviewed
+    POST /{map_id}/generate-graph/preview. A request with confirm omitted
+    or false performs no writes and returns 400, so an accidental or
+    legacy call can never silently apply a graph. Safe to call repeatedly:
+    each run clears only this map's previously auto-generated points/edges
+    (never manual ones) before creating the new graph. A low-confidence
+    result creates nothing and leaves any existing graph untouched.
+    """
+
+    if not apply_request.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Explicit confirmation is required. Call "
+                "POST /{map_id}/generate-graph/preview first, review the "
+                "proposed graph, then resend this request with "
+                '{"confirm": true}.'
+            ),
+        )
+
+    map_item = await Map.get(map_id)
+
+    if not map_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Map not found",
+        )
+
+    _require_map_scope(admin, map_item)
+
+    source_path = await _resolve_map_source_path(map_item)
+
+    outcome = await generate_and_apply_walkable_graph(map_item, source_path)
 
     refreshed = await Map.get(map_id)
-    return map_to_response(refreshed)
+    response_data = map_to_response(refreshed).model_dump()
+
+    return GraphGenerationApplyResponse(
+        **response_data,
+        graph_applied=outcome.applied,
+        graph_points_created=outcome.points_created,
+        graph_edges_created=outcome.edges_created,
+        graph_points_cleared=outcome.points_cleared,
+        graph_edges_cleared=outcome.edges_cleared,
+    )
+
+
+@router.get(
+    "/{map_id}/generate-graph/cleanup/preview",
+    response_model=GeneratedGraphCleanupPreviewResponse,
+)
+async def preview_map_generated_graph_cleanup(
+    map_id: PydanticObjectId,
+    admin: User = Depends(require_any_admin),
+):
+    """
+    "Preview Generated Graph Cleanup" (Section 1.6): read-only, scoped to
+    this one map. Identifies only RoutePoints/RouteEdges that carry proof
+    of being auto-generated (is_auto_generated=True). Never includes
+    manual, semantic-destination, or vertical-connector records. Records
+    that merely look legacy-generated by name but carry no provenance
+    flag are reported separately (unknown_legacy_point_count) and are
+    never proposed for deletion.
+    """
+
+    map_item = await Map.get(map_id)
+
+    if not map_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Map not found",
+        )
+
+    _require_map_scope(admin, map_item)
+
+    preview = await preview_generated_graph_cleanup(str(map_id))
+    return GeneratedGraphCleanupPreviewResponse(**preview)
+
+
+@router.post(
+    "/{map_id}/generate-graph/cleanup/apply",
+    response_model=GeneratedGraphCleanupApplyResponse,
+)
+async def apply_map_generated_graph_cleanup(
+    map_id: PydanticObjectId,
+    cleanup_request: GeneratedGraphCleanupApplyRequest = GeneratedGraphCleanupApplyRequest(),
+    admin: User = Depends(require_any_admin),
+):
+    """
+    Deletes ONLY records proven auto-generated (is_auto_generated=True) on
+    this one map — requires `confirm: true` in the request body, exactly
+    mirroring the graph-generation apply endpoint's confirmation gate.
+    Idempotent: calling this a second time finds nothing left to delete
+    and returns zero counts, never an error.
+    """
+
+    if not cleanup_request.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Explicit confirmation is required. Call "
+                "GET /{map_id}/generate-graph/cleanup/preview first, "
+                "review the counts, then resend this request with "
+                '{"confirm": true}.'
+            ),
+        )
+
+    map_item = await Map.get(map_id)
+
+    if not map_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Map not found",
+        )
+
+    _require_map_scope(admin, map_item)
+
+    result = await apply_generated_graph_cleanup(str(map_id))
+    return GeneratedGraphCleanupApplyResponse(**result)
 
 
 @router.delete(
@@ -1016,7 +1280,7 @@ async def generate_map_graph(
 )
 async def clear_generated_map_graph(
     map_id: PydanticObjectId,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     """
     Removes only this map's auto-generated RoutePoints/RouteEdges —
@@ -1031,6 +1295,8 @@ async def clear_generated_map_graph(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Map not found",
         )
+
+    _require_map_scope(admin, map_item)
 
     points_cleared, edges_cleared = await _clear_previous_auto_generated_graph(
         str(map_id), map_item.floor
@@ -1149,6 +1415,7 @@ async def ocr_suggest_destination_name(
 )
 async def get_map_by_id(
     map_id: PydanticObjectId,
+    user: Optional[User] = Depends(get_current_user_optional),
 ):
     map_item = await Map.get(map_id)
 
@@ -1157,6 +1424,16 @@ async def get_map_by_id(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Map not found",
         )
+
+    # RBAC/dashboard cleanup task, Phase 2: same optional-auth pattern as
+    # route_point_routes.py's GET endpoints — this route is also called
+    # unauthenticated by the public navigation flow
+    # (NavigationRouteMap.jsx), so it must stay reachable with no login.
+    # Only an authenticated, non-super_admin admin-tier caller is IDOR-
+    # checked against their own scope.
+    if user is not None and user.role not in ("regular_user", "super_admin"):
+        if not user_can_access_map(user, map_item):
+            raise HTTPException(**FORBIDDEN_MAP_SCOPE)
 
     group_code = await resolve_map_group_code(map_item.map_group_id)
     return map_to_response(map_item, map_group_code=group_code)
@@ -1173,7 +1450,7 @@ async def get_map_by_id(
 async def update_map(
     map_id: PydanticObjectId,
     map_data: MapUpdate,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     map_item = await Map.get(map_id)
 
@@ -1182,6 +1459,8 @@ async def update_map(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Map not found",
         )
+
+    _require_map_scope(admin, map_item)
 
     update_data = map_data.model_dump(
         exclude_unset=True
@@ -1283,7 +1562,7 @@ async def update_map(
 async def calibrate_map_scale(
     map_id: PydanticObjectId,
     data: MapCalibrateRequest,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     """
     Two-click calibration: the admin has clicked two points on this map's
@@ -1302,6 +1581,8 @@ async def calibrate_map_scale(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Map not found",
         )
+
+    _require_map_scope(admin, map_item)
 
     pixel_distance = math.sqrt(
         (data.point_b_x - data.point_a_x) ** 2
@@ -1350,7 +1631,7 @@ async def calibrate_map_scale(
 async def copy_map_calibration(
     map_id: PydanticObjectId,
     data: CopyCalibrationRequest,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     """
     Explicit admin action only (PHASE 8: "allow copying calibration to
@@ -1367,12 +1648,19 @@ async def copy_map_calibration(
             detail="Map not found",
         )
 
+    _require_map_scope(admin, map_item)
+
     source_map = await Map.get(PydanticObjectId(data.source_map_id))
     if not source_map:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Source map not found",
         )
+
+    # The source map being copied FROM must also be in the caller's scope
+    # — otherwise a building_manager could read another building's
+    # calibration value indirectly by copying it onto a map they do own.
+    _require_map_scope(admin, source_map)
 
     if not source_map.is_calibrated:
         raise HTTPException(
@@ -1412,7 +1700,14 @@ async def copy_map_calibration(
 )
 async def delete_map(
     map_id: PydanticObjectId,
-    _admin: User = Depends(require_global_admin),
+    # RBAC/dashboard cleanup task, Phase 2: deliberately left at
+    # require_global_admin rather than opened to building_manager — this
+    # is a cascading, destructive delete (Rooms/RoutePoints/RouteEdges/
+    # LocationCodes all go with it) and the spec never explicitly grants
+    # building_manager a delete-Map capability, only "manage permitted
+    # Maps/Rooms/RoutePoints/..." for global_manager. Safer to keep this
+    # narrower than to guess a destructive permission into existence.
+    admin: User = Depends(require_global_admin),
 ):
     map_item = await Map.get(map_id)
 
@@ -1421,6 +1716,8 @@ async def delete_map(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Map not found",
         )
+
+    _require_map_scope(admin, map_item)
 
     was_current = map_item.is_current
     map_id_str = str(map_id)

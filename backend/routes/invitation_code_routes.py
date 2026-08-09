@@ -73,6 +73,8 @@ def invitation_code_to_response(
         role=entry.role,
         all_buildings=entry.all_buildings,
         building_ids=list(entry.building_ids),
+        map_group_ids=list(getattr(entry, "map_group_ids", []) or []),
+        map_ids=list(getattr(entry, "map_ids", []) or []),
         intended_email=entry.intended_email,
         expires_at=entry.expires_at,
         status=compute_invitation_code_status(entry),
@@ -155,6 +157,8 @@ async def validate_code(request: ValidateInvitationCodeRequest):
         all_buildings=entry.all_buildings,
         building_ids=list(entry.building_ids),
         buildings=buildings,
+        map_group_ids=list(getattr(entry, "map_group_ids", []) or []),
+        map_ids=list(getattr(entry, "map_ids", []) or []),
         intended_email=entry.intended_email,
         expires_at=entry.expires_at,
     )
@@ -205,11 +209,16 @@ async def create_invitation_code(
     data: InvitationCodeCreate,
     user: User = Depends(require_global_admin),
 ):
-    # Enforces: creator -> allowed role hierarchy, role -> valid building
-    # scope shape, and every referenced building both exists and is
-    # within the creator's own manageable scope.
+    # Enforces: creator -> allowed role hierarchy, role -> valid building/
+    # map-group/map scope shape, and every referenced building/map-group/
+    # map both exists and is within the creator's own manageable scope.
     await validate_role_and_scope_for_creation(
-        user, data.role, data.all_buildings, data.building_ids
+        user,
+        data.role,
+        data.all_buildings,
+        data.building_ids,
+        data.map_group_ids,
+        data.map_ids,
     )
 
     if data.expires_at is not None:
@@ -225,9 +234,20 @@ async def create_invitation_code(
     # canonical shape server-side regardless of what was validated above.
     final_all_buildings = data.all_buildings
     final_building_ids = list(data.building_ids)
+    final_map_group_ids = list(data.map_group_ids)
+    final_map_ids = list(data.map_ids)
     if data.role == "super_admin":
         final_all_buildings = True
         final_building_ids = []
+        final_map_group_ids = []
+        final_map_ids = []
+    elif data.role != "building_manager":
+        # map_group_ids/map_ids are only ever a building_manager concept
+        # (Phase 2) — already rejected by validate_role_and_scope_for_
+        # creation for every other role, this is a defensive belt-and-
+        # suspenders so the stored document can never disagree.
+        final_map_group_ids = []
+        final_map_ids = []
 
     try:
         code = await generate_unique_code(data.code)
@@ -241,6 +261,8 @@ async def create_invitation_code(
         role=data.role,
         all_buildings=final_all_buildings,
         building_ids=final_building_ids,
+        map_group_ids=final_map_group_ids,
+        map_ids=final_map_ids,
         intended_email=data.intended_email,
         expires_at=data.expires_at,
         created_by_user_id=str(user.id),

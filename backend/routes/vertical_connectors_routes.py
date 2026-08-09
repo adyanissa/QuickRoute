@@ -4,7 +4,14 @@ from typing import List, Optional
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from core.auth_deps import require_global_admin
+from core.auth_deps import (
+    require_global_admin,
+    require_any_admin,
+    user_can_access_building,
+    user_can_access_map_group,
+    get_accessible_building_ids,
+)
+from core.errors import FORBIDDEN_BUILDING_SCOPE, MAP_GROUP_FORBIDDEN_SCOPE
 from models.building_model import Building
 from models.map_group_model import MapGroup
 from models.user_model import User
@@ -92,6 +99,25 @@ async def _load_connector_or_404(connector_id: str) -> VerticalConnector:
     return connector
 
 
+def _require_connector_scope(admin: User, connector: VerticalConnector) -> None:
+    """RBAC/dashboard cleanup task, Phase 2 continuation: a
+    VerticalConnector carries building_id + map_group_id directly (it
+    spans floors, so it has no single map_id) — scope is exactly the same
+    building/map-group rule used for MapGroups themselves."""
+    if admin.role == "super_admin":
+        return
+    if not user_can_access_building(admin, connector.building_id):
+        raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+    if admin.role == "building_manager":
+        if admin.map_group_ids and connector.map_group_id not in admin.map_group_ids:
+            raise HTTPException(**MAP_GROUP_FORBIDDEN_SCOPE)
+        if admin.map_ids and not admin.map_group_ids:
+            # Restricted only to specific maps, with no map-group grant at
+            # all — a connector spans an entire map group, so this can
+            # never be safely inferred as "in scope".
+            raise HTTPException(**MAP_GROUP_FORBIDDEN_SCOPE)
+
+
 @router.post(
     "",
     response_model=VerticalConnectorResponse,
@@ -99,7 +125,7 @@ async def _load_connector_or_404(connector_id: str) -> VerticalConnector:
 )
 async def create_vertical_connector(
     data: VerticalConnectorCreate,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     building = await Building.get(PydanticObjectId(data.building_id))
     if not building:
@@ -112,6 +138,16 @@ async def create_vertical_connector(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Map group not found"
         )
+
+    # RBAC/dashboard cleanup task, Phase 2: building_manager may now reach
+    # this endpoint (previously require_global_admin blocked them
+    # entirely), but only within their own building/map-group scope.
+    if admin.role != "super_admin":
+        if not user_can_access_building(admin, data.building_id):
+            raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+        if admin.role == "building_manager" and admin.map_group_ids:
+            if data.map_group_id not in admin.map_group_ids:
+                raise HTTPException(**MAP_GROUP_FORBIDDEN_SCOPE)
 
     if group.building_id != data.building_id:
         raise HTTPException(
@@ -149,6 +185,7 @@ async def create_vertical_connector(
 async def get_all_vertical_connectors(
     map_group_id: Optional[str] = Query(default=None),
     building_id: Optional[str] = Query(default=None),
+    admin: User = Depends(require_any_admin),
 ):
     query = {}
     if map_group_id:
@@ -156,13 +193,32 @@ async def get_all_vertical_connectors(
     if building_id:
         query["building_id"] = building_id
 
+    if admin.role != "super_admin":
+        if building_id:
+            if not user_can_access_building(admin, building_id):
+                raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+        else:
+            accessible = get_accessible_building_ids(admin)
+            if accessible is not None:
+                query["building_id"] = {"$in": accessible}
+
     connectors = await VerticalConnector.find(query).to_list()
+
+    if admin.role == "building_manager" and admin.map_group_ids:
+        connectors = [
+            c for c in connectors if c.map_group_id in admin.map_group_ids
+        ]
+
     return [await _connector_to_response(c) for c in connectors]
 
 
 @router.get("/{connector_id}", response_model=VerticalConnectorResponse)
-async def get_vertical_connector(connector_id: str):
+async def get_vertical_connector(
+    connector_id: str,
+    admin: User = Depends(require_any_admin),
+):
     connector = await _load_connector_or_404(connector_id)
+    _require_connector_scope(admin, connector)
     return await _connector_to_response(connector)
 
 
@@ -170,9 +226,10 @@ async def get_vertical_connector(connector_id: str):
 async def update_vertical_connector(
     connector_id: str,
     data: VerticalConnectorUpdate,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     connector = await _load_connector_or_404(connector_id)
+    _require_connector_scope(admin, connector)
     update_data = data.model_dump(exclude_unset=True)
 
     accessibility_changed = (
@@ -202,9 +259,10 @@ async def update_vertical_connector(
 @router.delete("/{connector_id}", status_code=status.HTTP_200_OK)
 async def delete_vertical_connector(
     connector_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     connector = await _load_connector_or_404(connector_id)
+    _require_connector_scope(admin, connector)
     summary = await delete_connector(connector)
 
     return {
@@ -221,9 +279,10 @@ async def delete_vertical_connector(
 async def add_vertical_connector_stop(
     connector_id: str,
     data: ConnectorStopCreate,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     connector = await _load_connector_or_404(connector_id)
+    _require_connector_scope(admin, connector)
 
     await add_connector_stop(
         connector,
@@ -244,9 +303,10 @@ async def add_vertical_connector_stop(
 async def remove_vertical_connector_stop(
     connector_id: str,
     route_point_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     connector = await _load_connector_or_404(connector_id)
+    _require_connector_scope(admin, connector)
     await remove_connector_stop(connector, route_point_id)
 
     return await _connector_to_response(connector)

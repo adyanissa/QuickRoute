@@ -41,9 +41,20 @@ import numpy as np
 from beanie import PydanticObjectId
 
 from models.map_model import Map
+from models.room_model import Room
 from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
 from services.map_image_service import _build_navigation_line_mask
+
+
+# Legacy-generated-looking name pattern: this generator has only ever
+# named its own output "Auto Point {N}" (see generate_and_apply_walkable_
+# graph below). A point with this exact name shape but is_auto_generated
+# False/missing cannot be proven generated (the provenance fields could in
+# principle be absent on a pre-provenance-field legacy document, or an
+# admin could have manually named/renamed a point this way) — it is
+# reported as unknown/legacy, NEVER auto-deleted.
+_LEGACY_AUTO_POINT_NAME_RE = "^Auto Point \\d+$"
 
 
 GRAPH_GENERATION_VERSION = 1
@@ -906,3 +917,161 @@ async def generate_and_apply_walkable_graph(
         confidence=extraction.confidence,
         note=extraction.note,
     )
+
+
+# =========================================================
+# Preview-only generated-graph cleanup (Section 1.6)
+# =========================================================
+
+async def preview_generated_graph_cleanup(map_id: str) -> dict:
+    """
+    Read-only. Scoped to exactly one map (every floor of that map, since
+    the admin picks "this map" as a whole in the UI, mirroring how
+    Draw Walkable Path/regeneration already operate per-map). Never
+    deletes anything. Classifies every RoutePoint on this map into:
+      - generated (RoutePoint.is_auto_generated is True — provably this
+        module's own output, safe to consider for cleanup);
+      - unknown/legacy (name looks like this generator's own naming
+        convention, "Auto Point N", but is_auto_generated is not True —
+        cannot be proven generated, so it is reported separately and is
+        NEVER included in generated_point_ids/eligible for deletion);
+      - everything else (manual / semantic destination / vertical
+        connector / imported) is not reported here at all — this preview
+        exists only to describe what a cleanup COULD remove.
+    """
+
+    import re
+
+    map_item = await Map.get(PydanticObjectId(map_id))
+
+    all_points_on_map = await RoutePoint.find({"map_id": map_id}).to_list()
+    all_edges_on_map = await RouteEdge.find({"map_id": map_id}).to_list()
+
+    generated_points = [p for p in all_points_on_map if p.is_auto_generated]
+    generated_point_ids = {str(point.id) for point in generated_points}
+
+    generated_edges = [e for e in all_edges_on_map if e.is_auto_generated]
+    generated_edge_ids = {str(edge.id) for edge in generated_edges}
+
+    # Any edge (manual or generated) that touches a generated point but is
+    # not itself flagged generated — disclosed so the admin understands a
+    # manual edge they drew to a generated point would also be removed as
+    # an unavoidable side effect of deleting that point. Computed in
+    # memory from all_edges_on_map (already fetched above) rather than a
+    # second query.
+    all_edges_touching_generated = [
+        edge
+        for edge in all_edges_on_map
+        if generated_point_ids
+        and (
+            edge.from_point_id in generated_point_ids
+            or edge.to_point_id in generated_point_ids
+        )
+    ]
+
+    dependent_manual_edge_count = len(
+        [
+            edge
+            for edge in all_edges_touching_generated
+            if str(edge.id) not in generated_edge_ids
+        ]
+    )
+
+    rooms_linked = 0
+    connectors_linked = 0
+
+    if generated_point_ids:
+        rooms_linked = await Room.find(
+            {"route_point_id": {"$in": list(generated_point_ids)}}
+        ).count()
+        # Counted directly from the already-fetched generated_points list
+        # rather than a second query — RoutePoint._id is an ObjectId while
+        # generated_point_ids holds string ids, so re-querying by _id with
+        # the string set would need an extra ObjectId conversion for no
+        # benefit here.
+        connectors_linked = sum(
+            1 for point in generated_points if point.connector_id
+        )
+
+    # Full source breakdown of every non-generated point on this map (Part
+    # 3A/5 requirement: the preview must show manual/semantic/connector/
+    # unknown-legacy counts too, not just what would be deleted). Uses the
+    # exact same classification precedence as
+    # routes/route_point_routes.py's classify_route_point_source (never
+    # infers "generated" from a name alone — is_auto_generated already
+    # excludes these points from this loop entirely).
+    name_pattern = re.compile(_LEGACY_AUTO_POINT_NAME_RE)
+    non_generated_points = [p for p in all_points_on_map if not p.is_auto_generated]
+
+    manual_point_count = 0
+    semantic_destination_point_count = 0
+    vertical_connector_point_count = 0
+    unknown_legacy_count = 0
+
+    for point in non_generated_points:
+        if point.semantic_entity_external_id:
+            semantic_destination_point_count += 1
+        elif point.connector_id:
+            vertical_connector_point_count += 1
+        elif point.name and name_pattern.match(point.name.strip()):
+            unknown_legacy_count += 1
+        else:
+            manual_point_count += 1
+
+    manual_edge_count = len(
+        [edge for edge in all_edges_on_map if not edge.is_auto_generated]
+    )
+
+    unknown_legacy_note = None
+    if unknown_legacy_count:
+        unknown_legacy_note = (
+            f"{unknown_legacy_count} point(s) on this map are named like "
+            "this generator's own output (\"Auto Point N\") but carry no "
+            "is_auto_generated provenance flag, so they cannot be proven "
+            "generated. They are left untouched by this cleanup workflow "
+            "— review and delete them manually, or use Reset All "
+            "Navigation Data on This Map if you confirm they are safe to "
+            "remove."
+        )
+
+    return {
+        "map_id": map_id,
+        "map_name": map_item.title if map_item else None,
+        "floor": map_item.floor if map_item else None,
+        "generated_point_count": len(generated_point_ids),
+        "generated_edge_count": len(generated_edge_ids),
+        "dependent_manual_edge_count": dependent_manual_edge_count,
+        "manual_point_count": manual_point_count,
+        "manual_edge_count": manual_edge_count,
+        "semantic_destination_point_count": semantic_destination_point_count,
+        "vertical_connector_point_count": vertical_connector_point_count,
+        "rooms_linked_to_generated_points": rooms_linked,
+        "vertical_connectors_linked_to_generated_points": connectors_linked,
+        "unknown_legacy_point_count": unknown_legacy_count,
+        "unknown_legacy_note": unknown_legacy_note,
+        "generated_point_ids": sorted(generated_point_ids),
+        "generated_edge_ids": sorted(generated_edge_ids),
+    }
+
+
+async def apply_generated_graph_cleanup(map_id: str) -> dict:
+    """
+    Deletes ONLY records that carry is_auto_generated=True on this map —
+    the exact same, already-battle-tested query
+    _clear_previous_auto_generated_graph uses for safe regeneration, just
+    invoked here as a standalone explicit admin action across every floor
+    of the map (floor=None => no floor filter, matching "scope to one
+    selected map" rather than one floor). Idempotent: a second call finds
+    nothing left to delete and returns zero counts.
+    """
+
+    points_cleared, edges_cleared = await _clear_previous_auto_generated_graph(
+        map_id, None
+    )
+
+    return {
+        "map_id": map_id,
+        "applied": True,
+        "points_deleted": points_cleared,
+        "edges_deleted": edges_cleared,
+    }

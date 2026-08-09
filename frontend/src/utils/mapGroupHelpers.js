@@ -77,7 +77,11 @@ export function createEmptyFloorRow(existingRows = [], idSeed = Date.now()) {
     title: '',
     scale: 1,
     useOpenAI: false,
-    autoGenerateGraph: true,
+    // Default changed to false (navigation-data cleanup task): graph
+    // generation is no longer ever applied automatically on upload — see
+    // routes/map_routes.py's process_map_in_background. This flag is
+    // still sent for backward API compatibility but is now inert.
+    autoGenerateGraph: false,
   };
 }
 

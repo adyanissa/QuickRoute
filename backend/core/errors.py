@@ -145,3 +145,72 @@ MAP_GROUP_CODE_ALREADY_EXISTS = {
     "status_code": status.HTTP_409_CONFLICT,
     "detail": "This map group code is already in use"
 }
+
+# --- RBAC/dashboard cleanup task: centralized resource-scope errors ---
+# (core/auth_deps.py's require_map_access/require_room_access/
+# require_route_point_access/require_route_edge_access/
+# require_vertical_connector_access) — kept as plain 404/403 pairs, never
+# leaking WHY a resource is inaccessible beyond "not found"/"forbidden",
+# so an unauthorized caller can never distinguish "doesn't exist" from
+# "exists but you can't see it" (avoids resource-enumeration via error
+# message differences).
+
+MAP_NOT_FOUND = {
+    "status_code": status.HTTP_404_NOT_FOUND,
+    "detail": "Map not found"
+}
+
+FORBIDDEN_MAP_SCOPE = {
+    "status_code": status.HTTP_403_FORBIDDEN,
+    "detail": "You do not have permission to access this map"
+}
+
+ROUTE_POINT_NOT_FOUND = {
+    "status_code": status.HTTP_404_NOT_FOUND,
+    "detail": "Route point not found"
+}
+
+ROUTE_EDGE_NOT_FOUND = {
+    "status_code": status.HTTP_404_NOT_FOUND,
+    "detail": "Route edge not found"
+}
+
+VERTICAL_CONNECTOR_NOT_FOUND = {
+    "status_code": status.HTTP_404_NOT_FOUND,
+    "detail": "Vertical connector not found"
+}
+
+MAP_GROUP_FORBIDDEN_SCOPE = {
+    "status_code": status.HTTP_403_FORBIDDEN,
+    "detail": "You do not have permission to access this map group"
+}
+
+SEMANTIC_ANALYSIS_NOT_FOUND = {
+    "status_code": status.HTTP_404_NOT_FOUND,
+    "detail": "Semantic analysis not found"
+}
+
+FORBIDDEN_SEMANTIC_ANALYSIS_SCOPE = {
+    "status_code": status.HTTP_403_FORBIDDEN,
+    "detail": "You do not have permission to access this semantic analysis"
+}
+
+FORBIDDEN_VERTICAL_CONNECTOR_SCOPE = {
+    "status_code": status.HTTP_403_FORBIDDEN,
+    "detail": "You do not have permission to access this vertical connector"
+}
+
+FORBIDDEN_ROOM_SCOPE = {
+    "status_code": status.HTTP_403_FORBIDDEN,
+    "detail": "You do not have permission to access this room"
+}
+
+FORBIDDEN_ROUTE_POINT_SCOPE = {
+    "status_code": status.HTTP_403_FORBIDDEN,
+    "detail": "You do not have permission to access this route point"
+}
+
+FORBIDDEN_ROUTE_EDGE_SCOPE = {
+    "status_code": status.HTTP_403_FORBIDDEN,
+    "detail": "You do not have permission to access this route edge"
+}

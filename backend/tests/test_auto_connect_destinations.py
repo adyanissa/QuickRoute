@@ -97,19 +97,27 @@ def _find_proposal(preview_result, destination_point_id):
 # ---------------------------------------------------------
 
 def test_preview_performs_no_database_writes(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac1@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac1@example.com")
 
     map_item = _create_map(client, token)
     hallway = _create_point(client, token, map_item["id"], "Main Hallway", 100, 100, point_type="hallway")
     room = _create_point(client, token, map_item["id"], "Conference Room", 130, 100, point_type="room")
 
-    edges_before = client.get("/api/route-edges", params={"map_id": map_item["id"]}).json()
+    edges_before = client.get(
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
+    ).json()
     points_before = client.get("/api/route-points", params={"map_id": map_item["id"]}).json()
 
     result = _preview(client, token, map_item["id"])
     assert len(result["proposals"]) >= 1
 
-    edges_after = client.get("/api/route-edges", params={"map_id": map_item["id"]}).json()
+    edges_after = client.get(
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
+    ).json()
     points_after = client.get("/api/route-points", params={"map_id": map_item["id"]}).json()
 
     assert edges_before == edges_after == []
@@ -121,7 +129,7 @@ def test_preview_performs_no_database_writes(client):
 # ---------------------------------------------------------
 
 def test_unconnected_room_gets_valid_corridor_candidates(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac2@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac2@example.com")
 
     map_item = _create_map(client, token)
     hallway = _create_point(client, token, map_item["id"], "Corridor Point A", 100, 100, point_type="hallway")
@@ -146,7 +154,7 @@ def test_unconnected_room_gets_valid_corridor_candidates(client):
 # ---------------------------------------------------------
 
 def test_unconnected_store_gets_candidates(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac3@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac3@example.com")
 
     map_item = _create_map(client, token)
     hallway = _create_point(client, token, map_item["id"], "Corridor Point B", 200, 200, point_type="hallway")
@@ -165,7 +173,7 @@ def test_unconnected_store_gets_candidates(client):
 # ---------------------------------------------------------
 
 def test_already_connected_destination_is_skipped(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac4@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac4@example.com")
 
     map_item = _create_map(client, token)
     hallway = _create_point(client, token, map_item["id"], "Corridor Point C", 300, 300, point_type="hallway")
@@ -184,7 +192,7 @@ def test_already_connected_destination_is_skipped(client):
 # ---------------------------------------------------------
 
 def test_room_never_proposed_to_another_room(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac5@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac5@example.com")
 
     map_item = _create_map(client, token)
     room_a = _create_point(client, token, map_item["id"], "Room A Nearby", 400, 400, point_type="room")
@@ -208,7 +216,7 @@ def test_room_never_proposed_to_another_room(client):
 # ---------------------------------------------------------
 
 def test_store_never_proposed_to_another_store(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac6@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac6@example.com")
 
     map_item = _create_map(client, token)
     store_a = _create_point(client, token, map_item["id"], "Store A Nearby", 500, 500, point_type="store")
@@ -229,7 +237,7 @@ def test_store_never_proposed_to_another_store(client):
 # ---------------------------------------------------------
 
 def test_stairs_and_elevator_are_never_candidates(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac7@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac7@example.com")
 
     map_item = _create_map(client, token)
     room = _create_point(client, token, map_item["id"], "Isolated Room", 600, 600, point_type="room")
@@ -249,7 +257,7 @@ def test_stairs_and_elevator_are_never_candidates(client):
 # ---------------------------------------------------------
 
 def test_candidates_must_be_same_map_and_floor(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac8@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac8@example.com")
 
     map_a = _create_map(client, token, title="Map A")
     map_b = _create_map(client, token, title="Map B")
@@ -271,7 +279,7 @@ def test_candidates_must_be_same_map_and_floor(client):
 # ---------------------------------------------------------
 
 def test_no_candidate_outside_configured_threshold(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac9@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac9@example.com")
 
     map_item = _create_map(client, token)
     room = _create_point(client, token, map_item["id"], "Far Room", 0, 0, point_type="room")
@@ -291,7 +299,7 @@ def test_no_candidate_outside_configured_threshold(client):
 # ---------------------------------------------------------
 
 def test_apply_creates_only_explicitly_accepted_pairs(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac10@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac10@example.com")
 
     map_item = _create_map(client, token)
     hallway = _create_point(client, token, map_item["id"], "Corridor Point F", 700, 700, point_type="hallway")
@@ -309,7 +317,11 @@ def test_apply_creates_only_explicitly_accepted_pairs(client):
     assert result["created"] == 1
     assert len(result["created_edge_ids"]) == 1
 
-    edges = client.get("/api/route-edges", params={"map_id": map_item["id"]}).json()
+    edges = client.get(
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
+    ).json()
     assert len(edges) == 1
     assert {edges[0]["from_point_id"], edges[0]["to_point_id"]} == {room_1["id"], hallway["id"]}
 
@@ -323,7 +335,7 @@ def test_apply_creates_only_explicitly_accepted_pairs(client):
 # ---------------------------------------------------------
 
 def test_duplicate_edge_is_not_created(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac11@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac11@example.com")
 
     map_item = _create_map(client, token)
     hallway = _create_point(client, token, map_item["id"], "Corridor Point G", 800, 800, point_type="hallway")
@@ -349,7 +361,7 @@ def test_duplicate_edge_is_not_created(client):
 # ---------------------------------------------------------
 
 def test_reverse_direction_duplicate_is_detected(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac12@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac12@example.com")
 
     map_item = _create_map(client, token)
     hallway = _create_point(client, token, map_item["id"], "Corridor Point H", 900, 900, point_type="hallway")
@@ -377,7 +389,7 @@ def test_reverse_direction_duplicate_is_detected(client):
 # ---------------------------------------------------------
 
 def test_invalid_or_stale_pair_is_rejected_during_apply(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac13@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac13@example.com")
 
     map_item = _create_map(client, token)
     room_a = _create_point(client, token, map_item["id"], "Room Five", 100, 200, point_type="room")
@@ -402,12 +414,16 @@ def test_invalid_or_stale_pair_is_rejected_during_apply(client):
     assert result["created"] == 0
     assert result["rejected_invalid"] == 1
 
-    edges = client.get("/api/route-edges", params={"map_id": map_item["id"]}).json()
+    edges = client.get(
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
+    ).json()
     assert edges == []
 
 
 def test_room_to_room_pair_is_rejected_during_apply(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac13b@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac13b@example.com")
 
     map_item = _create_map(client, token)
     room_a = _create_point(client, token, map_item["id"], "Room Seven", 300, 400, point_type="room")
@@ -423,7 +439,11 @@ def test_room_to_room_pair_is_rejected_during_apply(client):
     assert result["created"] == 0
     assert result["rejected_invalid"] == 1
 
-    edges = client.get("/api/route-edges", params={"map_id": map_item["id"]}).json()
+    edges = client.get(
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
+    ).json()
     assert edges == []
 
 
@@ -432,7 +452,7 @@ def test_room_to_room_pair_is_rejected_during_apply(client):
 # ---------------------------------------------------------
 
 def test_both_route_points_remain_unchanged_after_apply(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac14@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac14@example.com")
 
     map_item = _create_map(client, token)
     hallway = _create_point(client, token, map_item["id"], "Corridor Point I", 150, 150, point_type="hallway")
@@ -464,7 +484,7 @@ def test_both_route_points_remain_unchanged_after_apply(client):
 # ---------------------------------------------------------
 
 def test_dijkstra_routes_to_newly_connected_destination(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac15@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac15@example.com")
 
     map_item = _create_map(client, token)
     entrance = _create_point(client, token, map_item["id"], "Front Entrance", 0, 0, point_type="entrance")
@@ -505,7 +525,7 @@ def test_dijkstra_routes_to_newly_connected_destination(client):
 # ---------------------------------------------------------
 
 def test_repeated_apply_is_idempotent(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac16@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac16@example.com")
 
     map_item = _create_map(client, token)
     hallway = _create_point(client, token, map_item["id"], "Corridor Point K", 250, 250, point_type="hallway")
@@ -531,7 +551,7 @@ def test_repeated_apply_is_idempotent(client):
 
 @pytest.mark.asyncio
 async def test_preview_handles_1000_destination_points(client):
-    token, _ = create_admin_and_get_token(client, role="global_manager", email="ac17@example.com")
+    token, _ = create_admin_and_get_token(client, role="super_admin", email="ac17@example.com")
 
     map_item = _create_map(client, token)
     map_id = map_item["id"]

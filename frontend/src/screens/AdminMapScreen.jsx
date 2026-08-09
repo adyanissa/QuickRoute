@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
 import {
   getMaps,
@@ -14,13 +14,19 @@ import {
   uploadMap as apiUploadMap,
   getMapProcessingStatus,
   normalizeMap,
+  previewMapGraph,
   generateMapGraph,
   clearGeneratedMapGraph,
   calibrateMapScale,
+  previewGeneratedGraphCleanup,
+  applyGeneratedGraphCleanup,
+  previewFullMapReset,
+  applyFullMapReset,
 } from '../api/mapsApi';
 import {
   getRoutePoints,
   createRoutePoint,
+  updateRoutePoint,
   deleteRoutePoint,
   backfillRoutePointFloorFromMap,
 } from '../api/routePointsApi';
@@ -32,7 +38,8 @@ import {
   applyAutoConnectDestinations,
 } from '../api/routeEdgesApi';
 import { getBuildings } from '../api/buildingsApi';
-import { getRooms, syncRoomsFromRoutePoints } from '../api/roomsApi';
+import { getRooms, getRoomById, syncRoomsFromRoutePoints } from '../api/roomsApi';
+import { getVerticalConnectorById } from '../api/verticalConnectorsApi';
 import { calculateRoute } from '../api/navigationApi';
 import {
   previewSemanticDestinations,
@@ -76,7 +83,19 @@ import {
 } from '../utils/drawPathHelpers';
 import { computeDefaultPanelPosition } from '../utils/floatingPanelHelpers';
 import { computeOriginalImageCoords } from '../utils/destinationPlacement';
+import {
+  buildBatchQueueItemIds,
+  initialBatchStatuses,
+  findNextActiveIndex,
+  computeBatchProgress,
+  isBatchReadyToSave,
+  buildBatchAcceptedPayload,
+  buildBatchDraftStorageKey,
+  serializeBatchDraft,
+  deserializeBatchDraft,
+} from '../utils/batchDestinationPlacement';
 import FloatingToolPanel from '../components/FloatingToolPanel';
+import { useAuth } from '../context/AuthContext';
 import '../styles/adminScreens.css';
 
 // Snap target for Draw Walkable Path, in on-screen pixels — this is what
@@ -212,6 +231,25 @@ const UI = {
     syncRoomsFailed: 'Failed to sync rooms from route points',
     // ── Delete Connection mode (delete a RouteEdge without touching either
     // endpoint RoutePoint) ──────────────────────────────────────────────────
+    // ── Edit Route Points mode (RBAC/dashboard cleanup task, Phase 13) ──
+    editPointsMode: 'Edit Route Points',
+    editPointsInstructions: 'Click an existing point on the map to edit it.',
+    editPointsPanelTitle: 'Edit Route Point',
+    editPointsNameLabel: 'Name',
+    editPointsTypeLabel: 'Point Type',
+    editPointsMovePoint: 'Move Point',
+    editPointsMovingActive: 'Click new location…',
+    editPointsOutOfBounds: 'That location is outside the map image.',
+    editPointsSaveError: 'Failed to save changes.',
+    editPointsNameTooShort: 'Name is too short.',
+    editPointsDeleteError: 'Failed to delete point.',
+    editPointsConnectedEdges: 'Connected edges',
+    editPointsNone: 'None',
+    editPointsInaccessible: 'not accessible',
+    editPointsLinkedRoom: 'Linked room',
+    editPointsLinkedConnector: 'Linked vertical connector',
+    editPointsDeleteAction: 'Delete this point',
+    editPointsConfirmDelete: 'Delete this route point? This cannot be undone.',
     deleteConnectionMode: 'Delete Connection',
     deleteConnectionInstructions: 'Click an existing connection to select it for deletion.',
     deleteConnectionCancelMode: 'Cancel Delete Mode',
@@ -237,6 +275,15 @@ const UI = {
     autoConnectRejectAllLowConfidence: 'Reject all low-confidence proposals',
     autoConnectNothingToReview: 'No unconnected Room/Store destinations were found on this map.',
     autoConnectNoCorridorPointFound: 'No corridor point found',
+    // Distinct per-reason labels (corridor point_type filtering fix) —
+    // shown instead of the generic autoConnectNoCorridorPointFound line
+    // whenever the backend returns a specific `reason` code, so an admin
+    // can tell "no hallway/junction points exist" apart from "they exist
+    // but aren't wired together" apart from "too far away".
+    autoConnectReasonNoTransitPoints: 'No hallway/junction points exist on this map/floor',
+    autoConnectReasonTransitNotConnected: 'Hallway/junction points exist but are not connected to each other by any walkway connection',
+    autoConnectReasonTooFar: 'No hallway/junction point close enough to connect to',
+    autoConnectReasonNestedParentNotReady: 'The approved parent room is not ready to receive connections yet',
     autoConnectUncalibrated: 'uncalibrated',
     autoConnectConfidenceHigh: 'High confidence',
     autoConnectConfidenceMedium: 'Medium confidence',
@@ -305,6 +352,44 @@ const UI = {
     semanticDestPreviewFailed: 'Failed to preview destinations',
     semanticDestNoAccepted: 'Accept at least one proposal before creating destinations.',
     semanticDestApplyFailed: 'Failed to create destinations',
+
+    // ── Fast Batch Destination Placement ("Place All Destinations") ─────────
+    semanticBatchPlaceAll: 'Place All Destinations',
+    semanticBatchPanelTitle: 'Batch Placement',
+    semanticBatchDestinationOf: (i, n) => `Destination ${i} of ${n}`,
+    semanticBatchClickInstructions: 'Click the door location on the map.',
+    semanticBatchLocationRecorded: 'Location recorded for this destination.',
+    semanticBatchLocationSelected: (name) => `Location selected for ${name}`,
+    semanticBatchProgressPlaced: (placed, total) => `Placed ${placed} of ${total}`,
+    semanticBatchProgressRemaining: (remaining) => `Remaining ${remaining}`,
+    semanticBatchProgressRejected: (rejected) => `Rejected ${rejected}`,
+    semanticBatchEnterHint: 'Press Enter to move to the next destination.',
+    semanticBatchAllResolved: 'Every destination has been placed, skipped, or rejected. Open the review to save.',
+    semanticBatchPrevious: 'Previous',
+    semanticBatchSkip: 'Skip for now',
+    semanticBatchReject: 'Reject destination',
+    semanticBatchUndo: 'Undo last placement',
+    semanticBatchChangeLocation: 'Change location',
+    semanticBatchExit: 'Exit placement mode',
+    semanticBatchReviewTitle: 'Review Destinations',
+    semanticBatchBackToPlacement: 'Back to placement',
+    semanticBatchSaveAll: 'Save All Destinations',
+    semanticBatchSaveConfirmTitle: 'Save all destinations?',
+    semanticBatchSaveConfirmBody: (count) =>
+      `This will create or reuse ${count} destination(s) in one final save. Nothing is written until you confirm.`,
+    semanticBatchSaveFailedWithErrors: 'Some destinations failed validation — nothing was saved. Fix the items below and try again.',
+    semanticBatchExitWarningTitle: 'Exit placement mode?',
+    semanticBatchExitWarningBody: 'You have unsaved placement progress. It stays saved locally in this browser, but nothing is written to the database until you Save All Destinations.',
+    semanticBatchResumeDraftTitle: 'Resume previous placement?',
+    semanticBatchResumeDraftBody: 'We found unsaved batch placement progress for this map. Would you like to resume where you left off, or start over?',
+    semanticBatchResumeDraft: 'Resume placement',
+    semanticBatchDiscardDraft: 'Discard draft',
+    semanticBatchFloorLabel: (floor) => `Floor ${floor}`,
+    semanticBatchNoLocationYet: 'No location yet',
+    semanticBatchStatusReady: 'Ready',
+    semanticBatchStatusRejected: 'Rejected',
+    semanticBatchStatusMissing: 'Missing location',
+
     testMode: 'Test Route',
     testStart: 'Start point',
     testEnd: 'Destination point',
@@ -344,13 +429,62 @@ const UI = {
     uploadBuildingAuto: 'Auto-create/reuse from campus name',
     uploadFloor: 'Floor',
     uploadAutoGenerateGraph: 'Auto-generate walkable graph after processing',
-    regenerateGraph: 'Regenerate Graph',
+    regenerateGraph: 'Generate Route Graph (Experimental)',
+    graphGenerationExperimentalNote:
+      'Optional, experimental automatic generation from the map image. Manually adding route points is the recommended, supported workflow — review the proposed graph carefully before confirming.',
     graphGenerating: 'Generating...',
     clearGeneratedGraph: 'Clear Generated Graph',
     graphGenerationDone: 'Walkable graph generation finished.',
     graphGenerationFailed: 'Failed to generate walkable graph',
     graphClearedSummary: (points, edges) =>
       `Cleared ${points} auto-generated point(s) and ${edges} auto-generated edge(s).`,
+
+    // Navigation-data-problem task, Part 3A/3B/6/7 — generated-only
+    // cleanup + full navigation reset for the active map.
+    removeGeneratedNavData: 'Remove Generated Navigation Data',
+    resetAllNavData: 'Reset All Navigation Data on This Map',
+    cleanupPreviewLoading: 'Loading preview…',
+    cleanupPreviewFailed: 'Failed to load the generated-data cleanup preview',
+    cleanupApplyFailed: 'Failed to remove generated navigation data',
+    cleanupApplySummary: (points, edges) =>
+      `Removed ${points} generated route point(s) and ${edges} generated connection(s).`,
+    cleanupPreviewTitle: 'Remove Generated Navigation Data — Preview',
+    cleanupGeneratedPoints: 'Generated route points (will be deleted)',
+    cleanupGeneratedEdges: 'Generated connections (will be deleted)',
+    cleanupManualPoints: 'Manual route points (kept)',
+    cleanupManualEdges: 'Manual connections (kept)',
+    cleanupUnknownLegacy: 'Unknown/legacy points (kept — not proven generated)',
+    cleanupUnknownLegacyNote: 'Not proven generated, so never deleted by this action.',
+    cleanupLinkedRooms: 'Rooms linked to generated points',
+    cleanupLinkedConnectors: 'Vertical connectors linked to generated points',
+    cleanupDependentEdges: 'Manual connections that will also be removed (touch a generated point)',
+    cleanupNoneToDelete: 'Nothing proven generated was found on this map — there is nothing to remove.',
+    cleanupConfirmButton: 'Delete Generated Data',
+    cleanupApplying: 'Deleting…',
+
+    resetPreviewFailed: 'Failed to load the full navigation reset preview',
+    resetApplyFailed: 'Failed to reset navigation data for this map',
+    resetApplySummary: (points, edges) =>
+      `Deleted ${points} route point(s) and ${edges} connection(s) from this map.`,
+    resetPreviewTitle: 'Reset All Navigation Data on This Map — Preview',
+    resetWarning:
+      'This deletes ALL route points and connections on this map, including any manually added ones. Public navigation on this map will be unavailable until an admin manually adds new route points. This cannot be undone.',
+    resetTotalPoints: 'Total route points on this map',
+    resetTotalEdges: 'Total connections on this map',
+    resetBreakdownManual: 'Manual',
+    resetBreakdownGenerated: 'Generated',
+    resetBreakdownSemantic: 'Semantic destinations',
+    resetBreakdownConnector: 'Vertical connector stops',
+    resetBreakdownUnknown: 'Unknown/legacy',
+    resetLinkedRooms: 'Rooms linked (link will be cleared, room kept)',
+    resetLinkedConnectors: 'Vertical connectors affected (metadata kept)',
+    resetLinkedLocationCodes: 'QR/location codes linked (will be deactivated)',
+    resetNoneToDelete: 'This map has no route points or connections — nothing to reset.',
+    resetConfirmInstructions: (mapName) =>
+      `Type this map's name ("${mapName}") or the phrase "RESET NAVIGATION DATA" to confirm.`,
+    resetConfirmPlaceholder: 'Type the map name or RESET NAVIGATION DATA',
+    resetConfirmButton: 'Permanently Delete All Navigation Data',
+    resetApplying: 'Resetting…',
     upload: 'Upload Map',
     uploading: 'Uploading...',
     uploadSuccess:
@@ -534,6 +668,24 @@ const UI = {
     syncRoomsSummary: ({ scanned, created, updated, skipped, failed }) =>
       `تم فحص ${scanned} · تم إنشاء ${created} · تم تحديث ${updated} · تم تخطي ${skipped} · فشل ${failed}`,
     syncRoomsFailed: 'فشلت مزامنة الغرف من نقاط المسار',
+    editPointsMode: 'تعديل نقاط المسار',
+    editPointsInstructions: 'انقر على نقطة موجودة في الخريطة لتعديلها.',
+    editPointsPanelTitle: 'تعديل نقطة المسار',
+    editPointsNameLabel: 'الاسم',
+    editPointsTypeLabel: 'نوع النقطة',
+    editPointsMovePoint: 'نقل النقطة',
+    editPointsMovingActive: 'انقر على الموقع الجديد…',
+    editPointsOutOfBounds: 'هذا الموقع خارج صورة الخريطة.',
+    editPointsSaveError: 'فشل حفظ التغييرات.',
+    editPointsNameTooShort: 'الاسم قصير جدًا.',
+    editPointsDeleteError: 'فشل حذف النقطة.',
+    editPointsConnectedEdges: 'الروابط المتصلة',
+    editPointsNone: 'لا يوجد',
+    editPointsInaccessible: 'غير متاحة',
+    editPointsLinkedRoom: 'الغرفة المرتبطة',
+    editPointsLinkedConnector: 'الموصل الرأسي المرتبط',
+    editPointsDeleteAction: 'حذف هذه النقطة',
+    editPointsConfirmDelete: 'حذف نقطة المسار هذه؟ لا يمكن التراجع عن هذا.',
     deleteConnectionMode: 'حذف ربط',
     deleteConnectionInstructions: 'اضغطي على ربط موجود لتحديده للحذف.',
     deleteConnectionCancelMode: 'إلغاء وضع الحذف',
@@ -558,6 +710,10 @@ const UI = {
     autoConnectRejectAllLowConfidence: 'رفض جميع الاقتراحات منخفضة الثقة',
     autoConnectNothingToReview: 'لم يتم العثور على وجهات غرفة/متجر غير مربوطة في هذه الخريطة.',
     autoConnectNoCorridorPointFound: 'لم يتم العثور على نقطة ممر',
+    autoConnectReasonNoTransitPoints: 'لا توجد نقاط ممر/تقاطع في هذه الخريطة/الطابق',
+    autoConnectReasonTransitNotConnected: 'توجد نقاط ممر/تقاطع لكنها غير مرتبطة ببعضها بأي رابط مسار',
+    autoConnectReasonTooFar: 'لا توجد نقطة ممر/تقاطع قريبة بما يكفي للربط',
+    autoConnectReasonNestedParentNotReady: 'الغرفة الأصل المعتمدة غير جاهزة بعد لاستقبال الروابط',
     autoConnectUncalibrated: 'غير معايَر',
     autoConnectConfidenceHigh: 'ثقة عالية',
     autoConnectConfidenceMedium: 'ثقة متوسطة',
@@ -626,6 +782,44 @@ const UI = {
     semanticDestPreviewFailed: 'فشلت معاينة الوجهات',
     semanticDestNoAccepted: 'يجب قبول اقتراح واحد على الأقل قبل إنشاء الوجهات.',
     semanticDestApplyFailed: 'فشل إنشاء الوجهات',
+
+    // ── Fast Batch Destination Placement ("Place All Destinations") ─────────
+    semanticBatchPlaceAll: 'تحديد مواقع جميع الوجهات',
+    semanticBatchPanelTitle: 'التحديد الجماعي للمواقع',
+    semanticBatchDestinationOf: (i, n) => `الوجهة ${i} من ${n}`,
+    semanticBatchClickInstructions: 'اضغطي على موقع الباب على الخريطة.',
+    semanticBatchLocationRecorded: 'تم تسجيل الموقع لهذه الوجهة.',
+    semanticBatchLocationSelected: (name) => `تم تحديد الموقع لـ ${name}`,
+    semanticBatchProgressPlaced: (placed, total) => `تم تحديد ${placed} من ${total}`,
+    semanticBatchProgressRemaining: (remaining) => `المتبقي ${remaining}`,
+    semanticBatchProgressRejected: (rejected) => `المرفوض ${rejected}`,
+    semanticBatchEnterHint: 'اضغطي Enter للانتقال إلى الوجهة التالية.',
+    semanticBatchAllResolved: 'تم تحديد موقع أو تخطي أو رفض كل الوجهات. افتحي المراجعة للحفظ.',
+    semanticBatchPrevious: 'السابق',
+    semanticBatchSkip: 'تخطي الآن',
+    semanticBatchReject: 'رفض الوجهة',
+    semanticBatchUndo: 'التراجع عن آخر تحديد موقع',
+    semanticBatchChangeLocation: 'تغيير الموقع',
+    semanticBatchExit: 'إنهاء وضع التحديد',
+    semanticBatchReviewTitle: 'مراجعة الوجهات',
+    semanticBatchBackToPlacement: 'العودة إلى التحديد',
+    semanticBatchSaveAll: 'حفظ جميع الوجهات',
+    semanticBatchSaveConfirmTitle: 'حفظ جميع الوجهات؟',
+    semanticBatchSaveConfirmBody: (count) =>
+      `سيؤدي هذا إلى إنشاء أو إعادة استخدام ${count} وجهة/وجهات في حفظ نهائي واحد. لن يتم حفظ أي شيء حتى تؤكدي.`,
+    semanticBatchSaveFailedWithErrors: 'فشلت بعض الوجهات في التحقق — لم يتم حفظ أي شيء. أصلحي العناصر أدناه وحاولي مرة أخرى.',
+    semanticBatchExitWarningTitle: 'إنهاء وضع التحديد؟',
+    semanticBatchExitWarningBody: 'لديك تقدم غير محفوظ في التحديد. يبقى محفوظًا محليًا في هذا المتصفح، لكن لن يتم حفظ أي شيء في قاعدة البيانات حتى تضغطي حفظ جميع الوجهات.',
+    semanticBatchResumeDraftTitle: 'استئناف التحديد السابق؟',
+    semanticBatchResumeDraftBody: 'وجدنا تقدمًا غير محفوظ للتحديد الجماعي لهذه الخريطة. هل تريدين الاستئناف من حيث توقفت، أم البدء من جديد؟',
+    semanticBatchResumeDraft: 'استئناف التحديد',
+    semanticBatchDiscardDraft: 'تجاهل المسودة',
+    semanticBatchFloorLabel: (floor) => `الطابق ${floor}`,
+    semanticBatchNoLocationYet: 'لا يوجد موقع بعد',
+    semanticBatchStatusReady: 'جاهز',
+    semanticBatchStatusRejected: 'مرفوض',
+    semanticBatchStatusMissing: 'الموقع مفقود',
+
     testMode: 'اختبار المسار',
     testStart: 'نقطة البداية',
     testEnd: 'نقطة الوجهة',
@@ -665,13 +859,61 @@ const UI = {
     uploadBuildingAuto: 'إنشاء/إعادة استخدام تلقائي من اسم الحرم',
     uploadFloor: 'الطابق',
     uploadAutoGenerateGraph: 'توليد شبكة المسارات تلقائيًا بعد المعالجة',
-    regenerateGraph: 'إعادة توليد الشبكة',
+    regenerateGraph: 'توليد شبكة المسارات (تجريبي)',
+    graphGenerationExperimentalNote:
+      'ميزة اختيارية وتجريبية للتوليد التلقائي من صورة الخريطة. الإضافة اليدوية لنقاط المسار هي أسلوب العمل الموصى به والمدعوم — راجع الشبكة المقترحة بعناية قبل التأكيد.',
     graphGenerating: 'جارٍ التوليد...',
     clearGeneratedGraph: 'مسح الشبكة المولدة تلقائيًا',
     graphGenerationDone: 'انتهى توليد شبكة المسارات القابلة للمشي.',
     graphGenerationFailed: 'فشل توليد شبكة المسارات',
     graphClearedSummary: (points, edges) =>
       `تم مسح ${points} نقطة و ${edges} حافة تم توليدها تلقائيًا.`,
+
+    removeGeneratedNavData: 'حذف بيانات المسارات المولّدة',
+    resetAllNavData: 'مسح جميع بيانات المسارات من هذه الخريطة',
+    cleanupPreviewLoading: 'جارٍ تحميل المعاينة…',
+    cleanupPreviewFailed: 'فشل تحميل معاينة حذف البيانات المولّدة',
+    cleanupApplyFailed: 'فشل حذف بيانات المسارات المولّدة',
+    cleanupApplySummary: (points, edges) =>
+      `تم حذف ${points} نقطة مسار و ${edges} اتصال تم توليدهما تلقائيًا.`,
+    cleanupPreviewTitle: 'حذف بيانات المسارات المولّدة — معاينة',
+    cleanupGeneratedPoints: 'نقاط مسار مولّدة (سيتم حذفها)',
+    cleanupGeneratedEdges: 'اتصالات مولّدة (سيتم حذفها)',
+    cleanupManualPoints: 'نقاط مسار يدوية (ستبقى)',
+    cleanupManualEdges: 'اتصالات يدوية (ستبقى)',
+    cleanupUnknownLegacy: 'نقاط غير مؤكدة/قديمة (ستبقى — لم يثبت أنها مولّدة)',
+    cleanupUnknownLegacyNote: 'لم يثبت أنها مولّدة، لذلك لن تُحذف بهذا الإجراء أبدًا.',
+    cleanupLinkedRooms: 'غرف مرتبطة بنقاط مولّدة',
+    cleanupLinkedConnectors: 'وصلات رأسية مرتبطة بنقاط مولّدة',
+    cleanupDependentEdges: 'اتصالات يدوية ستُحذف أيضًا (متصلة بنقطة مولّدة)',
+    cleanupNoneToDelete: 'لم يتم العثور على أي بيانات مؤكدة أنها مولّدة في هذه الخريطة — لا يوجد ما يُحذف.',
+    cleanupConfirmButton: 'حذف البيانات المولّدة',
+    cleanupApplying: 'جارٍ الحذف…',
+
+    resetPreviewFailed: 'فشل تحميل معاينة إعادة ضبط بيانات المسارات',
+    resetApplyFailed: 'فشل إعادة ضبط بيانات المسارات لهذه الخريطة',
+    resetApplySummary: (points, edges) =>
+      `تم حذف ${points} نقطة مسار و ${edges} اتصال من هذه الخريطة.`,
+    resetPreviewTitle: 'مسح جميع بيانات المسارات من هذه الخريطة — معاينة',
+    resetWarning:
+      'سيؤدي هذا إلى حذف جميع نقاط واتصالات المسارات في هذه الخريطة، بما في ذلك ما تمت إضافته يدويًا. سيتعطل التنقل العام في هذه الخريطة حتى يضيف المسؤول نقاط مسار جديدة يدويًا. لا يمكن التراجع عن هذا الإجراء.',
+    resetTotalPoints: 'إجمالي نقاط المسار في هذه الخريطة',
+    resetTotalEdges: 'إجمالي الاتصالات في هذه الخريطة',
+    resetBreakdownManual: 'يدوية',
+    resetBreakdownGenerated: 'مولّدة',
+    resetBreakdownSemantic: 'وجهات دلالية',
+    resetBreakdownConnector: 'محطات وصلات رأسية',
+    resetBreakdownUnknown: 'غير مؤكدة/قديمة',
+    resetLinkedRooms: 'غرف مرتبطة (سيُزال الرابط، وتبقى الغرفة)',
+    resetLinkedConnectors: 'وصلات رأسية متأثرة (تبقى بياناتها)',
+    resetLinkedLocationCodes: 'رموز QR/مواقع مرتبطة (سيتم تعطيلها)',
+    resetNoneToDelete: 'لا توجد نقاط مسار أو اتصالات في هذه الخريطة — لا يوجد ما يُعاد ضبطه.',
+    resetConfirmInstructions: (mapName) =>
+      `اكتب اسم هذه الخريطة ("${mapName}") أو العبارة "RESET NAVIGATION DATA" للتأكيد.`,
+    resetConfirmPlaceholder: 'اكتب اسم الخريطة أو RESET NAVIGATION DATA',
+    resetConfirmButton: 'حذف جميع بيانات المسارات نهائيًا',
+    resetApplying: 'جارٍ إعادة الضبط…',
+
     upload: 'رفع الخريطة',
     uploading: 'جاري الرفع...',
     uploadSuccess: 'تم رفع الخريطة وبدأ تجهيزها تلقائيًا.',
@@ -854,6 +1096,24 @@ const UI = {
     syncRoomsSummary: ({ scanned, created, updated, skipped, failed }) =>
       `נסרקו ${scanned} · נוצרו ${created} · עודכנו ${updated} · דולגו ${skipped} · נכשלו ${failed}`,
     syncRoomsFailed: 'סנכרון החדרים מנקודות המסלול נכשל',
+    editPointsMode: 'עריכת נקודות מסלול',
+    editPointsInstructions: 'לחץ על נקודה קיימת במפה כדי לערוך אותה.',
+    editPointsPanelTitle: 'עריכת נקודת מסלול',
+    editPointsNameLabel: 'שם',
+    editPointsTypeLabel: 'סוג נקודה',
+    editPointsMovePoint: 'הזז נקודה',
+    editPointsMovingActive: 'לחץ על המיקום החדש…',
+    editPointsOutOfBounds: 'המיקום הזה מחוץ לתמונת המפה.',
+    editPointsSaveError: 'שמירת השינויים נכשלה.',
+    editPointsNameTooShort: 'השם קצר מדי.',
+    editPointsDeleteError: 'מחיקת הנקודה נכשלה.',
+    editPointsConnectedEdges: 'קשרים מחוברים',
+    editPointsNone: 'אין',
+    editPointsInaccessible: 'לא נגיש',
+    editPointsLinkedRoom: 'חדר מקושר',
+    editPointsLinkedConnector: 'מחבר אנכי מקושר',
+    editPointsDeleteAction: 'מחק נקודה זו',
+    editPointsConfirmDelete: 'למחוק נקודת מסלול זו? לא ניתן לבטל פעולה זו.',
     deleteConnectionMode: 'מחיקת חיבור',
     deleteConnectionInstructions: 'לחץ על חיבור קיים כדי לבחור אותו למחיקה.',
     deleteConnectionCancelMode: 'ביטול מצב מחיקה',
@@ -878,6 +1138,10 @@ const UI = {
     autoConnectRejectAllLowConfidence: 'דחיית כל ההצעות בביטחון נמוך',
     autoConnectNothingToReview: 'לא נמצאו יעדי חדר/חנות לא מחוברים במפה זו.',
     autoConnectNoCorridorPointFound: 'לא נמצאה נקודת מסדרון',
+    autoConnectReasonNoTransitPoints: 'אין נקודות מסדרון/צומת במפה/בקומה זו',
+    autoConnectReasonTransitNotConnected: 'קיימות נקודות מסדרון/צומת אך הן אינן מחוברות זו לזו בשום חיבור מסלול',
+    autoConnectReasonTooFar: 'אין נקודת מסדרון/צומת קרובה מספיק לחיבור',
+    autoConnectReasonNestedParentNotReady: 'חדר האב המאושר עדיין אינו מוכן לקבל חיבורים',
     autoConnectUncalibrated: 'לא מכויל',
     autoConnectConfidenceHigh: 'ביטחון גבוה',
     autoConnectConfidenceMedium: 'ביטחון בינוני',
@@ -946,6 +1210,44 @@ const UI = {
     semanticDestPreviewFailed: 'תצוגת היעדים המקדימה נכשלה',
     semanticDestNoAccepted: 'יש לאשר הצעה אחת לפחות לפני יצירת יעדים.',
     semanticDestApplyFailed: 'יצירת היעדים נכשלה',
+
+    // ── Fast Batch Destination Placement ("Place All Destinations") ─────────
+    semanticBatchPlaceAll: 'מיקום כל היעדים',
+    semanticBatchPanelTitle: 'מיקום קבוצתי',
+    semanticBatchDestinationOf: (i, n) => `יעד ${i} מתוך ${n}`,
+    semanticBatchClickInstructions: 'לחץ על מיקום הדלת במפה.',
+    semanticBatchLocationRecorded: 'המיקום נרשם עבור יעד זה.',
+    semanticBatchLocationSelected: (name) => `המיקום נבחר עבור ${name}`,
+    semanticBatchProgressPlaced: (placed, total) => `מוקמו ${placed} מתוך ${total}`,
+    semanticBatchProgressRemaining: (remaining) => `נותרו ${remaining}`,
+    semanticBatchProgressRejected: (rejected) => `נדחו ${rejected}`,
+    semanticBatchEnterHint: 'לחץ Enter כדי לעבור ליעד הבא.',
+    semanticBatchAllResolved: 'כל היעדים מוקמו, דולגו או נדחו. פתח את הסקירה כדי לשמור.',
+    semanticBatchPrevious: 'הקודם',
+    semanticBatchSkip: 'דלג לעת עתה',
+    semanticBatchReject: 'דחה יעד',
+    semanticBatchUndo: 'בטל את המיקום האחרון',
+    semanticBatchChangeLocation: 'שנה מיקום',
+    semanticBatchExit: 'צא ממצב מיקום',
+    semanticBatchReviewTitle: 'סקירת יעדים',
+    semanticBatchBackToPlacement: 'חזרה למיקום',
+    semanticBatchSaveAll: 'שמירת כל היעדים',
+    semanticBatchSaveConfirmTitle: 'לשמור את כל היעדים?',
+    semanticBatchSaveConfirmBody: (count) =>
+      `פעולה זו תיצור או תשתמש מחדש ב-${count} יעד/ים בשמירה סופית אחת. שום דבר לא נשמר עד לאישור.`,
+    semanticBatchSaveFailedWithErrors: 'חלק מהיעדים נכשלו באימות — שום דבר לא נשמר. תקן את הפריטים למטה ונסה שוב.',
+    semanticBatchExitWarningTitle: 'לצאת ממצב מיקום?',
+    semanticBatchExitWarningBody: 'יש לך התקדמות מיקום שלא נשמרה. היא נשמרת מקומית בדפדפן זה, אך שום דבר לא נכתב למסד הנתונים עד שתלחץ על שמירת כל היעדים.',
+    semanticBatchResumeDraftTitle: 'להמשיך מיקום קודם?',
+    semanticBatchResumeDraftBody: 'מצאנו התקדמות מיקום קבוצתי שלא נשמרה עבור מפה זו. האם ברצונך להמשיך מהנקודה שבה הפסקת, או להתחיל מחדש?',
+    semanticBatchResumeDraft: 'המשך מיקום',
+    semanticBatchDiscardDraft: 'מחק טיוטה',
+    semanticBatchFloorLabel: (floor) => `קומה ${floor}`,
+    semanticBatchNoLocationYet: 'עדיין אין מיקום',
+    semanticBatchStatusReady: 'מוכן',
+    semanticBatchStatusRejected: 'נדחה',
+    semanticBatchStatusMissing: 'חסר מיקום',
+
     testMode: 'בדיקת מסלול',
     testStart: 'נקודת התחלה',
     testEnd: 'נקודת יעד',
@@ -985,13 +1287,61 @@ const UI = {
     uploadBuildingAuto: 'יצירה/שימוש חוזר אוטומטי משם הקמפוס',
     uploadFloor: 'קומה',
     uploadAutoGenerateGraph: 'צור אוטומטית גרף מסלולים לאחר העיבוד',
-    regenerateGraph: 'צור מחדש את הגרף',
+    regenerateGraph: 'יצירת גרף מסלולים (ניסיוני)',
+    graphGenerationExperimentalNote:
+      'תכונה אופציונלית וניסיונית ליצירה אוטומטית מתמונת המפה. הוספת נקודות מסלול ידנית היא שיטת העבודה המומלצת והנתמכת — בדקו בעיון את הגרף המוצע לפני האישור.',
     graphGenerating: 'מייצר...',
     clearGeneratedGraph: 'נקה גרף שנוצר אוטומטית',
     graphGenerationDone: 'יצירת גרף המסלולים הסתיימה.',
     graphGenerationFailed: 'יצירת גרף המסלולים נכשלה',
     graphClearedSummary: (points, edges) =>
       `נוקו ${points} נקודות ו-${edges} קשתות שנוצרו אוטומטית.`,
+
+    removeGeneratedNavData: 'מחיקת נתוני ניווט שנוצרו אוטומטית',
+    resetAllNavData: 'איפוס כל נתוני הניווט במפה זו',
+    cleanupPreviewLoading: 'טוען תצוגה מקדימה…',
+    cleanupPreviewFailed: 'טעינת תצוגת המחיקה של הנתונים שנוצרו נכשלה',
+    cleanupApplyFailed: 'מחיקת נתוני הניווט שנוצרו אוטומטית נכשלה',
+    cleanupApplySummary: (points, edges) =>
+      `נמחקו ${points} נקודות מסלול ו-${edges} חיבורים שנוצרו אוטומטית.`,
+    cleanupPreviewTitle: 'מחיקת נתוני ניווט שנוצרו אוטומטית — תצוגה מקדימה',
+    cleanupGeneratedPoints: 'נקודות מסלול שנוצרו אוטומטית (יימחקו)',
+    cleanupGeneratedEdges: 'חיבורים שנוצרו אוטומטית (יימחקו)',
+    cleanupManualPoints: 'נקודות מסלול ידניות (יישארו)',
+    cleanupManualEdges: 'חיבורים ידניים (יישארו)',
+    cleanupUnknownLegacy: 'נקודות לא ודאיות/ישנות (יישארו — לא הוכח שנוצרו אוטומטית)',
+    cleanupUnknownLegacyNote: 'לא הוכח שנוצרו אוטומטית, ולכן לעולם לא יימחקו בפעולה זו.',
+    cleanupLinkedRooms: 'חדרים המקושרים לנקודות שנוצרו אוטומטית',
+    cleanupLinkedConnectors: 'חיבורים אנכיים המקושרים לנקודות שנוצרו אוטומטית',
+    cleanupDependentEdges: 'חיבורים ידניים שגם יוסרו (נוגעים בנקודה שנוצרה אוטומטית)',
+    cleanupNoneToDelete: 'לא נמצאו נתונים שהוכח שנוצרו אוטומטית במפה זו — אין מה למחוק.',
+    cleanupConfirmButton: 'מחק נתונים שנוצרו אוטומטית',
+    cleanupApplying: 'מוחק…',
+
+    resetPreviewFailed: 'טעינת תצוגת האיפוס המלא נכשלה',
+    resetApplyFailed: 'איפוס נתוני הניווט למפה זו נכשל',
+    resetApplySummary: (points, edges) =>
+      `נמחקו ${points} נקודות מסלול ו-${edges} חיבורים ממפה זו.`,
+    resetPreviewTitle: 'איפוס כל נתוני הניווט במפה זו — תצוגה מקדימה',
+    resetWarning:
+      'פעולה זו תמחק את כל נקודות המסלול והחיבורים במפה זו, כולל כאלה שנוספו ידנית. הניווט הציבורי במפה זו לא יהיה זמין עד שמנהל יוסיף נקודות מסלול חדשות ידנית. לא ניתן לבטל פעולה זו.',
+    resetTotalPoints: 'סך כל נקודות המסלול במפה זו',
+    resetTotalEdges: 'סך כל החיבורים במפה זו',
+    resetBreakdownManual: 'ידניות',
+    resetBreakdownGenerated: 'שנוצרו אוטומטית',
+    resetBreakdownSemantic: 'יעדים סמנטיים',
+    resetBreakdownConnector: 'תחנות חיבור אנכי',
+    resetBreakdownUnknown: 'לא ודאיות/ישנות',
+    resetLinkedRooms: 'חדרים מקושרים (הקישור יוסר, החדר יישאר)',
+    resetLinkedConnectors: 'חיבורים אנכיים מושפעים (הנתונים יישארו)',
+    resetLinkedLocationCodes: 'קודי QR/מיקום מקושרים (יושבתו)',
+    resetNoneToDelete: 'למפה זו אין נקודות מסלול או חיבורים — אין מה לאפס.',
+    resetConfirmInstructions: (mapName) =>
+      `הקלד/י את שם המפה ("${mapName}") או את הביטוי "RESET NAVIGATION DATA" לאישור.`,
+    resetConfirmPlaceholder: 'הקלד/י את שם המפה או RESET NAVIGATION DATA',
+    resetConfirmButton: 'מחק לצמיתות את כל נתוני הניווט',
+    resetApplying: 'מאפס…',
+
     upload: 'העלה מפה',
     uploading: 'מעלה...',
     uploadSuccess: 'המפה הועלתה והעיבוד התחיל אוטומטית.',
@@ -1077,7 +1427,12 @@ const INITIAL_UPLOAD_FORM = {
   // Set to an existing building's id to attach this map to it instead.
   buildingId: '',
   floor: 0,
-  autoGenerateGraph: true,
+  // Default changed to false (navigation-data cleanup task, Section 1.3):
+  // graph generation is no longer applied automatically on upload under
+  // any circumstance — this flag is sent for backward API compatibility
+  // but the backend now ignores it. Use the explicit "Generate Route
+  // Graph" preview/confirm action after upload instead.
+  autoGenerateGraph: false,
 };
 
 const INITIAL_MAP_GROUP_FORM = {
@@ -1172,6 +1527,7 @@ const DeleteIcon = () => (
 
 const AdminMapScreen = () => {
   const { lang, setLang } = useLang();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -1200,6 +1556,30 @@ const AdminMapScreen = () => {
   const [routePoints, setRoutePoints] = useState([]);
   const [isPointsLoading, setIsPointsLoading] = useState(false);
   const [pointsError, setPointsError] = useState('');
+
+  // RBAC/dashboard cleanup task, Phase 13 — "Edit Route Points" mode
+  // state. Deliberately separate from the pre-existing 'point' (Add
+  // Point) mode's clickedPoint/pointName state above: this mode never
+  // creates a point from a plain click (see the mode==='edit-points'
+  // branch in the canvas click handler), it only selects/edits/moves an
+  // EXISTING one, so it must never share state with the create-flow.
+  const [searchParams] = useSearchParams();
+  const [editPointTarget, setEditPointTarget] = useState(null); // the RoutePoint currently open in the edit panel
+  const [editPointMoving, setEditPointMoving] = useState(false); // true while the next map click repositions editPointTarget
+  const [editPointDraftName, setEditPointDraftName] = useState('');
+  const [editPointDraftType, setEditPointDraftType] = useState('');
+  const [editPointSaving, setEditPointSaving] = useState(false);
+  const [editPointError, setEditPointError] = useState('');
+  const [editPointConfirmDelete, setEditPointConfirmDelete] = useState(false);
+  const [editPointEdges, setEditPointEdges] = useState([]);
+  const [editPointEdgesLoading, setEditPointEdgesLoading] = useState(false);
+  const [editPointRoom, setEditPointRoom] = useState(null);
+  const [editPointConnector, setEditPointConnector] = useState(null);
+  // Guards against re-opening the same ?editPointId= deep link over and
+  // over every time routePoints reloads (e.g. after the move/save itself
+  // triggers a refresh) — only the FIRST successful open per navigation
+  // acts on the URL param.
+  const editPointDeepLinkHandledRef = useRef(false);
 
   const [routeEdges, setRouteEdges] = useState([]);
   const [isEdgesLoading, setIsEdgesLoading] = useState(false);
@@ -1415,6 +1795,38 @@ const AdminMapScreen = () => {
   const [semanticDestManualPlaceTargetId, setSemanticDestManualPlaceTargetId] = useState(null);
   const [semanticDestApplyResult, setSemanticDestApplyResult] = useState(null);
 
+  // Fast batch destination placement ("Place All Destinations") — a
+  // DISTINCT sub-workflow layered on top of the proposals array above.
+  // Entering batch mode treats every needs-manual-placement proposal as
+  // an ordered queue walked one item at a time, advancing automatically
+  // after each map click, with exactly one final "Save All Destinations"
+  // confirmation — never a per-item Accept/OK click. The existing
+  // per-card preview panel above is left fully intact (still reachable,
+  // still works exactly as before) for an admin who prefers it.
+  const [semanticBatchActive, setSemanticBatchActive] = useState(false);
+  const [semanticBatchQueue, setSemanticBatchQueue] = useState([]); // ordered semantic_item_id[]
+  const [semanticBatchIndex, setSemanticBatchIndex] = useState(0);
+  const [semanticBatchStatuses, setSemanticBatchStatuses] = useState({}); // id -> 'pending'|'skipped'|'placed'|'rejected'
+  // Undo stack: each entry restores exactly one prior PLACEMENT (never
+  // skip/reject — matches the "Undo last placement" control's own name).
+  const [semanticBatchHistory, setSemanticBatchHistory] = useState([]);
+  const [semanticBatchFeedback, setSemanticBatchFeedback] = useState('');
+  // True only right after the admin explicitly clicks "Change location"
+  // for the active item — otherwise a map click while revisiting an
+  // already-'placed' item (e.g. after Previous) is ignored rather than
+  // silently overwriting it.
+  const [semanticBatchAwaitingReplace, setSemanticBatchAwaitingReplace] = useState(false);
+  const [semanticBatchReviewOpen, setSemanticBatchReviewOpen] = useState(false);
+  const [semanticBatchConfirmOpen, setSemanticBatchConfirmOpen] = useState(false);
+  const [semanticBatchExitWarningOpen, setSemanticBatchExitWarningOpen] = useState(false);
+  const [semanticBatchSaving, setSemanticBatchSaving] = useState(false);
+  const [semanticBatchSaveError, setSemanticBatchSaveError] = useState('');
+  const [semanticBatchItemErrors, setSemanticBatchItemErrors] = useState({});
+  // Draft-recovery prompt (Section 9): non-null only when a previously
+  // saved, unfinished batch draft was found in localStorage for this
+  // exact map + publication + admin combination.
+  const [semanticBatchDraftPrompt, setSemanticBatchDraftPrompt] = useState(null);
+
   const fullMapImageRef = useRef(null);
 
   const activeMap = useMemo(
@@ -1539,8 +1951,16 @@ const AdminMapScreen = () => {
   }, []);
 
   useEffect(() => {
-    loadMaps();
+    // RBAC/dashboard cleanup task, Phase 5/13 — role-aware login redirect
+    // (building_manager with exactly one assigned map) and "Open on Map"
+    // deep links (Section 7 / Section 6's per-point "Open on Map" action)
+    // both land here as ?mapId=<id>. loadMaps() already prefers an
+    // explicit preferredMapId over its own is_current/first-map fallback,
+    // so passing it through is enough to make the deep link work with no
+    // change to the fallback logic itself.
+    loadMaps(searchParams.get('mapId') || '');
     loadMapGroups();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadMaps, loadMapGroups]);
 
   // Buildings list for the room/store connect-place picker. Loaded once —
@@ -1647,6 +2067,177 @@ const AdminMapScreen = () => {
     [t.pointsError, t.edgesError],
   );
 
+  // ── Edit Route Points mode handlers (RBAC/dashboard cleanup task, Phase
+  // 13) ────────────────────────────────────────────────────────────────
+  // Opens the detail panel for an EXISTING point — never creates one.
+  // Also fires the "inspect connected edges / linked Room / linked
+  // vertical connector" lookups so the panel has real data as soon as it
+  // opens rather than a second explicit step.
+  const openEditPointPanel = useCallback((point) => {
+    if (!point) return;
+
+    setEditPointTarget(point);
+    setEditPointDraftName(point.name || '');
+    setEditPointDraftType(point.point_type || '');
+    setEditPointMoving(false);
+    setEditPointError('');
+    setEditPointConfirmDelete(false);
+    setEditPointRoom(null);
+    setEditPointConnector(null);
+    setEditPointEdges([]);
+
+    const pointId = point.id;
+
+    setEditPointEdgesLoading(true);
+    getRouteEdges({ map_id: point.map_id })
+      .then((edges) => {
+        const connected = (Array.isArray(edges) ? edges : []).filter(
+          (edge) =>
+            edge.from_point_id === pointId || edge.to_point_id === pointId,
+        );
+        setEditPointEdges(connected);
+      })
+      .catch((error) => {
+        console.error('Failed to load connected edges for edit panel:', error);
+        setEditPointEdges([]);
+      })
+      .finally(() => setEditPointEdgesLoading(false));
+
+    if (point.room_id) {
+      getRoomById(point.room_id)
+        .then((room) => setEditPointRoom(room))
+        .catch((error) => {
+          console.error('Failed to load linked room for edit panel:', error);
+          setEditPointRoom(null);
+        });
+    }
+
+    if (point.connector_id) {
+      getVerticalConnectorById(point.connector_id)
+        .then((connector) => setEditPointConnector(connector))
+        .catch((error) => {
+          console.error(
+            'Failed to load linked vertical connector for edit panel:',
+            error,
+          );
+          setEditPointConnector(null);
+        });
+    }
+  }, []);
+
+  const closeEditPointPanel = useCallback(() => {
+    setEditPointTarget(null);
+    setEditPointMoving(false);
+    setEditPointError('');
+    setEditPointConfirmDelete(false);
+    setEditPointEdges([]);
+    setEditPointRoom(null);
+    setEditPointConnector(null);
+  }, []);
+
+  // Selecting an existing marker while 'edit-points' mode is active — the
+  // ONLY way this mode ever targets a point; a plain background click
+  // (handled in the main canvas click handler) is always a no-op here so
+  // normal map clicks can never accidentally create or move anything.
+  const selectPointForEditing = useCallback(
+    (point, event) => {
+      if (event) event.stopPropagation();
+      openEditPointPanel(point);
+    },
+    [openEditPointPanel],
+  );
+
+  // Persists a Move Point repositioning — called only from the main
+  // canvas click handler's mode==='edit-points' branch, and only while
+  // editPointMoving is true (an explicit toggle the admin must turn on
+  // first). Bounds are validated against the map's own natural image
+  // size before ever calling the backend, so a mis-click just outside the
+  // rendered image can never silently save an out-of-bounds coordinate.
+  const handleEditPointMoveTo = useCallback(
+    async (x, y) => {
+      if (!editPointTarget) return;
+
+      const naturalWidth = fullMapMetrics?.naturalWidth;
+      const naturalHeight = fullMapMetrics?.naturalHeight;
+
+      if (
+        Number.isFinite(naturalWidth) &&
+        Number.isFinite(naturalHeight) &&
+        (x < 0 || y < 0 || x > naturalWidth || y > naturalHeight)
+      ) {
+        setEditPointError(t.editPointsOutOfBounds || 'Point is outside the map image.');
+        return;
+      }
+
+      setEditPointSaving(true);
+      setEditPointError('');
+
+      try {
+        const updated = await updateRoutePoint(editPointTarget.id, { x, y });
+        setEditPointTarget(updated);
+        setEditPointMoving(false);
+        await refreshRouteGraph(selectedMapId);
+      } catch (error) {
+        console.error('Failed to move route point:', error);
+        setEditPointError(error?.message || t.editPointsSaveError || 'Failed to move point.');
+      } finally {
+        setEditPointSaving(false);
+      }
+    },
+    [editPointTarget, fullMapMetrics, refreshRouteGraph, selectedMapId, t],
+  );
+
+  const handleEditPointSaveDetails = useCallback(async () => {
+    if (!editPointTarget) return;
+
+    const trimmedName = (editPointDraftName || '').trim();
+    if (trimmedName.length < 2) {
+      setEditPointError(t.editPointsNameTooShort || 'Name is too short.');
+      return;
+    }
+
+    setEditPointSaving(true);
+    setEditPointError('');
+
+    try {
+      const updated = await updateRoutePoint(editPointTarget.id, {
+        name: trimmedName,
+        point_type: editPointDraftType || null,
+      });
+      setEditPointTarget(updated);
+      await refreshRouteGraph(selectedMapId);
+    } catch (error) {
+      console.error('Failed to save route point details:', error);
+      setEditPointError(error?.message || t.editPointsSaveError || 'Failed to save changes.');
+    } finally {
+      setEditPointSaving(false);
+    }
+  }, [editPointTarget, editPointDraftName, editPointDraftType, refreshRouteGraph, selectedMapId, t]);
+
+  const handleEditPointDelete = useCallback(async () => {
+    if (!editPointTarget) return;
+
+    setEditPointSaving(true);
+    setEditPointError('');
+
+    try {
+      await deleteRoutePoint(editPointTarget.id);
+      closeEditPointPanel();
+      await refreshRouteGraph(selectedMapId);
+    } catch (error) {
+      console.error('Failed to delete route point:', error);
+      // The backend already blocks deletion with a clear 409 when this
+      // point still has connected edges or a linked location code — that
+      // message is surfaced verbatim rather than a generic fallback, and
+      // the panel/selection is deliberately kept open (never silently
+      // closed) so the admin can act on it (e.g. delete the edges first).
+      setEditPointError(error?.message || t.editPointsDeleteError || 'Failed to delete point.');
+      setEditPointConfirmDelete(false);
+    } finally {
+      setEditPointSaving(false);
+    }
+  }, [editPointTarget, closeEditPointPanel, refreshRouteGraph, selectedMapId, t]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -1680,6 +2271,30 @@ const AdminMapScreen = () => {
       cancelled = true;
     };
   }, [selectedMapId, refreshRouteGraph]);
+
+  // RBAC/dashboard cleanup task, Phase 13 — "Open on Map" deep link:
+  // ?editPointId=<id> (paired with ?mapId=<id> above so the right map is
+  // already selected). Runs after routePoints for the selected map have
+  // actually loaded, and deliberately AFTER the map-switch effect above
+  // (which resets mode to 'point' on every selectedMapId change) — this
+  // is what lets it win instead of being immediately reset back to
+  // 'point'. Fires at most once per page load (editPointDeepLinkHandledRef)
+  // so it never re-triggers itself from the routePoints refresh a
+  // save/move/delete inside the panel itself causes.
+  useEffect(() => {
+    if (editPointDeepLinkHandledRef.current) return;
+    const targetId = searchParams.get('editPointId');
+    if (!targetId) return;
+    if (!Array.isArray(routePoints) || routePoints.length === 0) return;
+
+    const target = routePoints.find((p) => p.id === targetId);
+    if (!target) return;
+
+    editPointDeepLinkHandledRef.current = true;
+    setMode('edit-points');
+    openEditPointPanel(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routePoints, searchParams]);
 
   useEffect(() => {
     if (!pollingMapId) return undefined;
@@ -2027,13 +2642,39 @@ const AdminMapScreen = () => {
 
   const [isGeneratingGraph, setIsGeneratingGraph] = useState(false);
 
+  // "Generate Route Graph" is now an explicit preview -> confirm -> apply
+  // workflow (navigation-data cleanup task, Section 1.3): nothing is
+  // written until the admin has seen the proposed node/edge counts and
+  // explicitly confirmed. Preview never touches MongoDB.
   const handleGenerateGraph = async () => {
     if (!activeMap?.id) return;
 
     setIsGeneratingGraph(true);
 
     try {
-      const updatedMap = await generateMapGraph(activeMap.id);
+      const preview = await previewMapGraph(activeMap.id);
+
+      if (!preview.meets_confidence_threshold) {
+        alert(
+          preview.note ||
+            t.graphGenerationLowConfidence ||
+            t.graphGenerationFailed,
+        );
+        return;
+      }
+
+      const confirmed = window.confirm(
+        (t.graphGenerationConfirmPrompt
+          ? t.graphGenerationConfirmPrompt(
+              preview.nodes.length,
+              preview.edges.length,
+            )
+          : `Generate ${preview.nodes.length} point(s) and ${preview.edges.length} connection(s) for this map? Review carefully before confirming — nothing is saved until you confirm.`),
+      );
+
+      if (!confirmed) return;
+
+      const updatedMap = await generateMapGraph(activeMap.id, { confirm: true });
       await Promise.all([loadMaps(), refreshRouteGraph(activeMap.id)]);
       alert(
         updatedMap.graphGenerationNote ||
@@ -2062,6 +2703,102 @@ const AdminMapScreen = () => {
     } catch (error) {
       console.error('Failed to clear generated graph:', error);
       alert(error.message || t.graphGenerationFailed);
+    }
+  };
+
+  // ── Navigation-data-problem task, Part 3A/3B — Generated-only cleanup
+  //    + Full Navigation Reset for the active map. Both are strictly
+  //    preview -> explicit confirm -> apply; neither ever runs from a
+  //    plain click. ──────────────────────────────────────────────────────
+
+  const [cleanupPreview, setCleanupPreview] = useState(null);
+  const [isCleanupPreviewLoading, setIsCleanupPreviewLoading] = useState(false);
+  const [isCleanupApplying, setIsCleanupApplying] = useState(false);
+  const [cleanupError, setCleanupError] = useState('');
+
+  const handleOpenGeneratedCleanup = async () => {
+    if (!activeMap?.id) return;
+    setIsCleanupPreviewLoading(true);
+    setCleanupError('');
+    try {
+      const preview = await previewGeneratedGraphCleanup(activeMap.id);
+      setCleanupPreview(preview);
+    } catch (error) {
+      console.error('Failed to preview generated navigation cleanup:', error);
+      alert(error.message || t.cleanupPreviewFailed);
+    } finally {
+      setIsCleanupPreviewLoading(false);
+    }
+  };
+
+  const handleCloseGeneratedCleanup = () => {
+    setCleanupPreview(null);
+    setCleanupError('');
+  };
+
+  const handleApplyGeneratedCleanup = async () => {
+    if (!activeMap?.id) return;
+    setIsCleanupApplying(true);
+    setCleanupError('');
+    try {
+      const result = await applyGeneratedGraphCleanup(activeMap.id, { confirm: true });
+      await Promise.all([loadMaps(), refreshRouteGraph(activeMap.id)]);
+      setCleanupPreview(null);
+      alert(t.cleanupApplySummary(result.points_deleted, result.edges_deleted));
+    } catch (error) {
+      console.error('Failed to apply generated navigation cleanup:', error);
+      setCleanupError(error.message || t.cleanupApplyFailed);
+    } finally {
+      setIsCleanupApplying(false);
+    }
+  };
+
+  const [resetPreview, setResetPreview] = useState(null);
+  const [isResetPreviewLoading, setIsResetPreviewLoading] = useState(false);
+  const [isResetApplying, setIsResetApplying] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetError, setResetError] = useState('');
+
+  const handleOpenFullReset = async () => {
+    if (!activeMap?.id) return;
+    setIsResetPreviewLoading(true);
+    setResetError('');
+    try {
+      const preview = await previewFullMapReset(activeMap.id);
+      setResetPreview(preview);
+      setResetConfirmText('');
+    } catch (error) {
+      console.error('Failed to preview full navigation reset:', error);
+      alert(error.message || t.resetPreviewFailed);
+    } finally {
+      setIsResetPreviewLoading(false);
+    }
+  };
+
+  const handleCloseFullReset = () => {
+    setResetPreview(null);
+    setResetConfirmText('');
+    setResetError('');
+  };
+
+  const handleApplyFullReset = async () => {
+    if (!activeMap?.id || !resetPreview) return;
+    setIsResetApplying(true);
+    setResetError('');
+    try {
+      const result = await applyFullMapReset(activeMap.id, {
+        confirm: true,
+        confirmationText: resetConfirmText,
+      });
+      await Promise.all([loadMaps(), refreshRouteGraph(activeMap.id)]);
+      setResetPreview(null);
+      setResetConfirmText('');
+      alert(t.resetApplySummary(result.points_deleted, result.edges_deleted));
+    } catch (error) {
+      console.error('Failed to apply full navigation reset:', error);
+      setResetError(error.message || t.resetApplyFailed);
+    } finally {
+      setIsResetApplying(false);
     }
   };
 
@@ -2782,6 +3519,24 @@ const AdminMapScreen = () => {
       return;
     }
 
+    // Edit Route Points mode (RBAC/dashboard cleanup task, Phase 13):
+    // selecting an existing point is handled entirely through each
+    // marker's own onClick (selectPointForEditing, wired on the route-
+    // point layer below) — a plain click on the map background/image
+    // must NEVER create or move a point while this mode is merely active.
+    // The one exception is the explicit "Move Point" sub-state: only
+    // once the admin has pressed Move Point in the detail panel does the
+    // NEXT background click actually reposition editPointTarget (still
+    // never creating a new point) — this two-step requirement is exactly
+    // what "explicit editing mode so normal Map clicks cannot
+    // accidentally create/move points" means in practice.
+    if (mode === 'edit-points') {
+      if (editPointMoving && editPointTarget) {
+        handleEditPointMoveTo(x, y);
+      }
+      return;
+    }
+
     // Delete Connection mode: edge selection happens exclusively through
     // each edge's own invisible hit-stroke (handleEdgeClickForDeletion,
     // wired directly on the edge overlay below) — a plain click on the map
@@ -2807,6 +3562,17 @@ const AdminMapScreen = () => {
     // proposal; otherwise the click is simply ignored, exactly like
     // Auto Connect / Delete Connection above.
     if (mode === 'semantic-destinations') {
+      // Fast batch placement (Section 3): while active, THIS click always
+      // targets the current batch queue item — takes priority over the
+      // older single-target "Pick Location" flow below. This is also the
+      // actual fix for that flow's map-click bug: the batch panel is a
+      // draggable/collapsible FloatingToolPanel instead of a fixed
+      // full-height sidebar, so it never permanently covers the room the
+      // admin needs to click.
+      if (semanticBatchActive) {
+        handleBatchDestinationMapClick(x, y);
+        return;
+      }
       if (semanticDestManualPlaceTargetId) {
         setSemanticDestProposals((previous) =>
           previous.map((proposal) =>
@@ -3722,6 +4488,26 @@ const AdminMapScreen = () => {
 
   const AUTO_CONNECT_TRANSIT_TYPES = new Set(['hallway', 'junction']);
 
+  // Corridor point_type filtering fix: maps each distinct backend
+  // `reason` code to its own translated label, instead of always showing
+  // the generic "No corridor point found" line regardless of why. Falls
+  // back to the generic label for reason values this build doesn't
+  // recognize (e.g. an older/newer backend), never to a blank string.
+  const getAutoConnectReasonLabel = (reason) => {
+    switch (reason) {
+      case 'no_transit_points_on_map':
+        return t.autoConnectReasonNoTransitPoints;
+      case 'transit_points_not_connected_by_edges':
+        return t.autoConnectReasonTransitNotConnected;
+      case 'no_transit_point_within_range':
+        return t.autoConnectReasonTooFar;
+      case 'nested_parent_not_ready':
+        return t.autoConnectReasonNestedParentNotReady;
+      default:
+        return t.autoConnectNoCorridorPointFound;
+    }
+  };
+
   const runAutoConnectPreview = async (scopeOverride) => {
     if (!activeMap?.id) {
       setAutoConnectError(t.noSelectedMap);
@@ -4107,6 +4893,423 @@ const AdminMapScreen = () => {
     setSemanticDestSummary(null);
     setSemanticDestApplyResult(null);
   };
+
+  // ── Fast batch destination placement ("Place All Destinations") ────────
+
+  const getSemanticBatchDraftKey = () =>
+    buildBatchDraftStorageKey({
+      mapId: activeMap?.id,
+      publicationId: semanticDestPublicationId,
+      adminId: user?.id || user?.email,
+    });
+
+  const handleBeginFreshSemanticBatch = () => {
+    const queueItemIds = buildBatchQueueItemIds(semanticDestProposals);
+
+    // Existing-linked-point proposals (Section 8: "do not require a new
+    // location unless the admin explicitly chooses to replace it") are
+    // auto-included in the final save without ever entering the queue.
+    setSemanticDestProposals((previous) =>
+      previous.map((proposal) =>
+        proposal.placement_source !== 'needs_manual_placement' &&
+        proposal.localStatus !== 'rejected' &&
+        proposal.localStatus !== 'excluded'
+          ? { ...proposal, localStatus: 'accepted' }
+          : proposal,
+      ),
+    );
+
+    setSemanticBatchQueue(queueItemIds);
+    setSemanticBatchStatuses(initialBatchStatuses(queueItemIds));
+    setSemanticBatchIndex(0);
+    setSemanticBatchHistory([]);
+    setSemanticBatchFeedback('');
+    setSemanticBatchAwaitingReplace(false);
+    setSemanticBatchReviewOpen(false);
+    setSemanticBatchItemErrors({});
+    setSemanticBatchSaveError('');
+    setSemanticBatchDraftPrompt(null);
+    setSemanticBatchActive(true);
+  };
+
+  // Entry point for the "Place All Destinations" action (Section 1).
+  // Checks for a resumable local draft (Section 9) before starting fresh.
+  const handleStartSemanticBatchPlacement = () => {
+    let existingDraft = null;
+    try {
+      existingDraft = deserializeBatchDraft(
+        window.localStorage.getItem(getSemanticBatchDraftKey()),
+      );
+    } catch {
+      existingDraft = null;
+    }
+
+    if (existingDraft && existingDraft.queueItemIds?.length) {
+      setSemanticBatchDraftPrompt(existingDraft);
+      return;
+    }
+
+    handleBeginFreshSemanticBatch();
+  };
+
+  const handleResumeSemanticBatchDraft = () => {
+    const draft = semanticBatchDraftPrompt;
+    if (!draft) return;
+
+    // Re-applies the draft's remembered coordinates/status onto the
+    // CURRENT (freshly re-fetched) proposals — never trusts stale
+    // proposal data from before the page reload, only the x/y + status
+    // the admin actually chose.
+    setSemanticDestProposals((previous) =>
+      previous.map((proposal) => {
+        const placement = draft.placements?.[proposal.semantic_item_id];
+        const status = draft.statuses?.[proposal.semantic_item_id];
+        if (!placement && !status) return proposal;
+        return {
+          ...proposal,
+          ...(placement ? { x: placement.x, y: placement.y } : {}),
+          ...(status === 'placed' ? { localStatus: 'accepted' } : {}),
+          ...(status === 'rejected' ? { localStatus: 'rejected' } : {}),
+        };
+      }),
+    );
+
+    const statuses = draft.statuses || initialBatchStatuses(draft.queueItemIds);
+    setSemanticBatchQueue(draft.queueItemIds);
+    setSemanticBatchStatuses(statuses);
+    const resumeIndex = findNextActiveIndex(draft.queueItemIds, statuses, -1);
+    setSemanticBatchIndex(resumeIndex === -1 ? 0 : resumeIndex);
+    setSemanticBatchHistory([]);
+    setSemanticBatchFeedback('');
+    setSemanticBatchAwaitingReplace(false);
+    setSemanticBatchReviewOpen(resumeIndex === -1);
+    setSemanticBatchItemErrors({});
+    setSemanticBatchSaveError('');
+    setSemanticBatchDraftPrompt(null);
+    setSemanticBatchActive(true);
+  };
+
+  const handleDiscardSemanticBatchDraft = () => {
+    try {
+      window.localStorage.removeItem(getSemanticBatchDraftKey());
+    } catch {
+      // Discarding is still effectively true in-memory even if the
+      // underlying storage write fails — semanticBatchDraftPrompt is
+      // cleared by handleBeginFreshSemanticBatch below either way.
+    }
+    handleBeginFreshSemanticBatch();
+  };
+
+  // The core placement interaction (Section 2/3): a valid map click
+  // while batch mode is active assigns x/y to the CURRENT active queue
+  // item and auto-advances — no separate Accept/OK/Next click required.
+  const handleBatchDestinationMapClick = (x, y) => {
+    const activeItemId = semanticBatchQueue[semanticBatchIndex];
+    if (!activeItemId) return;
+
+    const currentStatus = semanticBatchStatuses[activeItemId];
+    // Revisiting an already-placed item (e.g. via Previous) never
+    // silently overwrites it — only explicit "Change location" arms this.
+    if (currentStatus === 'placed' && !semanticBatchAwaitingReplace) {
+      return;
+    }
+
+    const proposal = semanticDestProposals.find(
+      (candidate) => candidate.semantic_item_id === activeItemId,
+    );
+
+    setSemanticBatchHistory((previous) => [
+      ...previous,
+      {
+        itemId: activeItemId,
+        prevStatus: currentStatus,
+        prevX: proposal?.x ?? null,
+        prevY: proposal?.y ?? null,
+      },
+    ]);
+
+    setSemanticDestProposals((previous) =>
+      previous.map((candidate) =>
+        candidate.semantic_item_id === activeItemId
+          ? { ...candidate, x, y, localStatus: 'accepted' }
+          : candidate,
+      ),
+    );
+
+    const nextStatuses = { ...semanticBatchStatuses, [activeItemId]: 'placed' };
+    setSemanticBatchStatuses(nextStatuses);
+    setSemanticBatchAwaitingReplace(false);
+    setSemanticBatchFeedback(
+      t.semanticBatchLocationSelected(
+        proposal?.name_en || proposal?.name_original || activeItemId,
+      ),
+    );
+
+    const nextIndex = findNextActiveIndex(semanticBatchQueue, nextStatuses, semanticBatchIndex);
+    if (nextIndex === -1) {
+      setSemanticBatchReviewOpen(true);
+    } else {
+      setSemanticBatchIndex(nextIndex);
+    }
+  };
+
+  const handleBatchSkip = () => {
+    const activeItemId = semanticBatchQueue[semanticBatchIndex];
+    if (!activeItemId) return;
+    const nextStatuses = { ...semanticBatchStatuses, [activeItemId]: 'skipped' };
+    setSemanticBatchStatuses(nextStatuses);
+    setSemanticBatchFeedback('');
+    const nextIndex = findNextActiveIndex(semanticBatchQueue, nextStatuses, semanticBatchIndex);
+    if (nextIndex === -1) {
+      setSemanticBatchReviewOpen(true);
+    } else {
+      setSemanticBatchIndex(nextIndex);
+    }
+  };
+
+  const handleBatchReject = () => {
+    const activeItemId = semanticBatchQueue[semanticBatchIndex];
+    if (!activeItemId) return;
+    setSemanticDestProposals((previous) =>
+      previous.map((candidate) =>
+        candidate.semantic_item_id === activeItemId
+          ? { ...candidate, localStatus: 'rejected' }
+          : candidate,
+      ),
+    );
+    const nextStatuses = { ...semanticBatchStatuses, [activeItemId]: 'rejected' };
+    setSemanticBatchStatuses(nextStatuses);
+    setSemanticBatchFeedback('');
+    const nextIndex = findNextActiveIndex(semanticBatchQueue, nextStatuses, semanticBatchIndex);
+    if (nextIndex === -1) {
+      setSemanticBatchReviewOpen(true);
+    } else {
+      setSemanticBatchIndex(nextIndex);
+    }
+  };
+
+  const handleBatchPrevious = () => {
+    setSemanticBatchAwaitingReplace(false);
+    setSemanticBatchIndex((previous) => Math.max(0, previous - 1));
+  };
+
+  const handleBatchChangeLocation = () => {
+    setSemanticBatchAwaitingReplace(true);
+  };
+
+  const handleBatchUndo = () => {
+    if (semanticBatchHistory.length === 0) return;
+    const last = semanticBatchHistory[semanticBatchHistory.length - 1];
+
+    setSemanticDestProposals((previous) =>
+      previous.map((candidate) =>
+        candidate.semantic_item_id === last.itemId
+          ? {
+              ...candidate,
+              x: last.prevX,
+              y: last.prevY,
+              localStatus:
+                last.prevStatus === 'placed' ? 'accepted' : candidate.localStatus,
+            }
+          : candidate,
+      ),
+    );
+    setSemanticBatchStatuses((previous) => ({
+      ...previous,
+      [last.itemId]: last.prevStatus,
+    }));
+    setSemanticBatchHistory((previous) => previous.slice(0, -1));
+    setSemanticBatchReviewOpen(false);
+    setSemanticBatchAwaitingReplace(false);
+
+    const undoneIndex = semanticBatchQueue.indexOf(last.itemId);
+    setSemanticBatchIndex(undoneIndex === -1 ? 0 : undoneIndex);
+  };
+
+  const handleRequestExitSemanticBatch = () => {
+    const progress = computeBatchProgress(semanticBatchQueue, semanticBatchStatuses);
+    if (progress.placed > 0 || progress.rejected > 0 || progress.skipped > 0) {
+      setSemanticBatchExitWarningOpen(true);
+    } else {
+      setSemanticBatchActive(false);
+    }
+  };
+
+  const handleConfirmExitSemanticBatch = () => {
+    setSemanticBatchExitWarningOpen(false);
+    setSemanticBatchActive(false);
+    setSemanticBatchReviewOpen(false);
+  };
+
+  const handleCancelExitSemanticBatch = () => {
+    setSemanticBatchExitWarningOpen(false);
+  };
+
+  const handleSelectSemanticBatchReviewItem = (itemId) => {
+    const index = semanticBatchQueue.indexOf(itemId);
+    if (index === -1) return;
+    setSemanticBatchIndex(index);
+    setSemanticBatchAwaitingReplace(true);
+    setSemanticBatchReviewOpen(false);
+  };
+
+  const handleOpenSemanticBatchSaveConfirm = () => {
+    setSemanticBatchSaveError('');
+    setSemanticBatchItemErrors({});
+    setSemanticBatchConfirmOpen(true);
+  };
+
+  const handleCancelSemanticBatchSaveConfirm = () => {
+    setSemanticBatchConfirmOpen(false);
+  };
+
+  // The ONE final write for the whole batch (Section 6/7) — reuses the
+  // existing apply endpoint with all_or_nothing=true rather than a new
+  // endpoint (see services/semantic_destination_service.py). Every
+  // non-rejected proposal with a usable location (freshly placed OR an
+  // existing linked point) is sent in a single request; the backend
+  // validates the entire batch before writing anything.
+  const handleSaveAllSemanticBatchDestinations = async () => {
+    const accepted = buildBatchAcceptedPayload(semanticDestProposals);
+
+    if (accepted.length === 0) {
+      setSemanticBatchSaveError(t.semanticDestNoAccepted);
+      return;
+    }
+
+    setSemanticBatchSaving(true);
+    setSemanticBatchSaveError('');
+    setSemanticBatchItemErrors({});
+
+    try {
+      const result = await applySemanticDestinations(activeMap.id, {
+        publicationId: semanticDestPublicationId,
+        accepted,
+        allOrNothing: true,
+      });
+
+      if (result.item_errors && Object.keys(result.item_errors).length > 0) {
+        setSemanticBatchItemErrors(result.item_errors);
+        setSemanticBatchSaveError(t.semanticBatchSaveFailedWithErrors);
+        setSemanticBatchConfirmOpen(false);
+        setSemanticBatchReviewOpen(true);
+        return;
+      }
+
+      setSemanticDestApplyResult(result);
+
+      // Refresh Rooms/RoutePoints/RouteEdges, exactly like the existing
+      // per-card apply flow.
+      await refreshRouteGraph(activeMap.id);
+
+      // Clear the local draft — a successful save is one of only two
+      // times this is allowed to happen (Section 9); the other is an
+      // explicit discard.
+      try {
+        window.localStorage.removeItem(getSemanticBatchDraftKey());
+      } catch {
+        // Nothing else to do if storage is unavailable — the batch
+        // itself still saved successfully server-side.
+      }
+
+      setSemanticBatchActive(false);
+      setSemanticBatchReviewOpen(false);
+      setSemanticBatchConfirmOpen(false);
+      setSemanticDestPhase('result');
+      setMode('point');
+    } catch (error) {
+      console.error('Save All Destinations failed:', error);
+      setSemanticBatchSaveError(error.message || t.semanticDestApplyFailed);
+      setSemanticBatchConfirmOpen(false);
+    } finally {
+      setSemanticBatchSaving(false);
+    }
+  };
+
+  // Section 9: persists the in-progress batch (queue order, every item's
+  // status, and every remembered x/y) to localStorage on every change
+  // while batch mode is active — never written to real Room/RoutePoint
+  // collections, purely a browser-local resume aid.
+  useEffect(() => {
+    if (!semanticBatchActive || !activeMap?.id) return undefined;
+
+    const placements = {};
+    semanticDestProposals.forEach((proposal) => {
+      if (proposal.x != null && proposal.y != null) {
+        placements[proposal.semantic_item_id] = { x: proposal.x, y: proposal.y };
+      }
+    });
+
+    try {
+      window.localStorage.setItem(
+        getSemanticBatchDraftKey(),
+        serializeBatchDraft({
+          queueItemIds: semanticBatchQueue,
+          statuses: semanticBatchStatuses,
+          placements,
+        }),
+      );
+    } catch {
+      // localStorage may be unavailable/full — batch placement still
+      // works for the current session even if the draft can't persist.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    semanticBatchActive,
+    semanticBatchQueue,
+    semanticBatchStatuses,
+    semanticDestProposals,
+    activeMap?.id,
+    semanticDestPublicationId,
+  ]);
+
+  // Section 4: keyboard shortcuts are an ADDITIONAL way to drive the
+  // workflow, never the only way — every action they trigger also has a
+  // corresponding on-screen button (Previous/Skip/Reject/Undo/Change
+  // location/Exit above, or the map click itself).
+  useEffect(() => {
+    if (!semanticBatchActive) return undefined;
+
+    const handleBatchKeyDown = (event) => {
+      const tag = event.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      if (event.key === 'Enter') {
+        const activeItemId = semanticBatchQueue[semanticBatchIndex];
+        const status = activeItemId ? semanticBatchStatuses[activeItemId] : null;
+        // "move to next only when current item is valid" (Section 4).
+        if (status === 'placed' || status === 'rejected') {
+          event.preventDefault();
+          const nextIndex = findNextActiveIndex(
+            semanticBatchQueue,
+            semanticBatchStatuses,
+            semanticBatchIndex,
+          );
+          if (nextIndex === -1) {
+            setSemanticBatchReviewOpen(true);
+          } else {
+            setSemanticBatchIndex(nextIndex);
+          }
+        }
+      } else if (event.key === 'Backspace' || (event.ctrlKey && event.key.toLowerCase() === 'z')) {
+        event.preventDefault();
+        handleBatchUndo();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        handleRequestExitSemanticBatch();
+      }
+    };
+
+    window.addEventListener('keydown', handleBatchKeyDown);
+    return () => window.removeEventListener('keydown', handleBatchKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    semanticBatchActive,
+    semanticBatchQueue,
+    semanticBatchIndex,
+    semanticBatchStatuses,
+    semanticBatchHistory,
+  ]);
 
   return (
     <div className="layout-wrapper">
@@ -4724,24 +5927,82 @@ const AdminMapScreen = () => {
                 {t.uploadNewMap}
               </button>
 
-              {activeMap?.processingStatus === 'completed' && (
-                <div className="adm-btn-row">
-                  <button
-                    className="adm-btn adm-btn-secondary"
-                    onClick={handleGenerateGraph}
-                    disabled={isGeneratingGraph}
+              {/* Navigation-data-problem task, Part 2: this optional,
+                  experimental automatic-generation workflow is hidden
+                  from the normal building_manager workflow entirely —
+                  manual RoutePoint creation is the only supported path
+                  for that role. super_admin/global_manager can still
+                  reach it, but only behind an explicit preview+confirm
+                  (handleGenerateGraph above never writes without both). */}
+              {activeMap?.processingStatus === 'completed' &&
+                user?.role !== 'building_manager' && (
+                <div className="adm-btn-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      className="adm-btn adm-btn-secondary"
+                      onClick={handleGenerateGraph}
+                      disabled={isGeneratingGraph}
+                      title={t.graphGenerationExperimentalNote}
+                    >
+                      {isGeneratingGraph
+                        ? t.graphGenerating
+                        : t.regenerateGraph}
+                    </button>
+
+                    <button
+                      className="adm-btn adm-btn-secondary"
+                      onClick={handleClearGeneratedGraph}
+                    >
+                      {t.clearGeneratedGraph}
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: '#8a9bb5',
+                      marginTop: 4,
+                      lineHeight: 1.4,
+                    }}
                   >
-                    {isGeneratingGraph
-                      ? t.graphGenerating
-                      : t.regenerateGraph}
+                    {t.graphGenerationExperimentalNote}
+                  </div>
+                </div>
+              )}
+
+              {/* Navigation-data-problem task, Part 3A/3B — safe cleanup
+                  for maps that already have hundreds of stored generated
+                  RoutePoints/RouteEdges (never touched by an ordinary
+                  upload/analysis/publish/sync anymore, but pre-existing
+                  data isn't removed by that fix alone). Both actions are
+                  strictly preview -> explicit confirm -> apply. Full Reset
+                  is Super Admin only, matching the backend's
+                  require_super_admin gate exactly (this is a UI
+                  convenience, not the real security boundary). */}
+              {activeMap?.id && (
+                <div className="adm-btn-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+                  <button
+                    type="button"
+                    className="adm-btn adm-btn-secondary"
+                    onClick={handleOpenGeneratedCleanup}
+                    disabled={isCleanupPreviewLoading}
+                  >
+                    {isCleanupPreviewLoading
+                      ? t.cleanupPreviewLoading
+                      : t.removeGeneratedNavData}
                   </button>
 
-                  <button
-                    className="adm-btn adm-btn-secondary"
-                    onClick={handleClearGeneratedGraph}
-                  >
-                    {t.clearGeneratedGraph}
-                  </button>
+                  {user?.role === 'super_admin' && (
+                    <button
+                      type="button"
+                      className="adm-btn adm-btn-danger"
+                      onClick={handleOpenFullReset}
+                      disabled={isResetPreviewLoading}
+                    >
+                      {isResetPreviewLoading
+                        ? t.cleanupPreviewLoading
+                        : t.resetAllNavData}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -5412,31 +6673,15 @@ const AdminMapScreen = () => {
                 {t.useOpenAI}
               </label>
 
-              <label
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 9,
-                  marginBottom: 16,
-                  color: '#315b8f',
-                  fontSize: 13,
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={uploadForm.autoGenerateGraph}
-                  onChange={(event) =>
-                    setUploadField(
-                      'autoGenerateGraph',
-                      event.target.checked,
-                    )
-                  }
-                />
-
-                {t.uploadAutoGenerateGraph}
-              </label>
+              {/* Navigation-data-problem task, Part 2: the "auto-generate
+                  walkable graph after upload" checkbox has been removed
+                  from the normal upload workflow — RoutePoints/RouteEdges
+                  must only ever be created manually or via the separate,
+                  explicit preview -> confirm "Generate Route Graph"
+                  action below (never automatically on upload). The
+                  underlying autoGenerateGraph form field is left at its
+                  default (false) and is now inert on the backend even if
+                  ever sent as true. */}
 
               {uploadError && (
                 <div
@@ -5662,26 +6907,10 @@ const AdminMapScreen = () => {
                         {t.useOpenAI}
                       </label>
 
-                      <label
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 9,
-                          color: '#315b8f',
-                          fontSize: 13,
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={row.autoGenerateGraph}
-                          onChange={(event) =>
-                            updateFloorRow(row.rowId, 'autoGenerateGraph', event.target.checked)
-                          }
-                        />
-                        {t.uploadAutoGenerateGraph}
-                      </label>
+                      {/* Navigation-data-problem task, Part 2: same
+                          removal as the single-map upload form above —
+                          no per-floor "auto-generate graph" control in
+                          the normal batch upload workflow either. */}
 
                       {rowErrors && rowErrors.length > 0 && (
                         <div style={{ marginTop: 8, fontSize: 12, color: '#b42318', fontWeight: 700 }}>
@@ -6130,6 +7359,329 @@ const AdminMapScreen = () => {
           </div>
         )}
 
+        {/* Navigation-data-problem task, Part 3A — Generated-Only Cleanup
+            preview/confirm modal. Read-only preview loaded by
+            handleOpenGeneratedCleanup; apply only ever runs from the
+            explicit confirm button below, never automatically. */}
+        {cleanupPreview && (
+          <div
+            onClick={handleCloseGeneratedCleanup}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 10030,
+              background: 'rgba(9, 26, 53, 0.78)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 20,
+            }}
+          >
+            <div
+              className="adm-form-card"
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                width: 'min(520px, 96vw)',
+                padding: 24,
+                maxHeight: '90vh',
+                overflowY: 'auto',
+              }}
+            >
+              <div className="adm-form-card-title">{t.cleanupPreviewTitle}</div>
+
+              <div
+                style={{
+                  fontSize: 13,
+                  color: '#4a6a8f',
+                  marginBottom: 14,
+                  lineHeight: 1.9,
+                  textAlign: isRTL ? 'right' : 'left',
+                }}
+              >
+                <div>
+                  <strong>{activeMap?.title}</strong>
+                  {activeMap && ` — ${formatFloorDisplay(activeMap.floor, activeMap.floorLabel)}`}
+                </div>
+                <div>
+                  <strong>{t.cleanupGeneratedPoints}:</strong>{' '}
+                  {cleanupPreview.generated_point_count}
+                </div>
+                <div>
+                  <strong>{t.cleanupGeneratedEdges}:</strong>{' '}
+                  {cleanupPreview.generated_edge_count}
+                </div>
+                <div>
+                  <strong>{t.cleanupManualPoints}:</strong>{' '}
+                  {cleanupPreview.manual_point_count}
+                </div>
+                <div>
+                  <strong>{t.cleanupManualEdges}:</strong>{' '}
+                  {cleanupPreview.manual_edge_count}
+                </div>
+                <div>
+                  <strong>{t.cleanupUnknownLegacy}:</strong>{' '}
+                  {cleanupPreview.unknown_legacy_point_count}
+                </div>
+                <div>
+                  <strong>{t.cleanupLinkedRooms}:</strong>{' '}
+                  {cleanupPreview.rooms_linked_to_generated_points}
+                </div>
+                <div>
+                  <strong>{t.cleanupLinkedConnectors}:</strong>{' '}
+                  {cleanupPreview.vertical_connectors_linked_to_generated_points}
+                </div>
+                {cleanupPreview.dependent_manual_edge_count > 0 && (
+                  <div>
+                    <strong>{t.cleanupDependentEdges}:</strong>{' '}
+                    {cleanupPreview.dependent_manual_edge_count}
+                  </div>
+                )}
+              </div>
+
+              {cleanupPreview.unknown_legacy_point_count > 0 && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: '#8a6d16',
+                    background: '#fff8e6',
+                    borderRadius: 8,
+                    padding: 10,
+                    marginBottom: 14,
+                  }}
+                >
+                  {t.cleanupUnknownLegacyNote}
+                </div>
+              )}
+
+              {cleanupPreview.generated_point_count === 0 &&
+                cleanupPreview.generated_edge_count === 0 && (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: '#315b8f',
+                    marginBottom: 14,
+                    fontWeight: 600,
+                  }}
+                >
+                  {t.cleanupNoneToDelete}
+                </div>
+              )}
+
+              {cleanupError && (
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    color: '#c0392b',
+                    marginBottom: 14,
+                    fontWeight: 600,
+                  }}
+                >
+                  {cleanupError}
+                </div>
+              )}
+
+              <div className="adm-form-actions" style={{ justifyContent: 'center' }}>
+                <button
+                  type="button"
+                  className="adm-btn adm-btn-secondary"
+                  onClick={handleCloseGeneratedCleanup}
+                  disabled={isCleanupApplying}
+                >
+                  {t.cancel}
+                </button>
+
+                <button
+                  type="button"
+                  className="adm-btn adm-btn-danger"
+                  onClick={handleApplyGeneratedCleanup}
+                  disabled={
+                    isCleanupApplying ||
+                    (cleanupPreview.generated_point_count === 0 &&
+                      cleanupPreview.generated_edge_count === 0)
+                  }
+                >
+                  {isCleanupApplying ? t.cleanupApplying : t.cleanupConfirmButton}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Navigation-data-problem task, Part 3B — Full Navigation Reset
+            preview/confirm modal. Strictly separate from the
+            generated-only cleanup modal above — deletes EVERY route
+            point/connection on this map, including manual ones, and
+            requires the admin to type the map's name or the fixed
+            confirmation phrase before the confirm button is even
+            enabled. */}
+        {resetPreview && (
+          <div
+            onClick={handleCloseFullReset}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 10030,
+              background: 'rgba(9, 26, 53, 0.78)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 20,
+            }}
+          >
+            <div
+              className="adm-form-card"
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                width: 'min(540px, 96vw)',
+                padding: 24,
+                maxHeight: '90vh',
+                overflowY: 'auto',
+              }}
+            >
+              <div className="adm-form-card-title">{t.resetPreviewTitle}</div>
+
+              <div
+                style={{
+                  fontSize: 12.5,
+                  color: '#8a1f1f',
+                  background: '#fdecec',
+                  borderRadius: 8,
+                  padding: 12,
+                  marginBottom: 16,
+                  fontWeight: 600,
+                  lineHeight: 1.6,
+                  textAlign: isRTL ? 'right' : 'left',
+                }}
+              >
+                {t.resetWarning}
+              </div>
+
+              <div
+                style={{
+                  fontSize: 13,
+                  color: '#4a6a8f',
+                  marginBottom: 14,
+                  lineHeight: 1.9,
+                  textAlign: isRTL ? 'right' : 'left',
+                }}
+              >
+                <div>
+                  <strong>{resetPreview.map_name}</strong>
+                  {resetPreview.floor !== null &&
+                    resetPreview.floor !== undefined &&
+                    ` — ${formatFloorDisplay(resetPreview.floor)}`}
+                </div>
+                <div>
+                  <strong>{t.resetTotalPoints}:</strong>{' '}
+                  {resetPreview.total_point_count}
+                </div>
+                <div>
+                  <strong>{t.resetTotalEdges}:</strong>{' '}
+                  {resetPreview.total_edge_count}
+                </div>
+                <div>
+                  {t.resetBreakdownManual}: {resetPreview.point_source_breakdown?.manual ?? 0}
+                  {' · '}
+                  {t.resetBreakdownGenerated}: {resetPreview.point_source_breakdown?.generated ?? 0}
+                  {' · '}
+                  {t.resetBreakdownSemantic}: {resetPreview.point_source_breakdown?.semantic_destination ?? 0}
+                  {' · '}
+                  {t.resetBreakdownConnector}: {resetPreview.point_source_breakdown?.vertical_connector ?? 0}
+                  {' · '}
+                  {t.resetBreakdownUnknown}: {resetPreview.point_source_breakdown?.unknown_legacy ?? 0}
+                </div>
+                <div>
+                  <strong>{t.resetLinkedRooms}:</strong>{' '}
+                  {resetPreview.rooms_linked_count}
+                </div>
+                <div>
+                  <strong>{t.resetLinkedConnectors}:</strong>{' '}
+                  {resetPreview.vertical_connectors_linked_count}
+                </div>
+                <div>
+                  <strong>{t.resetLinkedLocationCodes}:</strong>{' '}
+                  {resetPreview.location_code_count}
+                </div>
+              </div>
+
+              {resetPreview.total_point_count === 0 &&
+                resetPreview.total_edge_count === 0 ? (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: '#315b8f',
+                    marginBottom: 14,
+                    fontWeight: 600,
+                  }}
+                >
+                  {t.resetNoneToDelete}
+                </div>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      fontSize: 12.5,
+                      color: '#173b70',
+                      fontWeight: 600,
+                      marginBottom: 8,
+                      textAlign: isRTL ? 'right' : 'left',
+                    }}
+                  >
+                    {t.resetConfirmInstructions(resetPreview.map_name)}
+                  </div>
+                  <input
+                    type="text"
+                    className="adm-input"
+                    value={resetConfirmText}
+                    onChange={(event) => setResetConfirmText(event.target.value)}
+                    placeholder={t.resetConfirmPlaceholder}
+                    style={{ width: '100%', marginBottom: 14, boxSizing: 'border-box' }}
+                  />
+                </>
+              )}
+
+              {resetError && (
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    color: '#c0392b',
+                    marginBottom: 14,
+                    fontWeight: 600,
+                  }}
+                >
+                  {resetError}
+                </div>
+              )}
+
+              <div className="adm-form-actions" style={{ justifyContent: 'center' }}>
+                <button
+                  type="button"
+                  className="adm-btn adm-btn-secondary"
+                  onClick={handleCloseFullReset}
+                  disabled={isResetApplying}
+                >
+                  {t.cancel}
+                </button>
+
+                <button
+                  type="button"
+                  className="adm-btn adm-btn-danger"
+                  onClick={handleApplyFullReset}
+                  disabled={
+                    isResetApplying ||
+                    (resetPreview.total_point_count === 0 &&
+                      resetPreview.total_edge_count === 0) ||
+                    (resetConfirmText.trim() !== (resetPreview.map_name || '') &&
+                      resetConfirmText.trim() !== 'RESET NAVIGATION DATA')
+                  }
+                >
+                  {isResetApplying ? t.resetApplying : t.resetConfirmButton}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {isMapOpen &&
           adminMapImageUrl && (
             <div
@@ -6446,6 +7998,39 @@ const AdminMapScreen = () => {
                               />
                             ))}
 
+                        {/* Fast batch destination placement — a distinct
+                            pulsing highlight ring around the CURRENTLY
+                            ACTIVE queue item's temporary marker (or around
+                            where it will appear once placed), clearly
+                            distinguishable from both the plain proposal
+                            dots above and every real saved RoutePoint
+                            below (Section 3: "Temporary markers must be
+                            visually distinguishable from existing saved
+                            RoutePoints"). */}
+                        {mode === 'semantic-destinations' &&
+                          semanticBatchActive &&
+                          (() => {
+                            const activeItemId = semanticBatchQueue[semanticBatchIndex];
+                            const activeProposal = semanticDestProposals.find(
+                              (proposal) => proposal.semantic_item_id === activeItemId,
+                            );
+                            if (!activeProposal || activeProposal.x == null || activeProposal.y == null) {
+                              return null;
+                            }
+                            return (
+                              <circle
+                                key={`semantic-batch-active-${activeItemId}`}
+                                cx={activeProposal.x}
+                                cy={activeProposal.y}
+                                r={Math.max(16, fullMapMetrics.naturalWidth * 0.012)}
+                                fill="none"
+                                stroke="#2d6cdf"
+                                strokeWidth={3}
+                                opacity={0.85}
+                              />
+                            );
+                          })()}
+
                         {/* Existing saved route points */}
                         {routePoints.map((point) => {
                           const pointX = Number(point.x);
@@ -6483,6 +8068,16 @@ const AdminMapScreen = () => {
                           // coordinates.
                           const isDrawTarget = mode === 'draw';
 
+                          // Edit Route Points mode (Phase 13): every
+                          // marker becomes a selectable hit target while
+                          // this mode is active — selecting it opens the
+                          // detail panel via selectPointForEditing.
+                          const isEditPointsTarget = mode === 'edit-points';
+                          const isBeingEdited =
+                            isEditPointsTarget &&
+                            editPointTarget &&
+                            editPointTarget.id === point.id;
+
                           // Auto Connect Destinations manual-pick sub-
                           // interaction: only while a manual pick is
                           // pending (Section 8: "click a different
@@ -6512,6 +8107,41 @@ const AdminMapScreen = () => {
                                     selectExistingPointForDraft(point, event)
                                   }
                                 />
+                              )}
+
+                              {isEditPointsTarget && (
+                                <circle
+                                  cx={pointX}
+                                  cy={pointY}
+                                  r={Math.max(radius * 1.8, snapHitRadius)}
+                                  fill="transparent"
+                                  style={{
+                                    pointerEvents: 'auto',
+                                    cursor: 'pointer',
+                                  }}
+                                  onClick={(event) =>
+                                    selectPointForEditing(point, event)
+                                  }
+                                />
+                              )}
+
+                              {isBeingEdited && (
+                                <circle
+                                  cx={pointX}
+                                  cy={pointY}
+                                  r={radius * 2.6}
+                                  fill="none"
+                                  stroke="#ffb020"
+                                  strokeWidth={radius * 0.35}
+                                  style={{ pointerEvents: 'none' }}
+                                >
+                                  <animate
+                                    attributeName="opacity"
+                                    values="1;0.35;1"
+                                    dur="1.2s"
+                                    repeatCount="indefinite"
+                                  />
+                                </circle>
                               )}
 
                               {isAutoConnectPickTarget && (
@@ -7022,6 +8652,30 @@ const AdminMapScreen = () => {
                   <button
                     type="button"
                     onClick={() => {
+                      if (mode !== 'edit-points') {
+                        setMode('edit-points');
+                        setClickedPoint(null);
+                        setPointName('');
+                        closeEditPointPanel();
+                      }
+                    }}
+                    style={{
+                      border: 'none',
+                      borderRadius: 999,
+                      padding: '8px 16px',
+                      fontSize: 12.5,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      background: mode === 'edit-points' ? 'white' : 'transparent',
+                      color: mode === 'edit-points' ? '#173b70' : 'white',
+                    }}
+                  >
+                    {t.editPointsMode}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
                       setSyncRoomsError('');
                       setShowSyncRoomsConfirm(true);
                     }}
@@ -7209,6 +8863,290 @@ const AdminMapScreen = () => {
                 {/* ↑ map stage (fullMapContainerRef) closes here — every
                     element below is a workspace-level sibling, positioned
                     and clamped against the workspace, never the map stage. */}
+
+                {/* Edit Route Points mode — instructions bubble, shown
+                    whenever the mode is active but nothing is selected
+                    yet (mirrors the delete-connection instructions bubble
+                    above). */}
+                {mode === 'edit-points' && !editPointTarget && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: '50%',
+                      bottom: 18,
+                      transform: 'translateX(-50%)',
+                      background: 'rgba(20, 55, 105, 0.92)',
+                      color: 'white',
+                      padding: '10px 16px',
+                      borderRadius: 16,
+                      fontSize: 13,
+                      fontWeight: 700,
+                      whiteSpace: 'nowrap',
+                      pointerEvents: 'none',
+                    }}
+                  >
+                    {t.editPointsInstructions}
+                  </div>
+                )}
+
+                {/* Edit Route Points mode — detail panel for the
+                    currently-selected existing point. Fixed position
+                    (not draggable, unlike the other floating tool
+                    panels) — a deliberate scope reduction: it still
+                    covers every required action (Move Point, Edit Name,
+                    Edit Point Type, inspect connected edges/linked
+                    Room/linked vertical connector, Delete with
+                    confirmation) without touching the shared
+                    floating-panel drag/position state machine the other
+                    modes rely on. */}
+                {mode === 'edit-points' && editPointTarget && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 18,
+                      insetInlineEnd: 18,
+                      width: 300,
+                      maxHeight: 'calc(100% - 36px)',
+                      overflowY: 'auto',
+                      background: 'white',
+                      color: '#173b70',
+                      borderRadius: 16,
+                      boxShadow: '0 8px 28px rgba(20,55,105,0.28)',
+                      padding: 16,
+                      fontSize: 13,
+                      zIndex: 20,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: 10,
+                      }}
+                    >
+                      <strong style={{ fontSize: 14 }}>{t.editPointsPanelTitle}</strong>
+                      <button
+                        type="button"
+                        onClick={closeEditPointPanel}
+                        aria-label={t.cancel || 'Close'}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          color: '#173b70',
+                          fontSize: 16,
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          lineHeight: 1,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+
+                    {editPointError && (
+                      <div
+                        style={{
+                          background: '#ffe9e9',
+                          color: '#a92323',
+                          borderRadius: 10,
+                          padding: 8,
+                          marginBottom: 10,
+                          fontSize: 12,
+                        }}
+                      >
+                        {editPointError}
+                      </div>
+                    )}
+
+                    <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, marginBottom: 4 }}>
+                      {t.editPointsNameLabel}
+                    </label>
+                    <input
+                      value={editPointDraftName}
+                      onChange={(e) => setEditPointDraftName(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '7px 10px',
+                        borderRadius: 10,
+                        border: '1px solid #d6dee9',
+                        marginBottom: 10,
+                        fontSize: 13,
+                        boxSizing: 'border-box',
+                      }}
+                    />
+
+                    <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, marginBottom: 4 }}>
+                      {t.editPointsTypeLabel}
+                    </label>
+                    <select
+                      value={editPointDraftType}
+                      onChange={(e) => setEditPointDraftType(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '7px 10px',
+                        borderRadius: 10,
+                        border: '1px solid #d6dee9',
+                        marginBottom: 10,
+                        fontSize: 13,
+                        boxSizing: 'border-box',
+                      }}
+                    >
+                      {['entrance', 'hallway', 'stairs', 'elevator', 'room', 'store', 'junction'].map(
+                        (option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ),
+                      )}
+                    </select>
+
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                      <button
+                        type="button"
+                        onClick={handleEditPointSaveDetails}
+                        disabled={editPointSaving}
+                        style={{
+                          flex: 1,
+                          border: 'none',
+                          borderRadius: 10,
+                          padding: '8px 10px',
+                          fontSize: 12.5,
+                          fontWeight: 700,
+                          cursor: editPointSaving ? 'default' : 'pointer',
+                          background: '#173b70',
+                          color: 'white',
+                          opacity: editPointSaving ? 0.6 : 1,
+                        }}
+                      >
+                        {t.save || 'Save'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setEditPointMoving((v) => !v)}
+                        disabled={editPointSaving}
+                        style={{
+                          flex: 1,
+                          border: '1px solid #173b70',
+                          borderRadius: 10,
+                          padding: '8px 10px',
+                          fontSize: 12.5,
+                          fontWeight: 700,
+                          cursor: editPointSaving ? 'default' : 'pointer',
+                          background: editPointMoving ? '#173b70' : 'white',
+                          color: editPointMoving ? 'white' : '#173b70',
+                        }}
+                      >
+                        {editPointMoving ? t.editPointsMovingActive : t.editPointsMovePoint}
+                      </button>
+                    </div>
+
+                    <div style={{ borderTop: '1px solid #eef1f6', paddingTop: 10, marginBottom: 10 }}>
+                      <div style={{ fontWeight: 700, fontSize: 11.5, marginBottom: 4 }}>
+                        {t.editPointsConnectedEdges} (
+                        {editPointEdgesLoading ? '…' : editPointEdges.length})
+                      </div>
+                      {!editPointEdgesLoading && editPointEdges.length === 0 && (
+                        <div style={{ color: '#8b97a8', fontSize: 12 }}>{t.editPointsNone}</div>
+                      )}
+                      {editPointEdges.map((edge) => (
+                        <div key={edge.id} style={{ fontSize: 12, color: '#3a4a63', marginBottom: 2 }}>
+                          {edge.edge_type || '—'}
+                          {edge.is_accessible === false ? ` · ${t.editPointsInaccessible}` : ''}
+                        </div>
+                      ))}
+                    </div>
+
+                    {editPointTarget.room_id && (
+                      <div style={{ borderTop: '1px solid #eef1f6', paddingTop: 10, marginBottom: 10 }}>
+                        <div style={{ fontWeight: 700, fontSize: 11.5, marginBottom: 4 }}>
+                          {t.editPointsLinkedRoom}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#3a4a63' }}>
+                          {editPointRoom?.name_en || editPointRoom?.name || editPointTarget.room_id}
+                        </div>
+                      </div>
+                    )}
+
+                    {editPointTarget.connector_id && (
+                      <div style={{ borderTop: '1px solid #eef1f6', paddingTop: 10, marginBottom: 10 }}>
+                        <div style={{ fontWeight: 700, fontSize: 11.5, marginBottom: 4 }}>
+                          {t.editPointsLinkedConnector}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#3a4a63' }}>
+                          {editPointConnector?.name || editPointTarget.connector_id}
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{ borderTop: '1px solid #eef1f6', paddingTop: 10 }}>
+                      {!editPointConfirmDelete ? (
+                        <button
+                          type="button"
+                          onClick={() => setEditPointConfirmDelete(true)}
+                          disabled={editPointSaving}
+                          style={{
+                            width: '100%',
+                            border: 'none',
+                            borderRadius: 10,
+                            padding: '8px 10px',
+                            fontSize: 12.5,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            background: '#ffe9e9',
+                            color: '#a92323',
+                          }}
+                        >
+                          {t.editPointsDeleteAction}
+                        </button>
+                      ) : (
+                        <div>
+                          <div style={{ fontSize: 12, marginBottom: 8, color: '#a92323' }}>
+                            {t.editPointsConfirmDelete}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                              type="button"
+                              onClick={() => setEditPointConfirmDelete(false)}
+                              style={{
+                                flex: 1,
+                                border: '1px solid #d6dee9',
+                                borderRadius: 10,
+                                padding: '8px 10px',
+                                fontSize: 12.5,
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                background: 'white',
+                                color: '#173b70',
+                              }}
+                            >
+                              {t.cancel || 'Cancel'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleEditPointDelete}
+                              disabled={editPointSaving}
+                              style={{
+                                flex: 1,
+                                border: 'none',
+                                borderRadius: 10,
+                                padding: '8px 10px',
+                                fontSize: 12.5,
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                background: '#a92323',
+                                color: 'white',
+                              }}
+                            >
+                              {t.yes || 'Yes, Delete'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Auto Connect Destinations to Corridors — scanning
                     banner, shown only while the preview request is
@@ -7462,7 +9400,7 @@ const AdminMapScreen = () => {
 
                             {proposal.status === 'no_candidate' && (
                               <div style={{ fontSize: 12, color: '#c0392b', marginTop: 4 }}>
-                                {t.autoConnectNoCorridorPointFound}
+                                {getAutoConnectReasonLabel(proposal.reason)}
                               </div>
                             )}
 
@@ -7879,6 +9817,38 @@ const AdminMapScreen = () => {
                       )}
                     </div>
 
+                    {/* Section 1: "Place All Destinations" — the fast
+                        batch placement entry point. Only offered when at
+                        least one non-rejected proposal still needs a
+                        manually-clicked location; existing-linked-point
+                        proposals never need this. */}
+                    {semanticDestProposals.some(
+                      (proposal) =>
+                        proposal.placement_source === 'needs_manual_placement' &&
+                        proposal.localStatus !== 'rejected' &&
+                        proposal.localStatus !== 'excluded',
+                    ) && (
+                      <div style={{ padding: '10px 18px 0' }}>
+                        <button
+                          type="button"
+                          onClick={handleStartSemanticBatchPlacement}
+                          style={{
+                            width: '100%',
+                            border: 'none',
+                            borderRadius: 10,
+                            padding: '10px 12px',
+                            fontSize: 12.5,
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            background: '#173b70',
+                            color: 'white',
+                          }}
+                        >
+                          {t.semanticBatchPlaceAll}
+                        </button>
+                      </div>
+                    )}
+
                     {semanticDestManualPlaceTargetId && (
                       <div
                         style={{
@@ -8266,6 +10236,480 @@ const AdminMapScreen = () => {
                       </div>
                     </div>
                   )}
+
+                {/* Fast batch destination placement — Section 9 draft
+                    resume/discard prompt. Shown BEFORE the batch panel
+                    itself opens, so a resumed draft never briefly flashes
+                    an empty/fresh queue first. */}
+                {semanticBatchDraftPrompt && (
+                  <div
+                    style={{
+                      position: 'fixed',
+                      inset: 0,
+                      zIndex: 10030,
+                      background: 'rgba(9, 26, 53, 0.78)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 20,
+                    }}
+                  >
+                    <div
+                      className="adm-form-card"
+                      style={{ width: 'min(420px, 96vw)', padding: 24, textAlign: 'center' }}
+                    >
+                      <div className="adm-form-card-title">{t.semanticBatchResumeDraftTitle}</div>
+                      <div style={{ fontSize: 12.5, color: '#4a6a8f', marginBottom: 16 }}>
+                        {t.semanticBatchResumeDraftBody}
+                      </div>
+                      <div className="adm-form-actions" style={{ justifyContent: 'center' }}>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-secondary"
+                          onClick={handleDiscardSemanticBatchDraft}
+                        >
+                          {t.semanticBatchDiscardDraft}
+                        </button>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-primary"
+                          onClick={handleResumeSemanticBatchDraft}
+                        >
+                          {t.semanticBatchResumeDraft}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Fast batch destination placement — Section 2/3/4: the
+                    sequential placement panel. A real FloatingToolPanel
+                    (draggable/collapsible) rather than a fixed sidebar —
+                    this IS the fix for the old "Pick Location" bug, which
+                    was caused by a fixed full-height panel physically
+                    covering part of the map. */}
+                {mode === 'semantic-destinations' &&
+                  semanticBatchActive &&
+                  !semanticBatchReviewOpen &&
+                  panelPosition && (
+                    (() => {
+                      const activeItemId = semanticBatchQueue[semanticBatchIndex];
+                      const activeProposal = semanticDestProposals.find(
+                        (proposal) => proposal.semantic_item_id === activeItemId,
+                      );
+                      const activeStatus = activeItemId
+                        ? semanticBatchStatuses[activeItemId]
+                        : null;
+                      const progress = computeBatchProgress(semanticBatchQueue, semanticBatchStatuses);
+                      const canGoNext = activeStatus === 'placed' || activeStatus === 'rejected';
+
+                      return (
+                        <FloatingToolPanel
+                          title={t.semanticBatchPanelTitle}
+                          position={panelPosition}
+                          onPositionChange={setPanelPosition}
+                          isCollapsed={isPanelCollapsed}
+                          onToggleCollapse={() => setIsPanelCollapsed((prev) => !prev)}
+                          onDragStateChange={(dragging) => {
+                            isPanelDraggingRef.current = dragging;
+                          }}
+                          containerRef={fullMapWorkspaceRef}
+                          snapTopOffset={76}
+                          isRTL={isRTL}
+                          showSnapControls
+                          moveLabel={t.panelMove}
+                          minimizeLabel={t.panelMinimize}
+                          restoreLabel={t.panelRestore}
+                          snapLabels={{
+                            left: t.panelDockLeft,
+                            right: t.panelDockRight,
+                            bottom: t.panelDockBottom,
+                          }}
+                          footer={
+                            <div className="adm-form-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
+                              <button
+                                type="button"
+                                className="adm-btn adm-btn-cancel"
+                                disabled={semanticBatchIndex === 0}
+                                onClick={handleBatchPrevious}
+                              >
+                                {t.semanticBatchPrevious}
+                              </button>
+                              <button
+                                type="button"
+                                className="adm-btn adm-btn-cancel"
+                                disabled={!activeItemId}
+                                onClick={handleBatchSkip}
+                              >
+                                {t.semanticBatchSkip}
+                              </button>
+                              <button
+                                type="button"
+                                className="adm-btn adm-btn-cancel"
+                                disabled={!activeItemId}
+                                onClick={handleBatchReject}
+                              >
+                                {t.semanticBatchReject}
+                              </button>
+                              <button
+                                type="button"
+                                className="adm-btn adm-btn-cancel"
+                                disabled={semanticBatchHistory.length === 0}
+                                onClick={handleBatchUndo}
+                              >
+                                {t.semanticBatchUndo}
+                              </button>
+                              {activeStatus === 'placed' && (
+                                <button
+                                  type="button"
+                                  className="adm-btn adm-btn-cancel"
+                                  onClick={handleBatchChangeLocation}
+                                >
+                                  {t.semanticBatchChangeLocation}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="adm-btn adm-btn-primary"
+                                onClick={handleRequestExitSemanticBatch}
+                              >
+                                {t.semanticBatchExit}
+                              </button>
+                            </div>
+                          }
+                        >
+                          {activeProposal ? (
+                            <>
+                              <div style={{ fontSize: 11.5, color: '#6b83a6', marginBottom: 4 }}>
+                                {t.semanticBatchDestinationOf(
+                                  semanticBatchIndex + 1,
+                                  semanticBatchQueue.length,
+                                )}
+                              </div>
+                              <div style={{ fontSize: 15, fontWeight: 700, color: '#173b70' }}>
+                                {activeProposal.name_en ||
+                                  activeProposal.name_original ||
+                                  activeProposal.semantic_item_id}
+                              </div>
+                              {(activeProposal.name_ar || activeProposal.name_he) && (
+                                <div style={{ fontSize: 11, color: '#6b83a6', marginTop: 2 }}>
+                                  {[activeProposal.name_ar, activeProposal.name_he]
+                                    .filter(Boolean)
+                                    .join(' / ')}
+                                </div>
+                              )}
+
+                              <div
+                                style={{
+                                  marginTop: 10,
+                                  padding: 8,
+                                  borderRadius: 8,
+                                  fontSize: 11.5,
+                                  color:
+                                    activeStatus === 'placed' ? '#218c4a' : '#7a5200',
+                                  background:
+                                    activeStatus === 'placed' ? '#eafaf1' : '#fff6e6',
+                                }}
+                              >
+                                {activeStatus === 'placed'
+                                  ? t.semanticBatchLocationRecorded
+                                  : t.semanticBatchClickInstructions}
+                              </div>
+
+                              {semanticBatchFeedback && (
+                                <div style={{ marginTop: 8, fontSize: 11.5, color: '#218c4a', fontWeight: 600 }}>
+                                  {semanticBatchFeedback}
+                                </div>
+                              )}
+
+                              <div
+                                style={{
+                                  marginTop: 14,
+                                  fontSize: 11,
+                                  color: '#4a6a8f',
+                                  lineHeight: 1.8,
+                                  borderTop: '1px solid #e3e9f2',
+                                  paddingTop: 10,
+                                }}
+                              >
+                                <div>{t.semanticBatchProgressPlaced(progress.placed, progress.total)}</div>
+                                <div>{t.semanticBatchProgressRemaining(progress.remaining)}</div>
+                                <div>{t.semanticBatchProgressRejected(progress.rejected)}</div>
+                              </div>
+
+                              {canGoNext && (
+                                <div style={{ marginTop: 8, fontSize: 10.5, color: '#8ba0bd' }}>
+                                  {t.semanticBatchEnterHint}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div style={{ fontSize: 12.5, color: '#4a6a8f' }}>
+                              {t.semanticBatchAllResolved}
+                            </div>
+                          )}
+                        </FloatingToolPanel>
+                      );
+                    })()
+                  )}
+
+                {/* Fast batch destination placement — Section 5: final
+                    review screen, opened automatically once every queue
+                    item is placed/rejected (or manually via the panel's
+                    review entry once ready). */}
+                {mode === 'semantic-destinations' && semanticBatchActive && semanticBatchReviewOpen && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 20,
+                      [isRTL ? 'left' : 'right']: 20,
+                      bottom: 20,
+                      width: 'min(420px, 92vw)',
+                      background: 'white',
+                      borderRadius: 14,
+                      boxShadow: '0 10px 30px rgba(9, 26, 53, 0.25)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      overflow: 'hidden',
+                      zIndex: 10010,
+                    }}
+                  >
+                    <div style={{ padding: '14px 18px', background: '#173b70', color: 'white' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>{t.semanticBatchReviewTitle}</div>
+                      <div style={{ fontSize: 11.5, marginTop: 6, opacity: 0.9 }}>
+                        {(() => {
+                          const progress = computeBatchProgress(semanticBatchQueue, semanticBatchStatuses);
+                          return t.semanticBatchProgressPlaced(progress.placed, progress.total);
+                        })()}
+                      </div>
+                    </div>
+
+                    {semanticBatchSaveError && (
+                      <div style={{ padding: '8px 18px', fontSize: 12, color: '#c0392b', fontWeight: 600 }}>
+                        {semanticBatchSaveError}
+                      </div>
+                    )}
+
+                    <div style={{ flex: 1, overflowY: 'auto', padding: '8px 14px' }}>
+                      {semanticDestProposals
+                        .filter(
+                          (proposal) =>
+                            proposal.localStatus !== 'excluded' &&
+                            (proposal.localStatus === 'accepted' ||
+                              proposal.localStatus === 'rejected' ||
+                              semanticBatchQueue.includes(proposal.semantic_item_id)),
+                        )
+                        .map((proposal) => {
+                          const isRejected = proposal.localStatus === 'rejected';
+                          const hasLocation = proposal.x != null && proposal.y != null;
+                          const reviewStatus = isRejected
+                            ? 'rejected'
+                            : hasLocation
+                              ? 'ready'
+                              : 'missing';
+                          const itemError = semanticBatchItemErrors[proposal.semantic_item_id];
+
+                          return (
+                            <button
+                              key={proposal.semantic_item_id}
+                              type="button"
+                              onClick={() =>
+                                handleSelectSemanticBatchReviewItem(proposal.semantic_item_id)
+                              }
+                              style={{
+                                display: 'block',
+                                width: '100%',
+                                textAlign: isRTL ? 'right' : 'left',
+                                border: '1px solid #e3e9f2',
+                                borderRadius: 10,
+                                padding: 10,
+                                marginBottom: 8,
+                                background: itemError ? '#fdecea' : 'white',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <div style={{ fontSize: 13, fontWeight: 700, color: '#173b70' }}>
+                                {proposal.name_en || proposal.name_original || proposal.semantic_item_id}
+                              </div>
+                              <div style={{ fontSize: 11, color: '#6b83a6', marginTop: 2 }}>
+                                {proposal.detected_category || proposal.proposed_room_type || '—'}
+                                {' · '}
+                                {t.semanticBatchFloorLabel(proposal.floor)}
+                              </div>
+                              <div style={{ fontSize: 11, marginTop: 4 }}>
+                                {hasLocation
+                                  ? `x=${proposal.x}, y=${proposal.y}`
+                                  : t.semanticBatchNoLocationYet}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  marginTop: 4,
+                                  fontWeight: 700,
+                                  color:
+                                    reviewStatus === 'ready'
+                                      ? '#218c4a'
+                                      : reviewStatus === 'rejected'
+                                        ? '#c0392b'
+                                        : '#7a5200',
+                                }}
+                              >
+                                {reviewStatus === 'ready' && t.semanticBatchStatusReady}
+                                {reviewStatus === 'rejected' && t.semanticBatchStatusRejected}
+                                {reviewStatus === 'missing' && t.semanticBatchStatusMissing}
+                              </div>
+                              {proposal.nested_parent_candidate && (
+                                <div style={{ fontSize: 10.5, color: '#8e44ad', marginTop: 4 }}>
+                                  {t.semanticDestNestedLine(proposal.nested_parent_candidate.name)}
+                                  {proposal.confirmNested ? ` — ${t.semanticDestConfirmNested}` : ''}
+                                </div>
+                              )}
+                              {proposal.allowTransitThrough && (
+                                <div style={{ fontSize: 10.5, color: '#173b70', marginTop: 2 }}>
+                                  {t.semanticDestAllowTransit}
+                                </div>
+                              )}
+                              {itemError && (
+                                <div style={{ fontSize: 10.5, color: '#c0392b', marginTop: 4 }}>
+                                  {itemError}
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                    </div>
+
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        padding: '12px 18px',
+                        borderTop: '1px solid #e3e9f2',
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn-secondary"
+                        onClick={() => setSemanticBatchReviewOpen(false)}
+                        style={{ flex: 1 }}
+                      >
+                        {t.semanticBatchBackToPlacement}
+                      </button>
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn-secondary"
+                        onClick={handleRequestExitSemanticBatch}
+                        style={{ flex: 1 }}
+                      >
+                        {t.semanticBatchExit}
+                      </button>
+                      <button
+                        type="button"
+                        className="adm-btn adm-btn-primary"
+                        disabled={!isBatchReadyToSave(semanticBatchQueue, semanticBatchStatuses)}
+                        onClick={handleOpenSemanticBatchSaveConfirm}
+                        style={{ flex: 1 }}
+                      >
+                        {t.semanticBatchSaveAll}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Fast batch destination placement — Section 6: ONE final
+                    confirmation dialog with counts before the single
+                    all-or-nothing write. */}
+                {semanticBatchConfirmOpen && (
+                  <div
+                    style={{
+                      position: 'fixed',
+                      inset: 0,
+                      zIndex: 10030,
+                      background: 'rgba(9, 26, 53, 0.78)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 20,
+                    }}
+                  >
+                    <div
+                      className="adm-form-card"
+                      style={{ width: 'min(420px, 96vw)', padding: 24, textAlign: 'center' }}
+                    >
+                      <div className="adm-form-card-title">{t.semanticBatchSaveConfirmTitle}</div>
+                      <div style={{ fontSize: 12.5, color: '#173b70', marginBottom: 16 }}>
+                        {t.semanticBatchSaveConfirmBody(buildBatchAcceptedPayload(semanticDestProposals).length)}
+                      </div>
+                      {semanticBatchSaveError && (
+                        <div style={{ fontSize: 12, color: '#c0392b', marginBottom: 12 }}>
+                          {semanticBatchSaveError}
+                        </div>
+                      )}
+                      <div className="adm-form-actions" style={{ justifyContent: 'center' }}>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-secondary"
+                          disabled={semanticBatchSaving}
+                          onClick={handleCancelSemanticBatchSaveConfirm}
+                        >
+                          {t.cancel}
+                        </button>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-primary"
+                          disabled={semanticBatchSaving}
+                          onClick={handleSaveAllSemanticBatchDestinations}
+                        >
+                          {semanticBatchSaving ? t.semanticDestScanning : t.semanticBatchSaveAll}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Fast batch destination placement — Section 4: Escape /
+                    Exit-with-unsaved-progress warning. */}
+                {semanticBatchExitWarningOpen && (
+                  <div
+                    style={{
+                      position: 'fixed',
+                      inset: 0,
+                      zIndex: 10030,
+                      background: 'rgba(9, 26, 53, 0.78)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 20,
+                    }}
+                  >
+                    <div
+                      className="adm-form-card"
+                      style={{ width: 'min(380px, 96vw)', padding: 24, textAlign: 'center' }}
+                    >
+                      <div className="adm-form-card-title">{t.semanticBatchExitWarningTitle}</div>
+                      <div style={{ fontSize: 12.5, color: '#4a6a8f', marginBottom: 16 }}>
+                        {t.semanticBatchExitWarningBody}
+                      </div>
+                      <div className="adm-form-actions" style={{ justifyContent: 'center' }}>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-secondary"
+                          onClick={handleCancelExitSemanticBatch}
+                        >
+                          {t.cancel}
+                        </button>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-primary"
+                          onClick={handleConfirmExitSemanticBatch}
+                        >
+                          {t.semanticBatchExit}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {mode === 'draw' && panelPosition && (
                   <FloatingToolPanel

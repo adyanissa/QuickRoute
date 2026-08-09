@@ -42,4 +42,6 @@ async def get_me(user: User = Depends(get_current_user)):
         role=user.role,
         building_ids=user.building_ids,
         all_buildings=user.all_buildings,
+        map_group_ids=user.map_group_ids,
+        map_ids=user.map_ids,
     )

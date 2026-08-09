@@ -6,10 +6,10 @@ import { useAuth } from '../context/AuthContext';
 import { signupUser } from '../api/authApi';
 import {
   buildSignupPayload,
-  getPostAuthRedirectPath,
   shouldLockEmailField,
   getInitialEmail,
 } from '../utils/invitationCodeFormHelpers';
+import { resolvePostLoginRoute } from '../utils/roleRouting';
 import '../styles/AccountCreationScreen.css';
 
 const INVITATION_CODE_KEY = 'quickroute_invitation_code';
@@ -209,7 +209,7 @@ const AccountCreationScreen = () => {
       // its role, instead of sending the person back to a login form.
       login(data.user, data.access_token);
 
-      setTimeout(() => navigate(getPostAuthRedirectPath(data.user.role)), 900);
+      setTimeout(() => navigate(resolvePostLoginRoute(data.user)), 900);
     } catch (err) {
       setError(err.message || t.failed);
     } finally {

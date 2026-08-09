@@ -55,27 +55,44 @@ from services.graph_connection_service import (
 
 # Reuses graph_connection_service's own already-established "how far is too
 # far for an ordinary walkway connection" default (DEFAULT_MAX_DISTANCE_PX)
-# as this feature's overall safety ceiling, rather than inventing an
-# unrelated number — see that module's auto_connect_point() (Draw Path /
-# new-point auto-connect), which is the same underlying concept applied to
-# a single point instead of a bulk scan.
+# as this feature's ABSOLUTE FLOOR — never a ceiling — for the hard safety
+# distance below, and as the fallback for maps with no known canonical
+# image dimensions (pre-upload-pipeline maps, or synthetic/test maps that
+# never went through image processing). Every real, imaged map computes a
+# larger, scale-aware ceiling instead — see _effective_bounds() — so this
+# constant only ever WIDENS the old fixed 600px cutoff, never narrows it.
 MAX_DISTANCE_PX_DEFAULT = 600.0
 
-# Confidence tiers, as fractions of the overall max distance — "very close"
-# vs "within the configured maximum" vs "outside the recommended range",
-# per this feature's spec. Kept as simple named constants (not a config
-# file) so they are easy for a future admin-facing settings screen to pick
-# up without any structural change here.
+# Confidence tiers, as fixed pixel fallbacks (used only when a map has no
+# canonical image dimensions — see _effective_bounds()) and as the absolute
+# floor for the scale-aware tiers on every other map. "very close" vs
+# "within the recommended range" vs "outside the recommended range but
+# still within the hard safety ceiling", per this feature's spec.
 HIGH_CONFIDENCE_MAX_PX = 150.0
 MEDIUM_CONFIDENCE_MAX_PX = 390.0
 
-MAX_CANDIDATES_PER_PROPOSAL = 3
+# Scale-aware thresholds, expressed as fractions of a map's canonical
+# image diagonal (source_width/source_height, falling back to
+# display_width/display_height) rather than one fixed raw-pixel cutoff.
+# This is what actually fixes "Auto Connect proposes nothing for any
+# destination whose nearest hallway/junction happens to be more than 600
+# raw pixels away on a large, high-resolution floor-plan image" — on a
+# large image, 600px can be a tiny fraction of the actual floor, so a
+# fixed pixel cutoff was effectively far too small regardless of how close
+# the two points really are on the physical floor.
+HIGH_CONFIDENCE_FRACTION_OF_DIAGONAL = 0.05
+MEDIUM_CONFIDENCE_FRACTION_OF_DIAGONAL = 0.18
+# The hard safety ceiling: candidates beyond this are never proposed
+# ("extremely unreasonable distance" per this feature's spec), regardless
+# of confidence tier. Deliberately generous (a majority of the image
+# diagonal) so that any destination with a genuine hallway/junction
+# candidate anywhere on the SAME map/floor is still proposed (at "low"
+# confidence if far), and only truly implausible pairings — e.g. two
+# points that are effectively on opposite corners of the whole floor
+# plan — are rejected.
+HARD_SAFETY_FRACTION_OF_DIAGONAL = 0.60
 
-# Uniform grid cell size for the in-memory spatial index. Sized to the
-# overall max search distance so that a destination's 3x3 neighborhood of
-# cells always fully covers its search radius regardless of where in a
-# cell it falls.
-_GRID_CELL_SIZE_PX = MAX_DISTANCE_PX_DEFAULT
+MAX_CANDIDATES_PER_PROPOSAL = 3
 
 
 class _SpatialGrid:
@@ -126,12 +143,79 @@ def _get_scale_for_floor(map_item: Map, floor: Optional[int]) -> float:
     return map_item.scale
 
 
-def _confidence_tier(distance_px: float) -> str:
-    if distance_px <= HIGH_CONFIDENCE_MAX_PX:
+def _confidence_tier(distance_px: float, high_max_px: float, medium_max_px: float) -> str:
+    if distance_px <= high_max_px:
         return "high"
-    if distance_px <= MEDIUM_CONFIDENCE_MAX_PX:
+    if distance_px <= medium_max_px:
         return "medium"
     return "low"
+
+
+def _canonical_diagonal_px(map_item: Map) -> Optional[float]:
+    """
+    The map's canonical image diagonal, used as the basis for every
+    scale-aware distance threshold below. Prefers the true source image
+    dimensions (source_width/source_height — the full-resolution file the
+    admin actually uploaded); falls back to the cosmetic display image's
+    dimensions when source dimensions aren't known; returns None for maps
+    with neither (pre-upload-pipeline or synthetic maps), which signals
+    every caller to fall back to the fixed pixel defaults instead.
+    """
+
+    width = map_item.source_width or map_item.display_width
+    height = map_item.source_height or map_item.display_height
+    if not width or not height:
+        return None
+    return math.hypot(float(width), float(height))
+
+
+def _effective_bounds(
+    map_item: Map, max_distance_px_override: Optional[float]
+) -> Tuple[float, float, float]:
+    """
+    Resolves this scan's (high_confidence_max_px, medium_confidence_max_px,
+    hard_safety_max_px) — the three distance thresholds every destination
+    on this map is scored against.
+
+    - An explicit caller-supplied max_distance_px always wins for the hard
+      safety ceiling (preserves the existing request-level override
+      contract) — confidence tiers still fall back to the fixed pixel
+      defaults in that case, clamped to never exceed the override.
+    - Otherwise, when the map has known canonical image dimensions, every
+      threshold scales with the image diagonal.
+    - Every threshold is clamped to never be SMALLER than the old fixed
+      pixel default — this change only ever widens what used to be a
+      single very small hard cutoff, never narrows it.
+    """
+
+    diagonal = _canonical_diagonal_px(map_item)
+
+    if max_distance_px_override is not None:
+        hard_safety_max_px = float(max_distance_px_override)
+        high_max_px = HIGH_CONFIDENCE_MAX_PX
+        medium_max_px = MEDIUM_CONFIDENCE_MAX_PX
+    elif diagonal is not None:
+        hard_safety_max_px = max(
+            diagonal * HARD_SAFETY_FRACTION_OF_DIAGONAL, MAX_DISTANCE_PX_DEFAULT
+        )
+        high_max_px = max(
+            diagonal * HIGH_CONFIDENCE_FRACTION_OF_DIAGONAL, HIGH_CONFIDENCE_MAX_PX
+        )
+        medium_max_px = max(
+            diagonal * MEDIUM_CONFIDENCE_FRACTION_OF_DIAGONAL, MEDIUM_CONFIDENCE_MAX_PX
+        )
+    else:
+        hard_safety_max_px = MAX_DISTANCE_PX_DEFAULT
+        high_max_px = HIGH_CONFIDENCE_MAX_PX
+        medium_max_px = MEDIUM_CONFIDENCE_MAX_PX
+
+    # A confidence tier boundary must never exceed the hard safety ceiling
+    # itself (only meaningful when an explicit override happens to be
+    # smaller than the fixed pixel defaults above).
+    high_max_px = min(high_max_px, hard_safety_max_px)
+    medium_max_px = min(medium_max_px, hard_safety_max_px)
+
+    return high_max_px, medium_max_px, hard_safety_max_px
 
 
 def _display_name(point: RoutePoint, lang: str) -> str:
@@ -179,10 +263,14 @@ async def _resolve_scan_maps(map_id: str, scope: str) -> List[Map]:
 async def _scan_one_map(
     map_item: Map,
     floor: Optional[int],
-    max_distance_px: float,
+    max_distance_px_override: Optional[float],
     lang: str,
 ) -> Tuple[dict, List[dict]]:
     map_id = str(map_item.id)
+
+    high_max_px, medium_max_px, hard_safety_max_px = _effective_bounds(
+        map_item, max_distance_px_override
+    )
 
     point_query: dict = {"map_id": map_id, "is_active": True}
     if floor is not None:
@@ -244,7 +332,43 @@ async def _scan_one_map(
         if edge.from_point_id in transit_ids:
             has_valid_transit_edge[edge.to_point_id] = True
 
-    grid = _SpatialGrid(_GRID_CELL_SIZE_PX)
+    # Corridor point_type filtering fix — required reason distinction #1
+    # ("no hallway/junction points exist") and #2 ("hallway/junction
+    # points exist but are not connected by RouteEdges"). Computed once
+    # per map, not per destination.
+    #
+    # #2 is only meaningful when there is more than one transit-type
+    # point to potentially connect to another one — a lone hallway/
+    # junction point has nothing else on the corridor network to be
+    # "connected to" and remains a perfectly valid candidate purely on
+    # its own proximity to a destination (see
+    # test_no_candidate_outside_configured_threshold, which uses exactly
+    # one hallway point and must keep getting reason
+    # "no_transit_point_within_range" unchanged). With two or more
+    # transit points, if literally none of them are wired to each other by
+    # an active walkway RouteEdge, the admin has likely created isolated
+    # dots rather than an actual corridor network. This is used ONLY as
+    # the reason on the fallback "no valid candidate found nearby" path
+    # below — never as a reason to reject a candidate that a destination
+    # genuinely did find within range, so an independent, well-placed
+    # single hallway point is never penalized just because some other,
+    # unrelated transit point elsewhere on the same map isn't connected to
+    # it.
+    transit_network_has_internal_edges = True
+    if len(transit_points) >= 2:
+        transit_network_has_internal_edges = any(
+            edge.edge_type == "walkway"
+            and edge.from_point_id in transit_ids
+            and edge.to_point_id in transit_ids
+            for edge in edges
+        )
+
+    # Cell size = this map's hard safety ceiling, so a destination's 3x3
+    # cell neighborhood is always guaranteed to fully cover every transit
+    # point within hard_safety_max_px, regardless of where in a cell it
+    # falls — same invariant as before, just sized per-map now instead of
+    # off one fixed global constant.
+    grid = _SpatialGrid(hard_safety_max_px)
     for point in transit_points:
         grid.add(point)
 
@@ -329,12 +453,18 @@ async def _scan_one_map(
                                 "point_id": str(parent_point.id),
                                 "name": _display_name(parent_point, lang),
                                 "point_type": parent_point.point_type,
+                                "x": round(float(parent_point.x), 2),
+                                "y": round(float(parent_point.y), 2),
                                 "distance_px": round(distance_px, 2),
                                 "distance_meters": distance_meters,
                                 "blocked_by_wall": False,
                             }
                         ],
                         "is_nested_access": True,
+                        "destination_x": round(float(destination.x), 2),
+                        "destination_y": round(float(destination.y), 2),
+                        "nearest_distance_px": round(distance_px, 2),
+                        "max_hard_distance_px": round(hard_safety_max_px, 2),
                     }
                 )
                 continue
@@ -360,6 +490,10 @@ async def _scan_one_map(
                     "proposed_candidate_id": None,
                     "candidates": [],
                     "is_nested_access": True,
+                    "destination_x": round(float(destination.x), 2),
+                    "destination_y": round(float(destination.y), 2),
+                    "nearest_distance_px": None,
+                    "max_hard_distance_px": round(hard_safety_max_px, 2),
                 }
             )
             continue
@@ -368,23 +502,85 @@ async def _scan_one_map(
             summary["already_connected"] += 1
             continue
 
+        # Reason distinction #1 (corridor point_type filtering fix):
+        # checked BEFORE the geometric/wall search so the admin always
+        # sees the most fundamental problem first. Reason #2 ("exist but
+        # not connected by RouteEdges") is deliberately NOT an early exit
+        # here — a destination with a genuinely close, valid hallway/
+        # junction candidate must still be proposed even if that map
+        # happens to also contain OTHER, unrelated disconnected transit
+        # points elsewhere (see transit_network_has_internal_edges'
+        # own docstring above); #2 is only used as the reason on the
+        # "nothing valid found" fallback below, once the ordinary distance
+        # search has already come up empty.
+        if not transit_points:
+            summary["no_candidate"] += 1
+            proposals.append(
+                {
+                    "map_id": map_id,
+                    "floor": destination.floor,
+                    "destination_point_id": destination_id,
+                    "destination_name": _display_name(destination, lang),
+                    "destination_point_type": destination.point_type,
+                    "status": "no_candidate",
+                    "confidence": None,
+                    "reason": "no_transit_points_on_map",
+                    "has_existing_invalid_edges": bool(has_any_edge.get(destination_id)),
+                    "is_calibrated": is_calibrated,
+                    "proposed_candidate_id": None,
+                    "candidates": [],
+                    "destination_x": round(float(destination.x), 2),
+                    "destination_y": round(float(destination.y), 2),
+                    "nearest_distance_px": None,
+                    "max_hard_distance_px": round(hard_safety_max_px, 2),
+                }
+            )
+            continue
+
         nearby = grid.nearby(float(destination.x), float(destination.y))
 
+        # Item 1/7/9: every same-map/same-floor hallway or junction is
+        # scored here, NOT pre-filtered by a small fixed cutoff — the grid
+        # neighborhood itself already only covers points within
+        # hard_safety_max_px (its cell size), so `scored` is effectively
+        # "every same-floor transit point within the hard safety ceiling,
+        # plus a little overlap from neighboring cells." The hard-safety
+        # cutoff and wall-blocking check are applied afterward, not here —
+        # that split is what lets a rejected proposal still report the
+        # nearest distance that WAS found, for diagnostics (item 2/8).
         scored: List[Tuple[RoutePoint, float]] = []
         for candidate in nearby:
             if str(candidate.id) == destination_id:
+                continue
+            # map_id/floor filtering fix: a Map document can still contain
+            # RoutePoints recorded on more than one distinct `floor` value
+            # (legacy data, or vertical-connector transition points) even
+            # though this project's normal model is one floor per Map.
+            # Two points merely sharing a map_id and a similar pixel
+            # position must never be proposed as connected across a real
+            # floor difference — that would silently draw a same-floor
+            # "walkway" edge between two points that are not actually on
+            # the same physical floor at all.
+            if candidate.floor != destination.floor:
                 continue
             distance_px = math.hypot(
                 float(candidate.x) - float(destination.x),
                 float(candidate.y) - float(destination.y),
             )
-            if distance_px <= max_distance_px:
-                scored.append((candidate, distance_px))
+            scored.append((candidate, distance_px))
 
         scored.sort(key=lambda pair: pair[1])
 
+        # The hard safety ceiling (item 2): candidates beyond this are
+        # never proposed, no matter how "nearest" they are.
+        within_safety = [
+            (candidate, distance_px)
+            for candidate, distance_px in scored
+            if distance_px <= hard_safety_max_px
+        ]
+
         valid_candidates: List[dict] = []
-        for candidate, distance_px in scored:
+        for candidate, distance_px in within_safety:
             blocked = False
             if wall_mask_available:
                 blocked = not has_clear_line(
@@ -405,6 +601,8 @@ async def _scan_one_map(
                     "point_id": str(candidate.id),
                     "name": _display_name(candidate, lang),
                     "point_type": candidate.point_type,
+                    "x": round(float(candidate.x), 2),
+                    "y": round(float(candidate.y), 2),
                     "distance_px": round(distance_px, 2),
                     "distance_meters": distance_meters,
                     "blocked_by_wall": False,
@@ -416,6 +614,32 @@ async def _scan_one_map(
         has_existing_invalid_edges = bool(has_any_edge.get(destination_id))
 
         if not valid_candidates:
+            # Reason distinction #2 vs #3 (corridor point_type filtering
+            # fix): once the ordinary distance/wall search has come up
+            # empty, a disconnected corridor network (2+ transit points on
+            # this map, none wired to each other by any walkway edge) is
+            # reported as the more fundamental, more actionable diagnosis
+            # than a plain "too far" — but only as a fallback here, never
+            # as a reason to reject a candidate that WAS found within
+            # range (see the transit_network_has_internal_edges docstring
+            # above for why a lone/independent transit point must never be
+            # penalized just because some other, unrelated transit point
+            # elsewhere on the map isn't connected to it).
+            no_candidate_reason = (
+                "transit_points_not_connected_by_edges"
+                if not transit_network_has_internal_edges
+                else "no_transit_point_within_range"
+            )
+
+            # Diagnostics (item 2/8): even when nothing valid was found —
+            # whether because every scored candidate was beyond the hard
+            # safety ceiling, or wall-blocked — report the nearest distance
+            # that WAS found by the grid scan, so the admin can see why
+            # (e.g. "nearest hallway was 2400px away, hard cap is 1500px")
+            # instead of just a bare "no candidate". None only when the
+            # grid genuinely found nothing on this floor at all.
+            nearest_found_px = round(scored[0][1], 2) if scored else None
+
             summary["no_candidate"] += 1
             proposals.append(
                 {
@@ -426,11 +650,15 @@ async def _scan_one_map(
                     "destination_point_type": destination.point_type,
                     "status": "no_candidate",
                     "confidence": None,
-                    "reason": "no_transit_point_within_range",
+                    "reason": no_candidate_reason,
                     "has_existing_invalid_edges": has_existing_invalid_edges,
                     "is_calibrated": is_calibrated,
                     "proposed_candidate_id": None,
                     "candidates": [],
+                    "destination_x": round(float(destination.x), 2),
+                    "destination_y": round(float(destination.y), 2),
+                    "nearest_distance_px": nearest_found_px,
+                    "max_hard_distance_px": round(hard_safety_max_px, 2),
                 }
             )
             continue
@@ -442,7 +670,11 @@ async def _scan_one_map(
         # reported as a distance-based high/medium/low confidence
         # proposal, only "needs_review", regardless of how close the
         # nearest candidate is.
-        confidence = "needs_review" if not wall_mask_available else _confidence_tier(nearest_px)
+        confidence = (
+            "needs_review"
+            if not wall_mask_available
+            else _confidence_tier(nearest_px, high_max_px, medium_max_px)
+        )
 
         if confidence == "needs_review":
             summary["needs_review"] += 1
@@ -462,6 +694,10 @@ async def _scan_one_map(
                 "is_calibrated": is_calibrated,
                 "proposed_candidate_id": valid_candidates[0]["point_id"],
                 "candidates": valid_candidates,
+                "destination_x": round(float(destination.x), 2),
+                "destination_y": round(float(destination.y), 2),
+                "nearest_distance_px": nearest_px,
+                "max_hard_distance_px": round(hard_safety_max_px, 2),
             }
         )
 
@@ -481,8 +717,6 @@ async def preview_auto_connect_destinations(
     reads.
     """
 
-    effective_max_distance = max_distance_px or MAX_DISTANCE_PX_DEFAULT
-
     maps_to_scan = await _resolve_scan_maps(map_id, scope)
 
     overall_summary = {
@@ -496,7 +730,7 @@ async def preview_auto_connect_destinations(
 
     for map_item in maps_to_scan:
         summary, proposals = await _scan_one_map(
-            map_item, floor, effective_max_distance, lang
+            map_item, floor, max_distance_px, lang
         )
         for key in overall_summary:
             overall_summary[key] += summary[key]

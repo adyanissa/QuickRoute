@@ -53,7 +53,6 @@ from services.semantic_prompt_loader import (
     get_prompt_info,
     get_prompt_text,
 )
-from services.storage_backend import ensure_generated_file_local
 
 try:
     import anthropic
@@ -1067,64 +1066,49 @@ def is_retryable_error(error_code: Optional[str]) -> bool:
 
 async def resolve_source_files_for_map(map_id: str) -> List[SourceFile]:
     """
-    Locates the best available source bytes for a single Map: the
-    preserved true original (any file type, any PDF page count) when
-    available, otherwise the always-present normalized SOURCE_DIR PNG
-    (image only, first-page-flattened for a PDF — the existing QuickRoute
-    limitation this falls back to honestly rather than pretending
-    otherwise). Returns [] if neither is available (e.g. the Map's files
-    were deleted), which the worker treats as a "source_file_unavailable"
-    failure rather than silently sending nothing to Claude.
+    Locates the best available source bytes for a single Map, using the
+    ONE canonical resolver (map_image_service.resolve_analysis_source_path
+    / _async) that every analysis-start code path now shares — the fix
+    for the "No source file could be located on disk" bug, which was
+    caused by this function, routes/semantic_analysis_routes.py's
+    start_map_semantic_analysis, and its map-group sibling each
+    independently re-deriving "where is this map's source file" by
+    filename convention and being able to silently disagree. Returns []
+    only when genuinely nothing exists anywhere on disk (e.g. the Map's
+    files were removed), which the worker treats as a
+    "source_file_unavailable" failure rather than silently sending
+    nothing to Claude.
     """
 
-    from services.map_image_service import (
-        SOURCE_DIR,
-        get_preserved_original_path,
-    )
+    from services.map_image_service import resolve_analysis_source_path_async
 
     map_item = await Map.get(map_id) if _looks_like_object_id(map_id) else None
-    original_path = get_preserved_original_path(map_id)
+    if map_item is None:
+        return []
 
-    if original_path and original_path.exists():
-        content_type = (
-            map_item.source_content_type if map_item else None
-        ) or mimetypes.guess_type(str(original_path))[0]
-        filename = (
-            map_item.source_filename if map_item and map_item.source_filename
-            else original_path.name
+    resolved = await resolve_analysis_source_path_async(map_item)
+    if resolved is None:
+        return []
+
+    content_type = (
+        map_item.source_content_type
+        if resolved.source_type != "rendered_source_png"
+        else "image/png"
+    ) or mimetypes.guess_type(str(resolved.path))[0]
+
+    filename = (
+        map_item.source_filename
+        if map_item.source_filename and resolved.source_type != "rendered_source_png"
+        else resolved.path.name
+    )
+
+    return [
+        SourceFile(
+            file_bytes=resolved.path.read_bytes(),
+            filename=filename,
+            content_type=content_type,
         )
-        return [
-            SourceFile(
-                file_bytes=original_path.read_bytes(),
-                filename=filename,
-                content_type=content_type,
-            )
-        ]
-
-    fallback_path = SOURCE_DIR / f"{map_id}.png"
-
-    if not fallback_path.exists() and map_item:
-        stored_source_url = (
-            map_item.source_image_url
-            or map_item.image_url
-        )
-
-        await asyncio.to_thread(
-            ensure_generated_file_local,
-            stored_source_url,
-            fallback_path,
-        )
-
-    if fallback_path.exists():
-        return [
-            SourceFile(
-                file_bytes=fallback_path.read_bytes(),
-                filename=f"{map_id}.png",
-                content_type="image/png",
-            )
-        ]
-
-    return []
+    ]
 
 
 def _looks_like_object_id(value: str) -> bool:

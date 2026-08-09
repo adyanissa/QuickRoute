@@ -5,6 +5,7 @@ import { LocationProvider } from './context/LocationContext';
 import { AuthProvider } from './context/AuthContext';
 import RequireRole from './components/RequireRole';
 import RequireGlobalAdmin from './components/RequireGlobalAdmin';
+import RequireSuperAdmin from './components/RequireSuperAdmin';
 
 // Import renamed screens
 import BarcodeEntryScreen from './screens/BarcodeEntryScreen';
@@ -23,6 +24,7 @@ import AdminInvitationCodesScreen from './screens/AdminInvitationCodesScreen';
 import AdminRoomsScreen from './screens/AdminRoomsScreen';
 import AdminRoutesScreen from './screens/AdminRoutesScreen';
 import AdminMapAnalysisScreen from './screens/AdminMapAnalysisScreen';
+import AdminNavigationCleanupScreen from './screens/AdminNavigationCleanupScreen';
 import { AdminProvider } from './context/AdminContext';
 
 import './styles/global.css';
@@ -109,6 +111,14 @@ function App() {
             <RequireRole>
               <AdminMapAnalysisScreen />
             </RequireRole>
+          }
+        />
+        <Route
+          path="/admin/navigation-cleanup"
+          element={
+            <RequireSuperAdmin>
+              <AdminNavigationCleanupScreen />
+            </RequireSuperAdmin>
           }
         />
 

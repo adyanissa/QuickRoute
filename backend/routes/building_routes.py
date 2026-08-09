@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from core.auth_deps import (
     get_current_user,
+    get_current_user_optional,
     require_global_admin,
     user_can_manage_building,
+    get_accessible_building_ids,
 )
 from core.errors import FORBIDDEN_BUILDING_SCOPE, FORBIDDEN_ROLE
 from models.building_model import Building
@@ -67,8 +69,35 @@ async def create_building(
     "",
     response_model=List[BuildingResponse]
 )
-async def get_all_buildings():
-    buildings = await Building.find_all().to_list()
+async def get_all_buildings(
+    admin: User = Depends(get_current_user_optional),
+):
+    """
+    RBAC/dashboard cleanup task, Phase 9 — deliberately stays reachable
+    with NO login at all (this is also the exact endpoint the public,
+    anonymous BuildingSelectionScreen uses to let a visitor pick their
+    building before ever navigating), so an anonymous caller — and an
+    authenticated `regular_user`, who has no admin scope of their own —
+    both still see every active building, completely unchanged from
+    before this task.
+
+    The one behavior actually added here: when the caller IS an
+    authenticated admin-tier user (global_manager/building_manager without
+    all_buildings, specifically — super_admin and all_buildings=True both
+    already see everything), the list is narrowed to only the buildings
+    they can access. This is what makes the Admin Dashboard's building
+    count/list correctly scoped instead of always showing the whole
+    system's buildings regardless of who's logged in.
+    """
+
+    query = {}
+
+    if admin is not None and admin.role != "regular_user":
+        accessible_ids = get_accessible_building_ids(admin)
+        if accessible_ids is not None:
+            query["_id"] = {"$in": [PydanticObjectId(bid) for bid in accessible_ids if bid]}
+
+    buildings = await Building.find(query).to_list()
     return [building_to_response(building) for building in buildings]
 
 

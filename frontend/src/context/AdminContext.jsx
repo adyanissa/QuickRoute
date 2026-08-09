@@ -23,6 +23,13 @@ const buildingToViewModel = (b) => ({
   category: b.category || 'general',
   iconColor: b.icon_color || '#2a5298',
   iconBg: `${b.icon_color || '#2a5298'}1f`,
+  // RBAC/dashboard cleanup task, Section 3 — Building.campus was
+  // previously dropped entirely by this view-model (only `description`
+  // survived, as `subtitle`). The Super Admin hierarchy's whole first
+  // level (All Locations -> Campus -> ...) depends on this real field
+  // being available on every building the frontend already loads —
+  // never a second round-trip, never a synthesized value.
+  campus: (b.campus || '').trim(),
 });
 
 const buildingToApiPayload = (b) => ({

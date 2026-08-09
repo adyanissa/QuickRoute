@@ -45,7 +45,9 @@ async def register_user(request: RegisterRequest):
             "email": new_user.email,
             "role": new_user.role,
             "building_ids": new_user.building_ids,
-            "all_buildings": new_user.all_buildings
+            "all_buildings": new_user.all_buildings,
+            "map_group_ids": new_user.map_group_ids,
+            "map_ids": new_user.map_ids,
         },
         "access_token": token,
         "token_type": "bearer",
@@ -102,6 +104,8 @@ async def signup_user(request: SignupRequest):
             role=invitation_code.role,
             building_ids=list(invitation_code.building_ids),
             all_buildings=invitation_code.all_buildings,
+            map_group_ids=list(getattr(invitation_code, "map_group_ids", []) or []),
+            map_ids=list(getattr(invitation_code, "map_ids", []) or []),
         )
         await new_user.insert()
     except Exception:
@@ -126,7 +130,9 @@ async def signup_user(request: SignupRequest):
             "email": new_user.email,
             "role": new_user.role,
             "building_ids": new_user.building_ids,
-            "all_buildings": new_user.all_buildings
+            "all_buildings": new_user.all_buildings,
+            "map_group_ids": new_user.map_group_ids,
+            "map_ids": new_user.map_ids,
         },
         "access_token": token,
         "token_type": "bearer",
@@ -155,7 +161,9 @@ async def login_user(request: LoginRequest):
             "email": user.email,
             "role": user.role,
             "building_ids": user.building_ids,
-            "all_buildings": user.all_buildings
+            "all_buildings": user.all_buildings,
+            "map_group_ids": user.map_group_ids,
+            "map_ids": user.map_ids,
         },
         "access_token": token,
         "token_type": "bearer",

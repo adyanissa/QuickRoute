@@ -22,6 +22,16 @@ class User(Document):
     building_ids: list[str] = Field(default_factory=list)
     all_buildings: bool = False
 
+    # Finer-grained scope for building_manager (RBAC/dashboard cleanup
+    # task, Phase 2): additive, backward-compatible — every existing user
+    # document without these fields loads with the empty-list default via
+    # Beanie/Pydantic, no migration required. Empty (the default) means
+    # "no map/map-group-level restriction beyond building_ids" — see
+    # core/auth_deps.py's check_map_access for the exact precedence
+    # (map_ids > map_group_ids > building_ids).
+    map_group_ids: list[str] = Field(default_factory=list)
+    map_ids: list[str] = Field(default_factory=list)
+
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Settings:

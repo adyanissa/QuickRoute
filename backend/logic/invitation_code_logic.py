@@ -91,28 +91,59 @@ async def validate_role_and_scope_for_creation(
     role: InvitationRole,
     all_buildings: bool,
     building_ids: list[str],
+    map_group_ids: Optional[list[str]] = None,
+    map_ids: Optional[list[str]] = None,
 ) -> None:
     """
-    Enforces the full creator permission + building-scope hierarchy from
-    the spec. Raises HTTPException on any violation. Does not mutate
-    anything — pure validation, called before an InvitationCode is built.
+    Enforces the full creator permission + building/map-group/map-scope
+    hierarchy from the spec. Raises HTTPException on any violation. Does
+    not mutate anything — pure validation, called before an InvitationCode
+    is built.
+
+    map_group_ids/map_ids (RBAC/dashboard cleanup task, Phase 2/4) are
+    additive: only ever meaningful for building_manager invitations (the
+    role Phase 2 defines fine-grained map/map-group scoping for), and are
+    validated against core.auth_deps.get_accessible_building_ids/
+    check_map_group_access/check_map_access so a creator can never narrow
+    an invitation to a map/map-group they themselves cannot reach — the
+    exact same "no inviter may grant access beyond their own scope" rule
+    already enforced below for building_ids.
     """
+
+    map_group_ids = list(map_group_ids or [])
+    map_ids = list(map_ids or [])
 
     allowed_roles = CREATABLE_ROLES_BY_CREATOR.get(creator.role, set())
     if role not in allowed_roles:
         raise HTTPException(**FORBIDDEN_ROLE)
 
     if role == "super_admin":
-        # System-wide by definition — no individual building selection.
-        if not all_buildings or building_ids:
+        # System-wide by definition — no individual building/map-group/map
+        # selection.
+        if not all_buildings or building_ids or map_group_ids or map_ids:
             raise HTTPException(**INVALID_BUILDING_SCOPE_FOR_ROLE)
 
-    elif role == "global_manager":
+    elif role == "global_manager" and all_buildings:
+        # RBAC/dashboard cleanup task, Phase 3: "no inviter may grant
+        # all_buildings=True unless authorized" — only super_admin, or a
+        # global_manager who ALREADY has all_buildings=True themselves, may
+        # mint an unrestricted global_manager invitation. A global_manager
+        # scoped to specific building_ids can still invite another
+        # global_manager, just never with all_buildings=True (they'd be
+        # granting more than they themselves have).
+        if creator.role != "super_admin" and not creator.all_buildings:
+            raise HTTPException(**INVALID_BUILDING_SCOPE_FOR_ROLE)
+
+    if role == "global_manager":
         # All-buildings or a specific set is fine; both empty (global
         # scope purely by role, matching how global_manager users already
         # bypass per-building checks via user_can_manage_building) is also
-        # fine.
-        pass
+        # fine. map_group_ids/map_ids are not a global_manager concept
+        # (Phase 2 only defines them for building_manager) — reject rather
+        # than silently ignore, so an admin UI bug can't produce an
+        # invitation whose stored scope doesn't match what was intended.
+        if map_group_ids or map_ids:
+            raise HTTPException(**INVALID_BUILDING_SCOPE_FOR_ROLE)
 
     elif role == "building_manager":
         if all_buildings:
@@ -123,15 +154,21 @@ async def validate_role_and_scope_for_creation(
                 detail="Building manager invitation codes require at least one building",
             )
 
-    # regular_user: no constraints — may optionally carry building_ids.
+    else:
+        # regular_user: no admin scope concept at all.
+        if map_group_ids or map_ids:
+            raise HTTPException(**INVALID_BUILDING_SCOPE_FOR_ROLE)
 
     # Every referenced building must exist, and the creator must actually
-    # be authorized to manage it (defensive — with the current hierarchy
-    # only super_admin/global_manager reach this function and both are
-    # authorized for every building, but this generalizes correctly if
-    # that ever changes, and directly satisfies the "creator cannot assign
-    # a building outside their scope" requirement).
-    from core.auth_deps import user_can_manage_building
+    # be authorized to manage it. RBAC/dashboard cleanup task, Phase 3:
+    # switched from the legacy user_can_manage_building (which treats
+    # global_manager as unconditionally authorized for every building) to
+    # the stricter, spec-accurate user_can_access_building — a
+    # global_manager restricted to specific building_ids can no longer
+    # mint an invitation for a building outside that set, satisfying "no
+    # inviter may grant access outside their own scope" for real, not just
+    # for building_manager.
+    from core.auth_deps import user_can_access_building
 
     for building_id in building_ids:
         try:
@@ -142,8 +179,43 @@ async def validate_role_and_scope_for_creation(
         if not building:
             raise HTTPException(**BUILDING_NOT_FOUND)
 
-        if not user_can_manage_building(creator, building_id):
+        if not user_can_access_building(creator, building_id):
             raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
+    # map_group_ids/map_ids must each belong to one of the SAME
+    # building_ids just validated above (never a stray map/map-group in a
+    # building the creator didn't even list, let alone one they can't
+    # manage) — this keeps the invitation internally consistent, not just
+    # individually-authorized.
+    if map_group_ids:
+        from models.map_group_model import MapGroup
+
+        for map_group_id in map_group_ids:
+            try:
+                map_group = await MapGroup.get(PydanticObjectId(map_group_id))
+            except Exception:
+                map_group = None
+
+            if not map_group:
+                raise HTTPException(
+                    status_code=404, detail=f"Map group {map_group_id} not found"
+                )
+            if map_group.building_id not in building_ids:
+                raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
+    if map_ids:
+        from models.map_model import Map
+
+        for map_id in map_ids:
+            try:
+                map_item = await Map.get(PydanticObjectId(map_id))
+            except Exception:
+                map_item = None
+
+            if not map_item:
+                raise HTTPException(status_code=404, detail=f"Map {map_id} not found")
+            if map_item.building_id not in building_ids:
+                raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
 
 
 # ---------------------------------------------------------

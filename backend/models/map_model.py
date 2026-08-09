@@ -72,6 +72,40 @@ class Map(Document):
     source_filename: Optional[str] = None
     source_content_type: Optional[str] = None
 
+    # Explicit, persisted pointer to the physical file semantic map
+    # analysis must read for THIS map (source-file path bug fix). Stored
+    # as a POSIX-style path (forward slashes, even on Windows) RELATIVE to
+    # the fixed storage root services/map_image_service.MAPS_DIR — never
+    # an absolute OS path and never dependent on any process's current
+    # working directory. Before this field existed, every reader had to
+    # independently re-derive "where is this map's source file" by
+    # filename convention (glob on the originals folder, then fall back to
+    # the normalized PNG folder); those independent lookups could silently
+    # diverge, which was the root cause of "No source file could be
+    # located on disk for this analysis" on freshly uploaded maps. Set
+    # once, right after upload processing completes, in
+    # routes/map_routes.py's process_map_in_background(); read by
+    # services/map_image_service.resolve_analysis_source_path(), the one
+    # canonical resolver every analysis-start code path now calls instead
+    # of re-deriving this itself. None only for maps that predate this
+    # field and have not yet been re-resolved (the resolver still falls
+    # back to the old convention-based discovery for those, and
+    # self-heals this field once it finds a file that way).
+    analysis_source_path: Optional[str] = None
+
+    # Which physical file analysis_source_path points at:
+    # "original_pdf" | "original_image" | "rendered_source_png". The
+    # first two are the admin's true uploaded file (any PDF page count,
+    # full quality); "rendered_source_png" is the always-present,
+    # full-resolution flattened PNG this pipeline produces during upload
+    # (first page only for a PDF) — used only when the true original
+    # could not be preserved. Never a thumbnail: QuickRoute has no
+    # thumbnail concept for source files, and this resolver must never be
+    # pointed at the small cosmetic "display" map either (see
+    # display_image_url above), only at a genuine full-resolution
+    # analysis-quality source.
+    analysis_source_type: Optional[str] = None
+
     # Image processing status
     processing_status: ProcessingStatus = "not_started"
     processing_progress: int = Field(default=0, ge=0, le=100)

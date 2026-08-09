@@ -40,6 +40,10 @@ class AutoConnectCandidate(BaseModel):
     point_id: str
     name: str
     point_type: str
+    # Candidate's own map coordinates (item 8 — always populated for every
+    # candidate this service ever returns).
+    x: Optional[float] = None
+    y: Optional[float] = None
     distance_px: float
     distance_meters: Optional[float] = None
     blocked_by_wall: bool = False
@@ -79,6 +83,24 @@ class AutoConnectProposal(BaseModel):
     # junction proposal. Lets the frontend show "approved nested access"
     # styling instead of an ordinary corridor-candidate list.
     is_nested_access: bool = False
+
+    # Scale-aware distance diagnostics (item 8). Always populated when the
+    # destination's own coordinates and this scan's hard safety ceiling are
+    # known — which is every proposal this service produces.
+    destination_x: Optional[float] = None
+    destination_y: Optional[float] = None
+
+    # The nearest transit candidate distance found for this destination,
+    # even when status is "no_candidate" because it exceeded
+    # max_hard_distance_px or was wall-blocked (diagnostics for item 2) —
+    # None only when the scan found no same-floor transit point nearby at
+    # all to measure against.
+    nearest_distance_px: Optional[float] = None
+
+    # This scan's hard safety ceiling for this map (item 7 — scale-aware,
+    # derived from the map's canonical image dimensions when known).
+    # Candidates beyond this distance are never proposed.
+    max_hard_distance_px: Optional[float] = None
 
 
 class AutoConnectPreviewSummary(BaseModel):

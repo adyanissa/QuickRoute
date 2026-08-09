@@ -6,7 +6,14 @@ from typing import List, Optional, Tuple
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from core.auth_deps import require_global_admin
+from core.auth_deps import (
+    require_global_admin,
+    require_any_admin,
+    get_current_user_optional,
+    user_can_access_map,
+    get_accessible_building_ids,
+)
+from core.errors import FORBIDDEN_MAP_SCOPE, FORBIDDEN_BUILDING_SCOPE
 from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
 from models.map_model import Map
@@ -56,6 +63,68 @@ def route_edge_to_response(edge: RouteEdge) -> RouteEdgeResponse:
         created_at=edge.created_at,
         updated_at=edge.updated_at,
     )
+
+
+async def _require_edge_scope(
+    admin: User, map_id: str, to_map_id: Optional[str] = None
+) -> None:
+    """RBAC/dashboard cleanup task, Phase 2 continuation: scope-checks a
+    RouteEdge's owning map(s) — for an ordinary same-floor edge this is
+    just map_id; for a cross-floor transition edge, BOTH map_id and
+    to_map_id must be in the caller's scope (a building_manager restricted
+    via map_ids can't reach a connector edge by way of only one of its two
+    floors being authorized)."""
+    for candidate_map_id in [map_id] + ([to_map_id] if to_map_id else []):
+        try:
+            map_item = await Map.get(PydanticObjectId(candidate_map_id))
+        except Exception:
+            map_item = None
+        if map_item is None:
+            continue
+        if not user_can_access_map(admin, map_item):
+            raise HTTPException(**FORBIDDEN_MAP_SCOPE)
+
+
+async def _apply_edge_scope_to_query(query: dict, admin: User) -> dict:
+    """Same intersect-with-authorized-scope pattern as
+    route_point_routes.py's _apply_authorized_scope_to_query, applied to
+    RouteEdge's map_id field. super_admin unrestricted; global_manager/
+    building_manager narrowed to their accessible building's maps when no
+    explicit map_id filter was given, and rejected outright with 403 when
+    they explicitly request a map_id outside their scope."""
+    if admin.role == "super_admin":
+        return query
+
+    requested_map_id = query.get("map_id")
+    if requested_map_id:
+        try:
+            map_item = await Map.get(PydanticObjectId(requested_map_id))
+        except Exception:
+            map_item = None
+        if map_item is None or not user_can_access_map(admin, map_item):
+            raise HTTPException(**FORBIDDEN_MAP_SCOPE)
+        return query
+
+    accessible_building_ids = get_accessible_building_ids(admin)
+    if accessible_building_ids is None:
+        return query
+
+    maps_in_scope = await Map.find(
+        {"building_id": {"$in": accessible_building_ids}}
+    ).to_list()
+    map_ids_in_scope = [str(m.id) for m in maps_in_scope]
+
+    if admin.role == "building_manager" and admin.map_ids:
+        map_ids_in_scope = [m for m in map_ids_in_scope if m in admin.map_ids]
+    elif admin.role == "building_manager" and admin.map_group_ids:
+        map_ids_in_scope = [
+            str(m.id)
+            for m in maps_in_scope
+            if m.map_group_id in admin.map_group_ids
+        ]
+
+    query["map_id"] = {"$in": map_ids_in_scope}
+    return query
 
 
 def get_scale_for_floor(map_item: Map, floor: int) -> float:
@@ -403,7 +472,7 @@ async def recalculate_walkway_edges_for_map(map_id: str) -> Tuple[int, int]:
 )
 async def create_route_edge(
     edge_data: RouteEdgeCreate,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     if edge_data.from_point_id == edge_data.to_point_id:
         raise HTTPException(
@@ -416,6 +485,11 @@ async def create_route_edge(
         from_point_id=edge_data.from_point_id,
         to_point_id=edge_data.to_point_id,
     )
+
+    # RBAC/dashboard cleanup task, Phase 2: previously require_global_admin
+    # blocked every building_manager from drawing edges at all, even in
+    # their own building/map.
+    await _require_edge_scope(admin, edge_data.map_id)
 
     duplicate_edge = await find_duplicate_edge(
         map_id=edge_data.map_id,
@@ -449,6 +523,9 @@ async def create_route_edge(
     to_point = await RoutePoint.get(PydanticObjectId(edge_data.to_point_id))
     if from_point and to_point and from_point.map_id != to_point.map_id:
         to_map_id = to_point.map_id
+        # The other floor this cross-floor edge reaches into must also be
+        # in scope — never just the from_point's map.
+        await _require_edge_scope(admin, to_map_id)
 
     new_edge = RouteEdge(
         map_id=edge_data.map_id,
@@ -477,7 +554,14 @@ async def get_all_route_edges(
     to_point_id: Optional[str] = Query(default=None),
     edge_type: Optional[str] = Query(default=None),
     is_accessible: Optional[bool] = Query(default=None),
+    admin: User = Depends(require_any_admin),
 ):
+    # RBAC/dashboard cleanup task, Phase 2/3: RouteEdges are never consumed
+    # by the public/anonymous navigation flow (unlike RoutePoint) — routing
+    # itself goes through a dedicated Dijkstra endpoint, never this raw
+    # list — so this can safely require authentication outright rather
+    # than needing the optional-auth compromise route_point_routes.py
+    # uses.
     query = {}
 
     if map_id:
@@ -495,6 +579,8 @@ async def get_all_route_edges(
     if is_accessible is not None:
         query["is_accessible"] = is_accessible
 
+    query = await _apply_edge_scope_to_query(query, admin)
+
     edges = await RouteEdge.find(query).to_list()
     return [route_edge_to_response(edge) for edge in edges]
 
@@ -503,7 +589,10 @@ async def get_all_route_edges(
     "/{edge_id}",
     response_model=RouteEdgeResponse
 )
-async def get_route_edge_by_id(edge_id: PydanticObjectId):
+async def get_route_edge_by_id(
+    edge_id: PydanticObjectId,
+    admin: User = Depends(require_any_admin),
+):
     edge = await RouteEdge.get(edge_id)
 
     if not edge:
@@ -511,6 +600,9 @@ async def get_route_edge_by_id(edge_id: PydanticObjectId):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Route edge not found"
         )
+
+    if admin.role != "super_admin":
+        await _require_edge_scope(admin, edge.map_id, edge.to_map_id)
 
     return route_edge_to_response(edge)
 
@@ -522,7 +614,7 @@ async def get_route_edge_by_id(edge_id: PydanticObjectId):
 async def update_route_edge(
     edge_id: PydanticObjectId,
     edge_data: RouteEdgeUpdate,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     edge = await RouteEdge.get(edge_id)
 
@@ -531,6 +623,9 @@ async def update_route_edge(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Route edge not found"
         )
+
+    if admin.role != "super_admin":
+        await _require_edge_scope(admin, edge.map_id, edge.to_map_id)
 
     update_data = edge_data.model_dump(exclude_unset=True)
 
@@ -608,7 +703,7 @@ async def update_route_edge(
 )
 async def delete_route_edge(
     edge_id: PydanticObjectId,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     edge = await RouteEdge.get(edge_id)
 
@@ -617,6 +712,9 @@ async def delete_route_edge(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Route edge not found"
         )
+
+    if admin.role != "super_admin":
+        await _require_edge_scope(admin, edge.map_id, edge.to_map_id)
 
     await edge.delete()
 
@@ -643,7 +741,7 @@ async def delete_route_edge(
 )
 async def preview_auto_connect_destinations_route(
     request: AutoConnectPreviewRequest,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     """
     Entirely read-only — never writes to MongoDB. Returns up to 3 nearest
@@ -658,6 +756,9 @@ async def preview_auto_connect_destinations_route(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Map not found",
         )
+
+    if admin.role != "super_admin" and not user_can_access_map(admin, map_item):
+        raise HTTPException(**FORBIDDEN_MAP_SCOPE)
 
     result = await preview_auto_connect_destinations(
         map_id=request.map_id,
@@ -676,7 +777,7 @@ async def preview_auto_connect_destinations_route(
 )
 async def apply_auto_connect_destinations_route(
     request: AutoConnectApplyRequest,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     """
     Creates exactly one ordinary same-floor walkway RouteEdge per
@@ -695,6 +796,9 @@ async def apply_auto_connect_destinations_route(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Map not found",
         )
+
+    if admin.role != "super_admin" and not user_can_access_map(admin, map_item):
+        raise HTTPException(**FORBIDDEN_MAP_SCOPE)
 
     result = await apply_auto_connect_destinations(
         map_id=request.map_id,

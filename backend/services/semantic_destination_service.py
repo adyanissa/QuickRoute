@@ -476,16 +476,115 @@ def _detect_parent_cycle(
     return depth >= _MAX_PARENT_CHAIN_DEPTH
 
 
+def _validate_accepted_item_for_batch(
+    accepted: dict,
+    *,
+    items_by_id: Dict[str, Tuple[str, Dict[str, Any]]],
+    rooms_by_semantic_id: Dict[str, Room],
+    accepted_ids_in_batch: set,
+    map_item: Map,
+) -> Optional[str]:
+    """Pure, read-only re-check of everything the real write pass
+    (`_apply_one_item` + the Pass 2 nested-relationship loop below) would
+    otherwise only discover DURING writes — used by the fast batch
+    placement workflow's `all_or_nothing` pre-write validation so a batch
+    either writes nothing or writes exactly what was already validated.
+    Returns a human-readable error string, or None when the item is safe
+    to apply. Never itself touches the database (no insert/save/delete)."""
+
+    item_id = accepted.get("semantic_item_id")
+    entry = items_by_id.get(item_id)
+    if not entry:
+        return (
+            "Not found in this publication's approved places/facilities "
+            "— it may have been unpublished or rejected since preview."
+        )
+
+    _entity_kind, item = entry
+
+    review = item.get("review") or {}
+    if review.get("status") not in ("accepted", "corrected"):
+        return "Not accepted/corrected in the reviewed semantic analysis."
+
+    selectable, reason = _selectable(item)
+    if not selectable:
+        return f"Excluded from destination creation ({reason})."
+
+    existing_room = rooms_by_semantic_id.get(item_id)
+    has_existing_point = bool(existing_room and existing_room.route_point_id)
+
+    # Section 7: "validate all coordinates; reject coordinates outside the
+    # map bounds; never invent coordinates" — only enforced when this item
+    # doesn't already have an existing, reusable point (Section 8:
+    # existing/linked destinations never require a new location).
+    if not has_existing_point:
+        x = accepted.get("x")
+        y = accepted.get("y")
+        if x is None or y is None:
+            return (
+                "No coordinates were provided and no existing map "
+                "location is linked to this item yet."
+            )
+        try:
+            x_val = float(x)
+            y_val = float(y)
+        except (TypeError, ValueError):
+            return "Coordinates must be numeric."
+
+        if x_val < 0 or y_val < 0:
+            return "Coordinates must not be negative."
+        if map_item.source_width and x_val > map_item.source_width:
+            return (
+                f"x={x_val} is outside this map's width "
+                f"({map_item.source_width})."
+            )
+        if map_item.source_height and y_val > map_item.source_height:
+            return (
+                f"y={y_val} is outside this map's height "
+                f"({map_item.source_height})."
+            )
+
+    parent_item_id = accepted.get("parent_semantic_item_id")
+    if (
+        parent_item_id
+        and parent_item_id not in rooms_by_semantic_id
+        and parent_item_id not in accepted_ids_in_batch
+    ):
+        return (
+            f"Nested parent {parent_item_id} was not found among existing "
+            "Rooms or among the items in this same batch."
+        )
+
+    return None
+
+
 async def apply_semantic_destinations(
     map_id: str,
     *,
     publication_id: Optional[str],
     accepted_items: List[dict],
+    all_or_nothing: bool = False,
 ) -> dict:
     """The only function in this module that writes to MongoDB. Every item
     is independently, fully revalidated here — the frontend's preview
-    response is never trusted as-is. One invalid/failed item never aborts
-    the others."""
+    response is never trusted as-is.
+
+    Default behavior (all_or_nothing=False) is unchanged from before that
+    flag existed: one invalid/failed item never aborts the others — this
+    is what the existing per-card "Accept" -> "Create Accepted
+    Destinations" workflow still relies on.
+
+    all_or_nothing=True (the fast batch placement workflow's single
+    "Save All Destinations" confirmation) instead validates every accepted
+    item FIRST, with zero writes, and only proceeds to the real write pass
+    below if every single one is valid — otherwise nothing is written at
+    all and `item_errors` reports exactly which item(s) failed and why
+    (Section 7: "validate the entire batch before writing; if validation
+    fails, return item-level errors without partially creating
+    destinations"; "if the current MongoDB architecture cannot provide a
+    true transaction, perform a complete validation pass before any
+    writes" — mongomock/Motor here has no multi-document transaction
+    support to reuse, so this pre-write validation pass is the mechanism)."""
 
     result = {
         "requested": len(accepted_items),
@@ -502,6 +601,7 @@ async def apply_semantic_destinations(
         "warnings": [],
         "created_room_ids": [],
         "created_route_point_ids": [],
+        "item_errors": {},
     }
 
     map_item = await Map.get(PydanticObjectId(map_id))
@@ -558,6 +658,32 @@ async def apply_semantic_destinations(
     # accepted in the SAME apply call resolves correctly even though
     # neither side existed in the database a moment ago.
     room_by_semantic_id_this_batch: Dict[str, Room] = dict(rooms_by_semantic_id)
+
+    if all_or_nothing:
+        accepted_ids_in_batch = {
+            a.get("semantic_item_id") for a in accepted_items if a.get("semantic_item_id")
+        }
+        item_errors: Dict[str, str] = {}
+        for accepted in accepted_items:
+            item_id = accepted.get("semantic_item_id")
+            error = _validate_accepted_item_for_batch(
+                accepted,
+                items_by_id=items_by_id,
+                rooms_by_semantic_id=rooms_by_semantic_id,
+                accepted_ids_in_batch=accepted_ids_in_batch,
+                map_item=map_item,
+            )
+            if error:
+                item_errors[item_id or "(missing semantic_item_id)"] = error
+
+        if item_errors:
+            result["failed"] = len(item_errors)
+            result["item_errors"] = item_errors
+            result["warnings"].append(
+                f"{len(item_errors)} item(s) failed validation — nothing was "
+                "written. Fix the reported item(s) and submit the batch again."
+            )
+            return result
 
     # Pass 1 — create/update/reuse every Room + destination RoutePoint,
     # independent of any nested relationship.
