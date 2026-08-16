@@ -23,6 +23,7 @@ import pytest
 
 from tests.test_api_integration import auth_headers, create_admin_and_get_token
 
+from models.map_model import Map
 from models.semantic_map_analysis_model import SemanticMapAnalysis
 from models.semantic_map_publication_model import SemanticEntity, SemanticMapPublication
 from schemas.semantic_analysis_schema import SemanticMapImportV2
@@ -348,9 +349,22 @@ def test_anthropic_api_key_is_none_when_unset(monkeypatch):
     assert svc.get_anthropic_api_key() is None
 
 
-def test_analysis_model_defaults_to_claude_sonnet(monkeypatch):
+def test_analysis_model_defaults_to_the_verified_fallback(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_MAP_ANALYSIS_MODEL", raising=False)
-    assert svc.get_analysis_model() == "claude-sonnet-4-20250514"
+    assert svc.get_analysis_model() == svc.DEFAULT_ANALYSIS_MODEL
+
+
+def test_default_model_is_never_the_known_unavailable_id():
+    """
+    Regression guard. "claude-sonnet-4-20250514" was hard-coded as the
+    fallback without ever being checked against a real workspace, and it is
+    not available to this project's API key — the first real analysis run
+    failed with 404 not_found_error. Any future fallback must be confirmed
+    present in client.models.list() before it is written here, so this
+    specific id must never come back.
+    """
+
+    assert svc.DEFAULT_ANALYSIS_MODEL != "claude-sonnet-4-20250514"
 
 
 def test_analysis_model_reads_env_override(monkeypatch):
@@ -377,6 +391,96 @@ def test_max_image_edge_reads_env_override(monkeypatch):
 def test_semantic_analysis_service_does_not_import_openai_client():
     assert not hasattr(svc, "OpenAI")
     assert not hasattr(svc, "openai")
+
+
+# ---------------------------------------------------------------------
+# Configuration hygiene: python-dotenv keeps trailing whitespace on an
+# unquoted .env value, so `ANTHROPIC_MAP_ANALYSIS_MODEL=claude-x  ` would
+# otherwise be sent to the API with the spaces still attached and rejected
+# as an unknown model — a failure that is very hard to see, because the
+# value looks correct everywhere it is printed.
+# ---------------------------------------------------------------------
+
+
+def test_analysis_model_value_is_stripped_of_surrounding_whitespace(monkeypatch):
+    # This is the exact shape the project's own .env had: a VALID model id
+    # with two trailing spaces, which python-dotenv preserved and which was
+    # then rejected by the API as an unknown model.
+    monkeypatch.setenv("ANTHROPIC_MAP_ANALYSIS_MODEL", "  claude-sonnet-4-6  ")
+    assert svc.get_analysis_model() == "claude-sonnet-4-6"
+
+
+def test_blank_analysis_model_falls_back_to_the_pinned_default(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_MAP_ANALYSIS_MODEL", "   ")
+    assert svc.get_analysis_model() == svc.DEFAULT_ANALYSIS_MODEL
+
+    monkeypatch.setenv("ANTHROPIC_MAP_ANALYSIS_MODEL", "")
+    assert svc.get_analysis_model() == svc.DEFAULT_ANALYSIS_MODEL
+
+    monkeypatch.delenv("ANTHROPIC_MAP_ANALYSIS_MODEL", raising=False)
+    assert svc.get_analysis_model() == svc.DEFAULT_ANALYSIS_MODEL
+
+
+def test_default_analysis_model_is_a_claude_model():
+    """The fallback must never drift to a non-Anthropic identifier."""
+    assert svc.DEFAULT_ANALYSIS_MODEL.startswith("claude-")
+
+
+def test_env_var_is_the_source_of_truth_for_the_model(monkeypatch):
+    """
+    ANTHROPIC_MAP_ANALYSIS_MODEL always wins over the fallback, and the
+    service can say which of the two is actually in play (used by the
+    unsupported_model error so an admin knows where to look).
+    """
+
+    monkeypatch.setenv("ANTHROPIC_MAP_ANALYSIS_MODEL", "claude-opus-4-5-20251101")
+    assert svc.get_analysis_model() == "claude-opus-4-5-20251101"
+    assert svc.analysis_model_is_explicitly_configured() is True
+
+    monkeypatch.setenv("ANTHROPIC_MAP_ANALYSIS_MODEL", "   ")
+    assert svc.get_analysis_model() == svc.DEFAULT_ANALYSIS_MODEL
+    assert svc.analysis_model_is_explicitly_configured() is False
+
+    monkeypatch.delenv("ANTHROPIC_MAP_ANALYSIS_MODEL", raising=False)
+    assert svc.get_analysis_model() == svc.DEFAULT_ANALYSIS_MODEL
+    assert svc.analysis_model_is_explicitly_configured() is False
+
+
+def test_api_key_is_stripped_and_whitespace_only_counts_as_missing(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "  sk-ant-spaced  ")
+    assert svc.get_anthropic_api_key() == "sk-ant-spaced"
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+    assert svc.get_anthropic_api_key() is None
+
+
+def test_unsupported_model_error_names_the_env_var_and_the_default(monkeypatch):
+    """
+    An admin reading this failure on the analysis screen must be told
+    exactly which setting to change — not just "not found".
+    """
+
+    monkeypatch.setenv("ANTHROPIC_MAP_ANALYSIS_MODEL", "claude-does-not-exist")
+
+    not_found = anthropic.NotFoundError(
+        message="model not found",
+        response=httpx.Response(
+            404,
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        ),
+        body=None,
+    )
+
+    mapped = svc._map_anthropic_exception(not_found)
+
+    assert mapped.error_code == "unsupported_model"
+    assert "ANTHROPIC_MAP_ANALYSIS_MODEL" in mapped.message
+    assert "claude-does-not-exist" in mapped.message
+    # Says WHERE the bad value came from, and how to find a good one.
+    assert "backend/.env" in mapped.message
+    assert "models.list()" in mapped.message
+    # Never suggests switching provider.
+    assert "openai" not in mapped.message.lower()
 
 
 def test_semantic_analysis_service_imports_anthropic_client():
@@ -1224,6 +1328,20 @@ async def test_run_queued_analysis_still_rejects_forbidden_routing_fields(monkey
 # ---------------------------------------------------------------------
 
 
+async def _make_real_map(title="Semantic Test Map"):
+    """
+    GET /api/maps/{map_id}/semantic-entities loads and scope-checks the Map
+    document before returning anything (the RoutePoint/Map IDOR guard added
+    with the RBAC work) — so any test that calls it needs a REAL Map id, not
+    a synthetic string. Analyses that never touch that endpoint can keep
+    using a plain string map_id.
+    """
+
+    map_item = Map(title=title, processing_status="completed", scale=1.0)
+    await map_item.insert()
+    return str(map_item.id)
+
+
 async def _make_completed_analysis(map_id="map-http-1"):
     analysis = SemanticMapAnalysis(
         map_id=map_id, source_fingerprint="fp", prompt_version="v",
@@ -1374,14 +1492,16 @@ async def test_rejected_entities_are_excluded_from_the_active_semantic_index(cli
 @pytest.mark.asyncio
 async def test_semantic_entity_selector_endpoint_filters_by_map_id(client):
     token, _ = create_admin_and_get_token(client, email="semantic7@example.com")
-    analysis_a = await _make_completed_analysis(map_id="map-selector-a")
+    map_a_id = await _make_real_map("Selector Map A")
+    map_b_id = await _make_real_map("Selector Map B")
+    analysis_a = await _make_completed_analysis(map_id=map_a_id)
     reviewed_a = _valid_ai_result()
     reviewed_a["places"][0]["review"] = {"status": "accepted"}
     analysis_a.reviewed_result = reviewed_a
     await analysis_a.save()
     await publish_analysis(analysis_a, published_by="tester")
 
-    analysis_b = await _make_completed_analysis(map_id="map-selector-b")
+    analysis_b = await _make_completed_analysis(map_id=map_b_id)
     reviewed_b = _valid_ai_result()
     reviewed_b["places"][0]["place_external_id"] = "place_999"
     reviewed_b["places"][0]["review"] = {"status": "accepted"}
@@ -1390,7 +1510,7 @@ async def test_semantic_entity_selector_endpoint_filters_by_map_id(client):
     await publish_analysis(analysis_b, published_by="tester")
 
     response = client.get(
-        "/api/maps/map-selector-a/semantic-entities", headers=auth_headers(token)
+        f"/api/maps/{map_a_id}/semantic-entities", headers=auth_headers(token)
     )
     assert response.status_code == 200
     entity_ids = [item["entity_external_id"] for item in response.json()]

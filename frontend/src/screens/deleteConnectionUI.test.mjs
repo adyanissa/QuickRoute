@@ -251,7 +251,17 @@ test('route_edge_routes.py: delete_route_edge requires admin authorization, dele
 
   // Admin guard — tolerant of the exact parameter name/whitespace, just
   // requires the real dependency function.
-  assert.match(handlerBody, /Depends\(\s*require_global_admin\s*\)/);
+  //
+  // This asserted require_global_admin until the RBAC work broadened edge
+  // administration to the whole admin tier: delete_route_edge now takes
+  // require_any_admin and then calls _require_edge_scope(...), so a
+  // building_manager can delete an edge inside their OWN building/map
+  // scope and nothing else. That is strictly the same authorization model
+  // the sibling create/update edge endpoints already use, and it is a
+  // narrowing per-resource check, not a blanket loosening — so the guard
+  // asserted here is the admin-tier dependency plus the scope call.
+  assert.match(handlerBody, /Depends\(\s*require_any_admin\s*\)/);
+  assert.match(handlerBody, /_require_edge_scope\(/);
 
   // Deletes only the resolved RouteEdge document.
   assert.match(handlerBody, /await edge\.delete\(\)/);

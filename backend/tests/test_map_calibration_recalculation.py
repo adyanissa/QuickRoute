@@ -94,8 +94,15 @@ def _calibrate(client, token, map_id, *, real_distance_meters, point_b_x=200):
     )
 
 
-def _get_edge(client, edge_id):
-    response = client.get(f"/api/route-edges/{edge_id}")
+def _get_edge(client, token, edge_id):
+    # GET /api/route-edges/{id} is admin-only by design (see
+    # routes/route_edge_routes.py: RouteEdges are never consumed by the
+    # public/anonymous navigation flow, unlike RoutePoint), so this helper
+    # must authenticate — an anonymous call correctly returns 401 long
+    # before it reaches the does-this-edge-exist check.
+    response = client.get(
+        f"/api/route-edges/{edge_id}", headers=auth_headers(token)
+    )
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -132,7 +139,7 @@ def test_calibration_recalculates_existing_walkway_edges(client):
     assert body["edges_recalculated"] == 1
     assert body["edges_recalculation_skipped"] == 0
 
-    refetched = _get_edge(client, edge["id"])
+    refetched = _get_edge(client, token, edge["id"])
     # 100 px (unchanged RoutePoint coordinates) * 0.5 m/px = 50.0 m.
     assert refetched["distance"] == 50.0
     # updated_at must have moved forward.
@@ -158,7 +165,7 @@ def test_only_edges_from_the_calibrated_map_are_changed(client):
     # Refetch from MongoDB (not the raw POST-creation response) so the
     # "before" baseline has gone through the exact same round-trip as the
     # "after" GET below — see _assert_same_datetime's docstring.
-    edge_b_before = _get_edge(client, edge_b["id"])
+    edge_b_before = _get_edge(client, token, edge_b["id"])
 
     assert edge_a["distance"] == 100.0
     assert edge_b["distance"] == 100.0
@@ -168,9 +175,9 @@ def test_only_edges_from_the_calibrated_map_are_changed(client):
     assert calib.json()["edges_recalculated"] == 1
 
     # Map A's edge changed...
-    assert _get_edge(client, edge_a["id"])["distance"] == 50.0
+    assert _get_edge(client, token, edge_a["id"])["distance"] == 50.0
     # ...but Map B's edge (a different Map entirely) is completely untouched.
-    unchanged = _get_edge(client, edge_b["id"])
+    unchanged = _get_edge(client, token, edge_b["id"])
     assert unchanged["distance"] == 100.0
     _assert_same_datetime(unchanged["updated_at"], edge_b_before["updated_at"])
 
@@ -203,7 +210,7 @@ def test_stairs_edges_are_never_recalculated(client):
     assert stairs_edge["distance_override"] == 7.5
     # Refetch from MongoDB (not the raw POST-creation response) — see
     # _assert_same_datetime's docstring for why this matters.
-    stairs_edge_before = _get_edge(client, stairs_edge["id"])
+    stairs_edge_before = _get_edge(client, token, stairs_edge["id"])
 
     calib = _calibrate(client, token, map_item["id"], real_distance_meters=100, point_b_x=200)
     assert calib.status_code == 200, calib.text
@@ -211,9 +218,9 @@ def test_stairs_edges_are_never_recalculated(client):
     # deliberately excluded from the query entirely (edge_type == "walkway").
     assert calib.json()["edges_recalculated"] == 1
 
-    assert _get_edge(client, walkway_edge["id"])["distance"] == 50.0
+    assert _get_edge(client, token, walkway_edge["id"])["distance"] == 50.0
 
-    unchanged_stairs = _get_edge(client, stairs_edge["id"])
+    unchanged_stairs = _get_edge(client, token, stairs_edge["id"])
     assert unchanged_stairs["distance"] == 7.5
     assert unchanged_stairs["distance_override"] == 7.5
     _assert_same_datetime(unchanged_stairs["updated_at"], stairs_edge_before["updated_at"])
@@ -239,7 +246,7 @@ async def test_invalid_orphaned_edge_is_skipped_without_failing_calibration(clie
     orphan_edge = _create_walkway_edge(
         client, token, map_id=map_item["id"], from_id=orphan_a["id"], to_id=orphan_b["id"]
     )
-    orphan_edge_before = _get_edge(client, orphan_edge["id"])
+    orphan_edge_before = _get_edge(client, token, orphan_edge["id"])
 
     # Simulate a genuinely orphaned edge (e.g. a point deleted out-of-band)
     # — bypasses the normal API, which never allows this directly.
@@ -255,12 +262,12 @@ async def test_invalid_orphaned_edge_is_skipped_without_failing_calibration(clie
     assert body["edges_recalculation_skipped"] == 1
 
     # The good edge was recalculated normally...
-    assert _get_edge(client, good_edge["id"])["distance"] == 50.0
+    assert _get_edge(client, token, good_edge["id"])["distance"] == 50.0
     # ...the orphaned edge was left completely untouched, never deleted,
     # never recreated.
     still_there = await RouteEdge.get(orphan_edge["id"])
     assert still_there is not None
-    still_there_response = _get_edge(client, orphan_edge["id"])
+    still_there_response = _get_edge(client, token, orphan_edge["id"])
     assert still_there_response["distance"] == orphan_edge_before["distance"]
     _assert_same_datetime(still_there_response["updated_at"], orphan_edge_before["updated_at"])
 
@@ -298,7 +305,7 @@ def test_copy_calibration_also_recalculates_walkway_edges(client):
     assert copy_body["edges_recalculated"] == 1
     assert copy_body["edges_recalculation_skipped"] == 0
 
-    refetched = _get_edge(client, target_edge["id"])
+    refetched = _get_edge(client, token, target_edge["id"])
     assert refetched["distance"] == 50.0
 
 

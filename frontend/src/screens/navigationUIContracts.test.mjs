@@ -56,8 +56,25 @@ test('the floor transition card renders for every connector type (elevator/stair
 
 // 26. The arrival state appears once the last floor's steps are all
 //     complete — hasArrived is derived, not manually toggled.
-test('hasArrived is derived from isLastFloor + currentFloorDone, and gates the arrival banner', () => {
-  assert.match(source, /const hasArrived = isNavigating && isLastFloor && currentFloorDone/);
+test('hasArrived is derived from a real arrival condition, and gates the arrival banner', () => {
+  // The original single derivation was
+  //   const hasArrived = isNavigating && isLastFloor && currentFloorDone ...
+  // "Every accepted navigable room gets its own QR" added a SECOND, equally
+  // valid arrival signal: scanning the destination room's own QR. The
+  // step-completion derivation is unchanged, just renamed to
+  // `steppedThroughToEnd` and OR-ed with the scan signal. What this test
+  // actually protects — that arrival is derived from real state and never a
+  // manually toggled flag, and that it is what gates the banner — is
+  // asserted below without pinning one particular expression.
+  assert.match(
+    source,
+    /const steppedThroughToEnd =\s*\n?\s*isNavigating && isLastFloor && currentFloorDone/,
+  );
+  assert.match(source, /const hasArrived = scanArrived \|\| steppedThroughToEnd;/);
+  // scanArrived is only ever set from a resolved location code, never by a
+  // bare user action that would let someone fake an arrival.
+  assert.match(source, /setScanArrived\(true\)/);
+  assert.match(source, /classifyScannedLocation/);
   assert.match(source, /\{hasArrived && \(/);
   assert.match(source, /s18-arrival/);
 });

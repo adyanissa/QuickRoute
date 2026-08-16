@@ -250,7 +250,10 @@ def test_destination_connects_to_a_valid_nearby_corridor_point(client):
 
     assert room["route_point_connected"] is True
 
-    edges = client.get(f"/api/route-edges?map_id={map_item['id']}").json()
+    edges = client.get(
+        f"/api/route-edges?map_id={map_item['id']}",
+        headers=auth_headers(token),
+    ).json()
     assert len(edges) == 1
     edge = edges[0]
     assert {edge["from_point_id"], edge["to_point_id"]} == {
@@ -290,7 +293,10 @@ async def test_destination_placement_never_connects_across_a_real_wall(client, t
     # The only candidate neighbor is across the wall — must not connect.
     assert room["route_point_connected"] is False
 
-    edges = client.get(f"/api/route-edges?map_id={map_item['id']}").json()
+    edges = client.get(
+        f"/api/route-edges?map_id={map_item['id']}",
+        headers=auth_headers(token),
+    ).json()
     assert len(edges) == 0
 
     # Sanity check: the corridor point itself is untouched/still there.
@@ -314,7 +320,10 @@ def test_reusing_an_already_connected_point_does_not_duplicate_edges(client):
     ).json()
     assert first["route_point_connected"] is True
 
-    edges_after_first = client.get(f"/api/route-edges?map_id={map_item['id']}").json()
+    edges_after_first = client.get(
+        f"/api/route-edges?map_id={map_item['id']}",
+        headers=auth_headers(token),
+    ).json()
     assert len(edges_after_first) == 1
 
     # Editing the same room again with the same map/x/y (e.g. the admin
@@ -332,7 +341,10 @@ def test_reusing_an_already_connected_point_does_not_duplicate_edges(client):
     assert updated["route_point_was_reused"] is True
     assert updated["route_point_connected"] is True
 
-    edges_after_second = client.get(f"/api/route-edges?map_id={map_item['id']}").json()
+    edges_after_second = client.get(
+        f"/api/route-edges?map_id={map_item['id']}",
+        headers=auth_headers(token),
+    ).json()
     assert len(edges_after_second) == 1
 
 

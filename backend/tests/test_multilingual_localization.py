@@ -61,6 +61,7 @@ from schemas.localization_schema import (
     localized_text_to_dict,
     merge_localized_text,
 )
+from models.map_model import Map
 from models.room_model import Room
 from models.semantic_map_analysis_model import SemanticMapAnalysis
 from models.semantic_map_publication_model import SemanticEntity
@@ -430,9 +431,17 @@ async def test_publish_populates_nested_names_matching_legacy_flat_fields(client
 def test_published_semantic_entities_endpoint_returns_names_and_legacy_name(client):
     token, _ = create_admin_and_get_token(client, email="ml13@example.com")
 
+    # This endpoint loads and scope-checks the Map document before
+    # returning anything, so the analysis must reference a REAL Map id.
+    seeded_map_id = {}
+
     async def _seed():
+        map_item = Map(title="ML 13 Map", processing_status="completed", scale=1.0)
+        await map_item.insert()
+        seeded_map_id["id"] = str(map_item.id)
+
         analysis = SemanticMapAnalysis(
-            map_id="map-ml-13",
+            map_id=seeded_map_id["id"],
             source_fingerprint="fp-ml-13",
             prompt_version="v",
             prompt_sha256="h",
@@ -448,7 +457,7 @@ def test_published_semantic_entities_endpoint_returns_names_and_legacy_name(clie
     asyncio.get_event_loop().run_until_complete(_seed())
 
     response = client.get(
-        "/api/maps/map-ml-13/semantic-entities",
+        f"/api/maps/{seeded_map_id['id']}/semantic-entities",
         headers=auth_headers(token),
     )
     assert response.status_code == 200, response.text

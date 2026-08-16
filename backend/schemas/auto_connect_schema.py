@@ -7,7 +7,7 @@ pairs). See services/auto_connect_destinations_service.py for the actual
 candidate-selection/validation logic these schemas carry.
 """
 
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -134,3 +134,16 @@ class AutoConnectApplyResult(BaseModel):
     failed: int = 0
     created_edge_ids: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+
+    # "Every accepted navigable room gets its own QR" — filled in by
+    # services/room_location_code_service.ensure_room_location_codes, which
+    # apply_auto_connect_destinations calls once the edges above are
+    # written. This is the step that actually issues most room QRs, because
+    # connecting the arrival point is exactly what makes a room navigable.
+    # All default to 0/[] so every existing caller and test that never looks
+    # at them keeps working unchanged.
+    qr_codes_created: int = 0
+    qr_codes_reused: int = 0
+    rooms_unplaced: int = 0
+    rooms_unconnected: int = 0
+    rooms_needing_review: List[Dict[str, str]] = Field(default_factory=list)

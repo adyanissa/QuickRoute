@@ -95,6 +95,25 @@ async def _apply_edge_scope_to_query(query: dict, admin: User) -> dict:
     if admin.role == "super_admin":
         return query
 
+    accessible_building_ids = get_accessible_building_ids(admin)
+
+    # A caller whose accessible scope is already "every building" is not
+    # narrowed at all, and must not be put through the per-map existence
+    # check below either. This mirrors the sibling implementation in
+    # route_point_routes._apply_authorized_scope_to_query, which likewise
+    # only narrows when get_accessible_building_ids() returns a real list.
+    #
+    # Without this early return, an unrestricted caller (all_buildings=True,
+    # or a project-wide global_manager — see the scope shapes in
+    # core/auth_deps.py) still fell into `map_item is None -> 403`, so
+    # asking for the edges of a map that simply no longer exists answered
+    # 403 "You do not have permission to access this map" instead of an
+    # empty list. That made a perfectly ordinary check — "after deleting a
+    # map, are its edges gone?" — impossible, and gave a different answer
+    # from GET /api/route-points for the identical query and caller.
+    if accessible_building_ids is None:
+        return query
+
     requested_map_id = query.get("map_id")
     if requested_map_id:
         try:
@@ -103,10 +122,6 @@ async def _apply_edge_scope_to_query(query: dict, admin: User) -> dict:
             map_item = None
         if map_item is None or not user_can_access_map(admin, map_item):
             raise HTTPException(**FORBIDDEN_MAP_SCOPE)
-        return query
-
-    accessible_building_ids = get_accessible_building_ids(admin)
-    if accessible_building_ids is None:
         return query
 
     maps_in_scope = await Map.find(

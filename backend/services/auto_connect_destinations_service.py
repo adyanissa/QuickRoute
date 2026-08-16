@@ -46,6 +46,10 @@ from models.map_model import Map
 from models.room_model import Room
 from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
+from services.room_location_code_service import (
+    ensure_room_location_codes,
+    merge_into_apply_result,
+)
 from services.graph_connection_service import (
     _ensure_map_source_available,
     _get_wall_mask,
@@ -899,5 +903,27 @@ async def apply_auto_connect_destinations(
                 f"Could not connect destination {destination_id} to corridor "
                 f"point {corridor_id}."
             )
+
+    # "Every accepted navigable room gets its own QR", stage 2 of 2 — and in
+    # practice the one that actually issues most of them.
+    #
+    # This is the moment a destination stops being an isolated point and
+    # becomes reachable, which is exactly the condition
+    # ensure_room_location_codes() requires before it will mint a code. The
+    # identical call also runs at the end of
+    # services/semantic_destination_service.apply_semantic_destinations for
+    # the rooms whose arrival point was already connected; the function is
+    # idempotent, so whichever of the two runs first wins and the other
+    # simply reports the code as reused.
+    #
+    # Never raises: the edges above are already written and must stand on
+    # their own even if QR issuing has a problem.
+    try:
+        qr_summary = await ensure_room_location_codes(map_id)
+        merge_into_apply_result(result, qr_summary)
+    except Exception as error:  # noqa: BLE001 - never fails the apply
+        result["warnings"].append(
+            f"Connections were applied, but automatic QR issuing failed: {error}"
+        )
 
     return result

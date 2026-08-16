@@ -83,10 +83,16 @@ def test_delete_connection_removes_the_edge(client):
     )
     assert delete_response.status_code == 200, delete_response.text
 
-    get_response = client.get(f"/api/route-edges/{edge['id']}")
+    get_response = client.get(
+        f"/api/route-edges/{edge['id']}", headers=auth_headers(token)
+    )
     assert get_response.status_code == 404
 
-    remaining = client.get("/api/route-edges", params={"map_id": map_item["id"]})
+    remaining = client.get(
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
+    )
     assert remaining.status_code == 200
     assert edge["id"] not in [item["id"] for item in remaining.json()]
 
@@ -150,7 +156,11 @@ def test_delete_connection_only_removes_the_selected_edge(client):
 
     remaining_ids = [
         item["id"]
-        for item in client.get("/api/route-edges", params={"map_id": map_item["id"]}).json()
+        for item in client.get(
+            "/api/route-edges",
+            params={"map_id": map_item["id"]},
+            headers=auth_headers(token),
+        ).json()
     ]
     assert edge_ab["id"] not in remaining_ids
     assert edge_bc["id"] in remaining_ids
@@ -189,7 +199,9 @@ def test_delete_connection_requires_admin_role(client):
     assert unauthenticated_response.status_code in (401, 403)
 
     # The edge must still exist — neither rejected attempt deleted anything.
-    still_there = client.get(f"/api/route-edges/{edge['id']}")
+    still_there = client.get(
+        f"/api/route-edges/{edge['id']}", headers=auth_headers(token)
+    )
     assert still_there.status_code == 200
 
 

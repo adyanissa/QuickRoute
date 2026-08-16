@@ -175,7 +175,9 @@ def _setup_two_floor_group_with_elevator(client, token, code, connect_corridors=
     connect1 = create_edge(client, token, floor1["id"], stop1_point_id, junction1["id"])
     assert connect1.status_code == 201, connect1.text
 
-    connector = client.get(f"/api/vertical-connectors/{connector['id']}").json()
+    connector = client.get(
+        f"/api/vertical-connectors/{connector['id']}", headers=auth_headers(token)
+    ).json()
 
     points = {
         "entrance": entrance, "junction0": junction0,

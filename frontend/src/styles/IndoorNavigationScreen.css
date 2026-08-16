@@ -1251,3 +1251,105 @@
     font-size: 18px;
   }
 }
+
+
+/* ------------------------------------------------------------------
+   Room-QR relocation / arrival confirmation.
+   Deliberately reuses this screen's existing card surface, radius and
+   accent variables rather than introducing a new visual language — it is
+   one extra control inside the current layout, not a redesign.
+   ------------------------------------------------------------------ */
+
+.s18-rescan {
+  margin: 12px 0 4px;
+}
+
+.s18-rescan-cta {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px dashed rgba(0, 0, 0, 0.18);
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.75;
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.s18-rescan-cta:hover {
+  opacity: 1;
+  border-style: solid;
+}
+
+.s18-rescan-form {
+  padding: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.s18-rescan-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.s18-rescan-hint {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+.s18-rescan-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 10px;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.s18-rescan-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.s18-rescan-submit,
+.s18-rescan-cancel {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.s18-rescan-submit {
+  border: none;
+  background: #1f6feb;
+  color: #fff;
+}
+
+.s18-rescan-submit:disabled,
+.s18-rescan-cancel:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.s18-rescan-cancel {
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  background: transparent;
+  color: inherit;
+}
+
+.s18-rescan-error {
+  margin: 10px 0 0;
+  font-size: 0.85rem;
+  color: #b42318;
+}
+
+.s18-rescan-notice {
+  margin: 8px 2px 0;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}

@@ -72,14 +72,76 @@ PROVIDER_NAME = "anthropic"
 # =========================================================
 
 
+# ANTHROPIC_MAP_ANALYSIS_MODEL is the source of truth for which Claude
+# model semantic analysis runs against. This constant is ONLY the fallback
+# used when that variable is unset or blank.
+#
+# HARD RULE FOR THIS CONSTANT: it must never be a model id that was merely
+# assumed to exist. A model id is only allowed here after it has been
+# confirmed present in `client.models.list()` for the workspace this
+# project actually uses. The previous value, "claude-sonnet-4-20250514",
+# was never verified that way and is NOT available to this project's API
+# key — it produced a runtime `404 not_found_error` on the very first real
+# analysis request. Anthropic retires and adds model ids over time, so
+# "it was correct once" is not a safe assumption for a default.
+#
+# Verified available on 2026-08-15 via anthropic SDK client.models.list()
+# against this project's configured ANTHROPIC_API_KEY. If you change this
+# value, re-run that listing first — do not guess:
+#
+#     python -c "import anthropic; [print(m.id) for m in anthropic.Anthropic().models.list(limit=100)]"
+DEFAULT_ANALYSIS_MODEL = "claude-sonnet-4-6"
+
+# Where the model in use came from — surfaced in configuration errors so an
+# admin can tell "the value I set is wrong" apart from "no value is set and
+# the fallback is wrong".
+ANALYSIS_MODEL_ENV_VAR = "ANTHROPIC_MAP_ANALYSIS_MODEL"
+
+
+def analysis_model_is_explicitly_configured() -> bool:
+    """True when ANTHROPIC_MAP_ANALYSIS_MODEL supplies the model actually
+    in use; False when the DEFAULT_ANALYSIS_MODEL fallback is in play."""
+
+    return bool((os.getenv(ANALYSIS_MODEL_ENV_VAR) or "").strip())
+
+
 def get_anthropic_api_key() -> Optional[str]:
-    return os.getenv("ANTHROPIC_API_KEY") or None
+    # .strip() matters: a .env value written as `ANTHROPIC_API_KEY= ` (or
+    # with a trailing space before the newline) is loaded by python-dotenv
+    # verbatim, whitespace included. Without stripping, a whitespace-only
+    # value is truthy, so every "is the provider configured?" check passes
+    # and the failure surfaces much later as an opaque authentication error
+    # from Claude instead of an obvious missing_api_key.
+    return (os.getenv("ANTHROPIC_API_KEY") or "").strip() or None
 
 
 def get_analysis_model() -> str:
-    # Deliberately its own, separately configurable model — never reused
-    # from any unrelated feature's model setting.
-    return os.getenv("ANTHROPIC_MAP_ANALYSIS_MODEL", "claude-sonnet-4-20250514")
+    """
+    The Claude model semantic map analysis runs against. Deliberately its
+    own, separately configurable setting — never reused from any unrelated
+    feature's model setting, and never silently substituted with an OpenAI
+    model (OpenAI is used ONLY by the unrelated cosmetic display-map
+    recolor in services/map_image_service.py).
+
+    The value is stripped before use. python-dotenv preserves trailing
+    whitespace on an unquoted value, so a .env line written as
+    `ANTHROPIC_MAP_ANALYSIS_MODEL=claude-sonnet-4-5  ` would otherwise be
+    sent to the API with the trailing spaces still attached and rejected as
+    an unknown model — a confusing failure to debug, because the value
+    looks correct everywhere it is displayed. A blank or whitespace-only
+    value falls back to DEFAULT_ANALYSIS_MODEL rather than sending "".
+
+    This function never validates the identifier itself — there is no
+    offline way to know which models a given API key may use, because that
+    depends on the Anthropic account/workspace. If the configured model
+    does not exist for the key in use, Claude answers with a NotFoundError
+    and _map_anthropic_exception below turns it into the "unsupported_model"
+    error code, naming this exact environment variable, the value that was
+    rejected, and how to list the models that ARE available.
+    """
+
+    configured = (os.getenv(ANALYSIS_MODEL_ENV_VAR) or "").strip()
+    return configured or DEFAULT_ANALYSIS_MODEL
 
 
 def get_max_retries() -> int:
@@ -875,8 +937,22 @@ def _map_anthropic_exception(error: Exception) -> SemanticAnalysisError:
         if isinstance(error, anthropic.NotFoundError):
             return SemanticAnalysisError(
                 "unsupported_model",
-                f"The configured analysis model was rejected by Claude: "
-                f"{error}",
+                "Claude does not recognise the analysis model "
+                f"'{get_analysis_model()}' ("
+                + (
+                    f"set by {ANALYSIS_MODEL_ENV_VAR} in backend/.env"
+                    if analysis_model_is_explicitly_configured()
+                    else f"the built-in fallback — {ANALYSIS_MODEL_ENV_VAR} "
+                    "is unset or blank"
+                )
+                + "). Model availability depends on the Anthropic "
+                "account/workspace behind the configured API key, so this is "
+                "a configuration question, not a code one. List the models "
+                "this key may actually use — "
+                "anthropic.Anthropic().models.list() — and set "
+                f"{ANALYSIS_MODEL_ENV_VAR} to one of them. Never switch "
+                "providers to work around this. "
+                f"(Provider said: {error})",
             )
         if hasattr(anthropic, "RequestTooLargeError") and isinstance(
             error, anthropic.RequestTooLargeError

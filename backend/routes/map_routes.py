@@ -535,10 +535,14 @@ async def process_map_in_background(
 
         # Automatic semantic-map-analysis enqueue (Section 9). Fires only
         # after map processing has genuinely succeeded, gated by
-        # AUTO_ANALYZE_MAPS, and NEVER waits for OpenAI — this only ever
-        # creates a "queued" (or "configuration_required") database
-        # record; the actual OpenAI call happens later, out-of-band, in
-        # semantic_analysis_worker.py. A failure here is caught and
+        # AUTO_ANALYZE_MAPS, and NEVER waits for the AI provider — this
+        # only ever creates a "queued" (or "configuration_required")
+        # database record; the actual Anthropic/Claude call happens later,
+        # out-of-band, in services/semantic_analysis_worker.py (the two
+        # older references to OpenAI here were left over from before the
+        # Anthropic migration and never described this branch's runtime;
+        # OpenAI is used only by the unrelated cosmetic display-map recolor
+        # in services/map_image_service.py). A failure here is caught and
         # ignored so it can never turn an otherwise-successful map
         # upload into a failure.
         if get_auto_analyze_enabled():
@@ -879,6 +883,84 @@ async def upload_map(
                 f"Could not create the map record: {error}"
             ),
         ) from error
+
+    # LOCAL UPLOAD DURABILITY FIX (source-file bug).
+    #
+    # Until now, the ONLY place that produced a durable, analysis-readable
+    # file for this map was process_map_in_background() below — a Starlette
+    # BackgroundTasks callback that runs AFTER this response has already
+    # been sent. That meant this endpoint answered "Map uploaded
+    # successfully" (HTTP 201) at a moment when zero durable files existed
+    # on disk and Map.analysis_source_path was still None. If that
+    # background callback never ran to completion — the dev server
+    # reloading mid-write, the process being restarted or killed, or any
+    # unrelated processing error raised before its own persistence step —
+    # the Map record survived pointing at nothing, and semantic analysis
+    # (auto-enqueued or started manually) later failed with "No source file
+    # could be located on disk for this analysis (the Map's uploaded file
+    # may have been removed)" even though the API had already reported
+    # success.
+    #
+    # The fix: copy the uploaded file's exact original bytes into the
+    # existing durable ORIGINALS_DIR (backend/uploads/maps/originals — an
+    # absolute Path(__file__)-derived location, never CWD-relative)
+    # synchronously, inside this request, BEFORE returning. This is a plain
+    # local file copy: no PDF rendering, no OpenCV, no OpenAI call, so it
+    # costs one file copy (bounded by MAP_MAX_UPLOAD_SIZE_MB) while all the
+    # heavy image work legitimately stays in the background task below.
+    # Success is only ever reported once the durable file is proven to
+    # exist on disk with real content.
+    #
+    # process_map_in_background() still runs unchanged afterwards and still
+    # writes analysis_source_path itself; for a successfully preserved
+    # original it simply re-persists the identical value, so nothing about
+    # the happy path changes. This only removes the window in which no
+    # durable source existed at all.
+    try:
+        preserved_original_path = preserve_original_source_file(
+            str(new_map.id), uploaded_path
+        )
+    except Exception:
+        preserved_original_path = None
+
+    if (
+        preserved_original_path is None
+        or not preserved_original_path.exists()
+        or preserved_original_path.stat().st_size == 0
+    ):
+        # Persistence genuinely failed — never leave behind a Map record
+        # that points at a nonexistent local file, and never report
+        # success.
+        delete_file_safely(uploaded_path)
+
+        try:
+            await new_map.delete()
+        except Exception:
+            pass
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "The uploaded file could not be durably saved to local "
+                "storage (backend/uploads/maps/originals). Upload aborted "
+                "— no Map record was left behind. Check that the backend "
+                "process has write access to that directory and try again."
+            ),
+        )
+
+    new_map.analysis_source_path = to_storage_relative_path(
+        preserved_original_path
+    )
+
+    new_map.analysis_source_type = (
+        "original_pdf"
+        if preserved_original_path.suffix.lower() == ".pdf"
+        else "original_image"
+    )
+
+    new_map.updated_at = datetime.utcnow()
+
+    await new_map.save()
 
     background_tasks.add_task(
         process_map_in_background,

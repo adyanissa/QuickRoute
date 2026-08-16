@@ -24,7 +24,16 @@ preview review (or from reusing an already-placed RoutePoint) — never from
 AI-derived door/boundary/centroid data, because none exists.
 
 Never touches: Dijkstra/shortest-path logic, existing RouteEdges, Maps,
-Map calibration, vertical connectors, QR/location codes, authentication.
+Map calibration, vertical connectors, authentication.
+
+QR/LOCATION CODES (deliberate, later addition): apply_semantic_destinations
+now ends by calling services/room_location_code_service.
+ensure_room_location_codes(map_id), which issues exactly one active
+LocationCode per NAVIGABLE room. It is the only QR-related thing this module
+does, it writes no RouteEdge and no coordinate of its own, and a room that
+is not yet connected to the graph is reported for review rather than given a
+code. See that module's docstring for why the same call also runs at the end
+of the auto-connect apply.
 
 FLOOR-CODE DEFENSE-IN-DEPTH: Room.floor / RoutePoint.floor below have
 always been set from map_item.floor (the authoritative physical-floor
@@ -52,6 +61,10 @@ from models.room_model import Room
 from models.route_point_model import RoutePoint
 from models.semantic_map_publication_model import SemanticMapPublication
 from services.point_dedup_service import find_or_create_route_point
+from services.room_location_code_service import (
+    ensure_room_location_codes,
+    merge_into_apply_result,
+)
 from services.semantic_publication_service import compute_authoritative_floor_code
 
 
@@ -872,6 +885,28 @@ async def apply_semantic_destinations(
 
         parent_chain[str(room.id)] = str(parent_room.id)
         result["nested_relationships_created"] += 1
+
+    # "Every accepted navigable room gets its own QR", stage 1 of 2.
+    #
+    # This module still creates no RouteEdge, so most rooms materialized by
+    # THIS call are not navigable yet and will correctly come back as
+    # rooms_unconnected — they get their code from the identical call at the
+    # end of services/auto_connect_destinations_service.apply_auto_connect_
+    # destinations, the moment their arrival point actually gains an edge.
+    # Calling it here as well is what covers the other real cases: a reused
+    # arrival point that was already connected, and any re-apply.
+    #
+    # Idempotent by construction (see that service's docstring), so being
+    # invoked from two places, or twice from the same place, mints nothing
+    # extra. Never raises: a QR problem must never fail an apply whose Room
+    # and RoutePoint writes have already succeeded.
+    try:
+        qr_summary = await ensure_room_location_codes(map_id)
+        merge_into_apply_result(result, qr_summary)
+    except Exception as error:  # noqa: BLE001 - never fails the apply
+        result.setdefault("warnings", []).append(
+            f"Destinations were applied, but automatic QR issuing failed: {error}"
+        )
 
     return result
 

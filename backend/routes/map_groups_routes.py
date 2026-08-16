@@ -68,7 +68,12 @@ from models.user_model import User
 from schemas.map_group_schema import MapGroupFloorInput, MapGroupResponse
 from services.building_service import find_or_create_building
 from services.map_group_service import resolve_group_code
-from services.map_image_service import delete_file_safely, save_upload_to_temporary_file
+from services.map_image_service import (
+    delete_file_safely,
+    preserve_original_source_file,
+    save_upload_to_temporary_file,
+    to_storage_relative_path,
+)
 from logic.graph_validation import validate_multi_floor_navigation
 from routes.map_routes import (
     cascade_delete_map_graph,
@@ -265,6 +270,19 @@ async def _create_floor_maps(
     file (for every floor in this batch, including ones whose Map insert
     never even ran yet) is removed — an initial multi-floor upload is
     all-or-nothing, exactly as the task requires.
+
+    LOCAL UPLOAD DURABILITY FIX (source-file bug): each floor's exact
+    original bytes are also copied into the durable ORIGINALS_DIR and
+    recorded on Map.analysis_source_path synchronously here, before this
+    request returns and before _schedule_processing() hands the floor to
+    the background task. Identical reasoning to the single-map upload
+    endpoint (see routes/map_routes.py's upload_map) — without it, a
+    multi-floor upload reports success while no durable, analysis-readable
+    file exists for any floor yet, and a background task that never
+    completes leaves every floor's semantic analysis failing with "No
+    source file could be located on disk". A failure here raises and is
+    handled by the same all-or-nothing rollback below, so a floor whose
+    file cannot be durably saved never leaves a half-created group behind.
     """
 
     created: List[Map] = []
@@ -287,6 +305,43 @@ async def _create_floor_maps(
             )
             await new_map.insert()
             created.append(new_map)
+
+            try:
+                preserved_original_path = preserve_original_source_file(
+                    str(new_map.id), item.path
+                )
+            except Exception:
+                preserved_original_path = None
+
+            if (
+                preserved_original_path is None
+                or not preserved_original_path.exists()
+                or preserved_original_path.stat().st_size == 0
+            ):
+                # Raised as a plain error, not an HTTPException, so both
+                # callers' existing rollback-and-wrap handlers turn it into
+                # one clean 500 instead of nesting an HTTPException inside
+                # another one's detail string.
+                raise RuntimeError(
+                    f"floor {item.entry.floor} ({item.entry.title}) could "
+                    "not be durably saved to local storage "
+                    "(backend/uploads/maps/originals) — check that the "
+                    "backend process has write access to that directory"
+                )
+
+            new_map.analysis_source_path = to_storage_relative_path(
+                preserved_original_path
+            )
+
+            new_map.analysis_source_type = (
+                "original_pdf"
+                if preserved_original_path.suffix.lower() == ".pdf"
+                else "original_image"
+            )
+
+            new_map.updated_at = datetime.utcnow()
+
+            await new_map.save()
     except Exception:
         for m in created:
             try:

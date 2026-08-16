@@ -618,7 +618,9 @@ def test_map_deletion_cascades_to_points_and_edges(client):
         "/api/route-points", params={"map_id": map_item["id"]}
     ).json()
     remaining_edges = client.get(
-        "/api/route-edges", params={"map_id": map_item["id"]}
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
     ).json()
 
     assert remaining_points == []
@@ -695,7 +697,9 @@ def test_full_two_path_save_merges_six_point_graph_a_to_f(client):
         assert response.status_code == 201, response.text
 
     all_edges = client.get(
-        "/api/route-edges", params={"map_id": map_item["id"]}
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
     ).json()
     assert len(all_edges) == 5  # A-B, B-C, C-D, D-E, E-F — no duplicates
 
@@ -773,7 +777,9 @@ def test_branch_path_preserves_existing_edges_and_supports_new_routes(client):
         assert response.status_code == 201, response.text
 
     all_edges = client.get(
-        "/api/route-edges", params={"map_id": map_item["id"]}
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
     ).json()
     # Original 3 (A-B, B-C, C-D) + 2 new branch edges (C-G, G-H) = 5. The
     # branch never replaced or removed any of the original edges.
@@ -851,7 +857,9 @@ def test_create_route_point_default_auto_connect_off_creates_no_surprise_edges(c
     assert new_point["auto_connected_edge_ids"] == []
 
     edges = client.get(
-        "/api/route-edges", params={"map_id": map_item["id"]}
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
     ).json()
     assert edges == []
 
@@ -877,7 +885,9 @@ def test_create_route_point_nearby_mode_returns_auto_connected_edge_ids(client):
     assert len(new_point["auto_connected_edge_ids"]) == 1
 
     edges = client.get(
-        "/api/route-edges", params={"map_id": map_item["id"]}
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
     ).json()
     edge_ids = {edge["id"] for edge in edges}
     assert set(new_point["auto_connected_edge_ids"]).issubset(edge_ids)

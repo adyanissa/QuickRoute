@@ -18,21 +18,55 @@ now has two layers of scope check, both real and both used by current code:
 
   2. Building/map-group/map-level (new, stricter, spec-accurate):
      user_can_access_building() and everything built on it below —
-     global_manager is scoped to building_ids unless all_buildings=True,
-     exactly as the RBAC spec requires, and building_manager is further
-     narrowed by map_group_ids/map_ids when those are non-empty (map_ids is
-     the most restrictive: when set, it alone decides map-level access).
-     Every NEW authorization call site added by this task uses this
-     stricter set of helpers, never the legacy one.
+     a global_manager that has been given an explicit building list is
+     scoped to it (unless all_buildings=True), exactly as the RBAC spec
+     requires, and building_manager is further narrowed by
+     map_group_ids/map_ids when those are non-empty (map_ids is the most
+     restrictive: when set, it alone decides map-level access). Every NEW
+     authorization call site added by this task uses this stricter set of
+     helpers, never the legacy one.
 
-  KNOWN OPERATIONAL RISK: any existing global_manager account that has
-  all_buildings=False and an empty building_ids list will lose access to
-  every building/map/room/etc-scoped resource once a route switches from
-  the legacy user_can_manage_building()/require_global_admin gate to the
-  new require_*_access() helpers below — this is an intentional
-  tightening (the spec explicitly requires it), not a bug, but it is a
-  real behavior change for any such account and should be checked before
-  this lands anywhere real accounts already exist.
+  THE THREE global_manager SCOPE SHAPES (resolved; this section previously
+  recorded case (c) below as a "KNOWN OPERATIONAL RISK"). An invitation
+  code can legitimately produce any of these three, so all three need a
+  defined meaning:
+
+    a) all_buildings=True, building_ids=[]  ->  unrestricted, every
+       building. Mintable only by a super_admin, or by a global_manager
+       who already has all_buildings=True (see
+       logic/invitation_code_logic.validate_role_and_scope_for_creation).
+
+    b) all_buildings=False, building_ids=[X, Y]  ->  restricted to exactly
+       those buildings, the same way a building_manager is. A
+       global_manager does NOT get a blanket pass from its role name once
+       it has been given an explicit building list.
+
+    c) all_buildings=False, building_ids=[]  ->  PROJECT-WIDE BY ROLE.
+       This is the default shape an ordinary global_manager invitation
+       produces, and logic/invitation_code_logic.py explicitly allows it
+       and documents its meaning: "both empty (global scope purely by
+       role, matching how global_manager users already bypass per-building
+       checks via user_can_manage_building) is also fine."
+
+  Case (c) used to fall through to "no scope at all", which directly
+  contradicted the invitation layer that creates it, and produced a real
+  self-lockout rather than a mere tightening: a global_manager would sign
+  up with a perfectly ordinary invitation code, create a map (POST
+  /api/maps and /api/maps/upload find-or-create a Building from
+  campus/title whenever no building_id is supplied), and then be 403'd out
+  of the very map they had just created — the freshly auto-created
+  building could not possibly already be in their empty building_ids list.
+  Every scoped read and mutation for such an account failed the same way.
+
+  Case (c) is now resolved in favour of the meaning the invitation layer
+  already documents: an empty building list on a global_manager means "not
+  narrowed", never "narrowed to nothing". Narrowing a global_manager is
+  done by giving it an explicit building_ids list (case b), which stays
+  fully enforced. building_manager is unchanged in all three cases — it
+  can never reach case (c) at all, because
+  validate_role_and_scope_for_creation rejects a building_manager
+  invitation that lists no buildings, and an empty list there would still
+  mean "no access", never "all access". regular_user is unchanged.
 """
 
 from typing import List, Optional
@@ -242,21 +276,45 @@ def get_accessible_building_ids(user: User) -> Optional[List[str]]:
         return None
     if user.role in ("global_manager", "building_manager") and user.all_buildings:
         return None
+    # global_manager scope shape (c) — see the module docstring: an empty
+    # building list means "not narrowed", not "narrowed to nothing", so it
+    # must return None ("every building") here rather than [] ("no
+    # buildings"). Returning [] made every scoped LIST endpoint silently
+    # come back empty for an ordinary global_manager.
+    if user.role == "global_manager" and not (user.building_ids or []):
+        return None
     if user.role in ("global_manager", "building_manager"):
         return list(user.building_ids or [])
     return []
 
 
 def user_can_access_building(user: User, building_id: Optional[str]) -> bool:
-    """Spec-accurate building-level check (see module docstring for how
-    this differs from the legacy user_can_manage_building above):
-    global_manager is scoped to building_ids unless all_buildings=True,
-    exactly like building_manager — neither role gets a blanket pass just
-    from its role name alone."""
-    if not building_id:
-        return user.role == "super_admin"
+    """Spec-accurate building-level check (see the module docstring for how
+    this differs from the legacy user_can_manage_building above, and for
+    the three global_manager scope shapes).
+
+    A global_manager that has been given an explicit building_ids list is
+    scoped to it exactly like a building_manager — it gets no blanket pass
+    from its role name alone. A global_manager with NO building list at all
+    (scope shape (c), the default an ordinary invitation produces) is
+    project-wide, which is the meaning
+    logic/invitation_code_logic.validate_role_and_scope_for_creation
+    already documents when it deliberately accepts that shape."""
     if user.role == "super_admin":
         return True
+
+    # Scope shape (c): project-wide by role. Checked before the
+    # `not building_id` guard below so that a resource with no building_id
+    # at all (legacy Maps predate Map.building_id) stays reachable for a
+    # project-wide global_manager, exactly as it is for a super_admin.
+    if user.role == "global_manager" and not (user.building_ids or []):
+        return True
+
+    # Beyond this point the caller must name a building for anyone other
+    # than the two project-wide tiers above.
+    if not building_id:
+        return False
+
     if user.role in ("global_manager", "building_manager"):
         return bool(user.all_buildings) or building_id in (user.building_ids or [])
     return False

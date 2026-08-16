@@ -31,11 +31,6 @@ test_api_integration.py (see conftest.py) — no real MongoDB is ever
 touched, and every test gets a clean, isolated database.
 
 Run with: pytest backend/tests/test_rbac_scope_authorization.py -v
-
-NOTE: this file was written but could NOT be executed in this session —
-the sandbox's isolated Linux environment was unavailable for every single
-tool call attempted (see the final report for the exact error). Do not
-treat this file as "passing" until it has actually been run.
 """
 
 from models.invitation_code_model import InvitationCode
@@ -167,6 +162,249 @@ def test_global_manager_scoped_to_building_cannot_touch_other_building(client):
         headers=auth_headers(gm_token),
     )
     assert own_map.status_code == 201, own_map.text
+
+
+# ---------------------------------------------------------
+# global_manager scope shape (c): all_buildings=False AND an empty
+# building_ids list means PROJECT-WIDE BY ROLE, not "no access".
+#
+# This is the shape an ordinary global_manager invitation produces, and
+# logic/invitation_code_logic.validate_role_and_scope_for_creation
+# deliberately allows it, documenting it as "global scope purely by role".
+# core/auth_deps.py used to treat it as zero scope instead, which
+# contradicted the invitation layer and self-locked the account out of
+# everything it created. See the module docstring in core/auth_deps.py.
+# ---------------------------------------------------------
+
+def test_global_manager_with_no_building_list_can_use_the_map_it_just_created(client):
+    """
+    The exact self-lockout regression: creating a map without an explicit
+    building_id find-or-creates a Building from the title, so the new map
+    lands in a building that cannot possibly already be in the creator's
+    (empty) building_ids. Every follow-up action on that map used to 403.
+    """
+
+    super_token, _ = create_admin_and_get_token(
+        client, role="super_admin", email="s-gm-open@example.com"
+    )
+
+    gm_token = _signup_with_invite(
+        client,
+        super_token,
+        role="global_manager",
+        email="gm-open@example.com",
+        code="QR-GMOPEN01",
+    )
+
+    created = client.post(
+        "/api/maps",
+        json={"title": "Self Service Map"},
+        headers=auth_headers(gm_token),
+    )
+    assert created.status_code == 201, created.text
+    map_id = created.json()["id"]
+
+    # Read it back.
+    read_back = client.get(f"/api/maps/{map_id}", headers=auth_headers(gm_token))
+    assert read_back.status_code == 200, read_back.text
+
+    # And actually use it — this is what used to fail with
+    # 403 "You do not have permission to access this map".
+    point = _create_point(client, gm_token, map_id, "GM Point")
+    assert point.status_code == 201, point.text
+
+
+def test_global_manager_with_no_building_list_can_reach_another_admins_building(client):
+    super_token, _ = create_admin_and_get_token(
+        client, role="super_admin", email="s-gm-open2@example.com"
+    )
+    building = _create_building(client, super_token, "Someone Elses Wing")
+    other_map = _create_map_for_building(
+        client, super_token, building["id"], "Map Made By Super Admin"
+    )
+
+    gm_token = _signup_with_invite(
+        client,
+        super_token,
+        role="global_manager",
+        email="gm-open2@example.com",
+        code="QR-GMOPEN02",
+    )
+
+    response = client.get(
+        f"/api/maps/{other_map['id']}", headers=auth_headers(gm_token)
+    )
+    assert response.status_code == 200, response.text
+
+
+# ---------------------------------------------------------
+# The QR/location-code inventory is admin-only; only /resolve/{code}
+# (the endpoint the physical QR label points at) stays public.
+# ---------------------------------------------------------
+
+def test_location_code_inventory_is_not_publicly_enumerable(client):
+    super_token, _ = create_admin_and_get_token(
+        client, role="super_admin", email="s-loc@example.com"
+    )
+    building = _create_building(client, super_token, "QR Wing")
+    map_item = _create_map_for_building(client, super_token, building["id"], "QR Map")
+    point = _create_point(client, super_token, map_item["id"], "QR Point").json()
+
+    created = client.post(
+        "/api/location-codes",
+        json={
+            "code": "QR-SECRET-01",
+            "building_id": building["id"],
+            "map_id": map_item["id"],
+            "route_point_id": point["id"],
+        },
+        headers=auth_headers(super_token),
+    )
+    assert created.status_code == 201, created.text
+    code_id = created.json()["id"]
+
+    # Anonymous callers can neither list nor read a single entry.
+    assert client.get("/api/location-codes").status_code == 401
+    assert client.get(f"/api/location-codes/{code_id}").status_code == 401
+
+    # A regular_user is rejected as well (role, not just authentication).
+    # Minted by the super_admin: /api/invitation-codes/dev-create refuses
+    # once any super_admin already exists (bootstrap-only endpoint).
+    regular_code = make_invitation_code(
+        client,
+        code="QR-REGULARQR",
+        role="regular_user",
+        creator_token=super_token,
+    )
+    regular = signup(client, regular_code, email="regular-qr@example.com")
+    assert regular.status_code == 200, regular.text
+    regular_token = regular.json()["access_token"]
+    assert (
+        client.get(
+            "/api/location-codes", headers=auth_headers(regular_token)
+        ).status_code
+        == 403
+    )
+
+    # An authenticated admin still gets the inventory.
+    listed = client.get("/api/location-codes", headers=auth_headers(super_token))
+    assert listed.status_code == 200
+    assert [entry["code"] for entry in listed.json()] == ["QR-SECRET-01"]
+
+    # The public QR-resolution contract is untouched — this is the only
+    # location-code endpoint an unauthenticated scanner ever needs.
+    resolved = client.get("/api/location-codes/resolve/QR-SECRET-01")
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["route_point_id"] == point["id"]
+
+
+def test_location_code_listing_is_scoped_to_the_admins_buildings(client):
+    super_token, _ = create_admin_and_get_token(
+        client, role="super_admin", email="s-loc2@example.com"
+    )
+    building_a = _create_building(client, super_token, "Scoped QR A")
+    building_b = _create_building(client, super_token, "Scoped QR B")
+
+    for name, building in (("A", building_a), ("B", building_b)):
+        map_item = _create_map_for_building(
+            client, super_token, building["id"], f"QR Map {name}"
+        )
+        point = _create_point(
+            client, super_token, map_item["id"], f"QR Point {name}"
+        ).json()
+        response = client.post(
+            "/api/location-codes",
+            json={
+                "code": f"QR-SCOPED-{name}",
+                "building_id": building["id"],
+                "map_id": map_item["id"],
+                "route_point_id": point["id"],
+            },
+            headers=auth_headers(super_token),
+        )
+        assert response.status_code == 201, response.text
+
+    bm_token = _signup_with_invite(
+        client,
+        super_token,
+        role="building_manager",
+        email="bm-qr@example.com",
+        code="QR-BMQR0001",
+        building_ids=[building_a["id"]],
+    )
+
+    listed = client.get("/api/location-codes", headers=auth_headers(bm_token))
+    assert listed.status_code == 200
+    assert [entry["code"] for entry in listed.json()] == ["QR-SCOPED-A"]
+
+    # Explicitly asking for the other building is refused, never silently
+    # re-scoped.
+    forbidden = client.get(
+        f"/api/location-codes?building_id={building_b['id']}",
+        headers=auth_headers(bm_token),
+    )
+    assert forbidden.status_code == 403
+
+
+def test_project_wide_global_manager_does_not_leak_to_building_manager():
+    """
+    Unit-level guard on the three scope shapes. The "empty list means not
+    narrowed" rule is deliberately global_manager-only: an empty list on a
+    building_manager must still mean NO access, never all access.
+    """
+
+    from core.auth_deps import get_accessible_building_ids, user_can_access_building
+    from models.user_model import User
+
+    def _user(role, **scope):
+        return User(
+            full_name="Scope Probe",
+            email=f"{role}@example.com",
+            password="x",
+            role=role,
+            **scope,
+        )
+
+    # (a) all_buildings=True -> unrestricted.
+    gm_all = _user("global_manager", all_buildings=True, building_ids=[])
+    assert user_can_access_building(gm_all, "any-building") is True
+    assert get_accessible_building_ids(gm_all) is None
+
+    # (b) explicit list -> restricted to exactly that list.
+    gm_scoped = _user("global_manager", all_buildings=False, building_ids=["b1"])
+    assert user_can_access_building(gm_scoped, "b1") is True
+    assert user_can_access_building(gm_scoped, "b2") is False
+    assert get_accessible_building_ids(gm_scoped) == ["b1"]
+
+    # (c) empty list -> project-wide by role.
+    gm_open = _user("global_manager", all_buildings=False, building_ids=[])
+    assert user_can_access_building(gm_open, "b1") is True
+    assert user_can_access_building(gm_open, "b2") is True
+    assert get_accessible_building_ids(gm_open) is None
+    # A legacy resource with no building_id at all stays reachable, the
+    # same way it is for a super_admin.
+    assert user_can_access_building(gm_open, None) is True
+
+    # building_manager must NOT inherit rule (c).
+    bm_empty = _user("building_manager", all_buildings=False, building_ids=[])
+    assert user_can_access_building(bm_empty, "b1") is False
+    assert get_accessible_building_ids(bm_empty) == []
+
+    bm_scoped = _user("building_manager", all_buildings=False, building_ids=["b1"])
+    assert user_can_access_building(bm_scoped, "b1") is True
+    assert user_can_access_building(bm_scoped, "b2") is False
+
+    # regular_user has no admin scope in any shape.
+    regular = _user("regular_user")
+    assert user_can_access_building(regular, "b1") is False
+    assert user_can_access_building(regular, None) is False
+    assert get_accessible_building_ids(regular) == []
+
+    # super_admin is unchanged and unconditional.
+    root = _user("super_admin", all_buildings=True)
+    assert user_can_access_building(root, "b1") is True
+    assert user_can_access_building(root, None) is True
+    assert get_accessible_building_ids(root) is None
 
 
 # ---------------------------------------------------------

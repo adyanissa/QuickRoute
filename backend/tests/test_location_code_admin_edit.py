@@ -109,7 +109,10 @@ async def test_resolve_prefers_map_floor_over_a_stale_null_route_point_floor(cli
     assert resolved.json()["building_id"] == building["id"]
 
     # The admin list/get response uses the exact same shared derivation.
-    listed = client.get(f"/api/location-codes?building_id={building['id']}").json()
+    listed = client.get(
+        f"/api/location-codes?building_id={building['id']}",
+        headers=auth_headers(token),
+    ).json()
     listed_entry = next(c for c in listed if c["code"] == "QR-MAIN-FLOOR-TEST")
     assert listed_entry["floor"] == 1
 
@@ -271,7 +274,9 @@ def test_edit_rejects_reassigning_to_a_point_on_a_different_map(client):
     )
     assert edit_response.status_code == 400, edit_response.text
 
-    unchanged = client.get(f"/api/location-codes/{created['id']}").json()
+    unchanged = client.get(
+        f"/api/location-codes/{created['id']}", headers=auth_headers(token)
+    ).json()
     assert unchanged["route_point_id"] == point_a["id"]
 
 
@@ -297,6 +302,10 @@ def test_edit_does_not_write_anything_until_the_put_request_is_actually_sent(cli
         headers=auth_headers(token),
     ).json()
 
-    before = client.get(f"/api/location-codes/{created['id']}").json()
-    again = client.get(f"/api/location-codes/{created['id']}").json()
+    before = client.get(
+        f"/api/location-codes/{created['id']}", headers=auth_headers(token)
+    ).json()
+    again = client.get(
+        f"/api/location-codes/{created['id']}", headers=auth_headers(token)
+    ).json()
     assert before == again

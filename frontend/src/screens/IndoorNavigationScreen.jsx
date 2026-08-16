@@ -7,8 +7,14 @@ import QuickRouteLogo from '../components/QuickRouteLogo';
 import RouteSteps from '../components/RouteSteps';
 import BackButton from '../components/BackButton';
 import { getPublicRoutePoints, getPublicRoutePointById } from '../api/routePointsApi';
+import { resolveLocationCode } from '../api/locationCodesApi';
 import { calculateMultiFloorRoute } from '../api/navigationApi';
 import { getDestinationRoutePointId } from '../utils/destinationPlacement';
+import {
+  buildStartLocationRecord,
+  classifyScannedLocation,
+  isScanInActiveBuilding,
+} from '../utils/locationScan';
 import {
   groupInstructionsByFloor,
   getTransitionInstructions,
@@ -65,6 +71,17 @@ const UI = {
     directions:  'Directions',
     navHint:     'Tap ✓ on each step when completed',
     arrivedTitle:'You have reached your destination',
+    // Mid-journey relocation / arrival confirmation by room QR.
+    rescanCta:   'Not where you thought? Scan a room code',
+    rescanTitle: 'Scan or enter a room code',
+    rescanHint:  'Your route is recalculated from wherever you are now',
+    rescanPlaceholder: 'Room code',
+    rescanSubmit:'Update my location',
+    rescanCancel:'Cancel',
+    rescanSame:  'You are already at this location',
+    rescanInvalid:'That code could not be found',
+    rescanOtherBuilding:'That code belongs to a different building',
+    relocatedTo: (label) => `Location updated: ${label}`,
     arrivedSub:  'Destination reached',
     loadingRoute:'Preparing your route...',
     noRoute:     'No available route was found',
@@ -136,6 +153,16 @@ const UI = {
     directions:  'التعليمات',
     navHint:     'اضغط ✓ بعد إتمام كل خطوة',
     arrivedTitle:'وصلتِ إلى وجهتك',
+    rescanCta:   'لست في المكان المتوقع؟ امسح رمز الغرفة',
+    rescanTitle: 'امسح أو أدخل رمز الغرفة',
+    rescanHint:  'سيتم إعادة حساب المسار من موقعك الحالي',
+    rescanPlaceholder: 'رمز الغرفة',
+    rescanSubmit:'تحديث موقعي',
+    rescanCancel:'إلغاء',
+    rescanSame:  'أنت بالفعل في هذا الموقع',
+    rescanInvalid:'تعذر العثور على هذا الرمز',
+    rescanOtherBuilding:'هذا الرمز يخص مبنى آخر',
+    relocatedTo: (label) => `تم تحديث الموقع: ${label}`,
     arrivedSub:  'تم الوصول إلى الوجهة',
     loadingRoute:'جارٍ تحضير المسار...',
     noRoute:     'لم يتم العثور على مسار متاح',
@@ -195,6 +222,16 @@ const UI = {
     directions:  'הוראות',
     navHint:     'הקש ✓ בכל שלב שהשלמת',
     arrivedTitle:'הגעת ליעד',
+    rescanCta:   'לא במקום שחשבת? סרוק קוד חדר',
+    rescanTitle: 'סרוק או הזן קוד חדר',
+    rescanHint:  'המסלול יחושב מחדש מהמיקום הנוכחי שלך',
+    rescanPlaceholder: 'קוד חדר',
+    rescanSubmit:'עדכן את מיקומי',
+    rescanCancel:'ביטול',
+    rescanSame:  'אתה כבר נמצא במיקום הזה',
+    rescanInvalid:'לא נמצא קוד כזה',
+    rescanOtherBuilding:'הקוד הזה שייך לבניין אחר',
+    relocatedTo: (label) => `המיקום עודכן: ${label}`,
     arrivedSub:  'הגעת ליעדך',
     loadingRoute:'מכין את המסלול...',
     noRoute:     'לא נמצא מסלול זמין',
@@ -436,6 +473,36 @@ const IndoorNavigationScreen = () => {
   // just below via useMemo.
   const [startLabelFromCode, setStartLabelFromCode] = useState(null);
   const [startRoutePoint, setStartRoutePoint] = useState(null);
+
+  // Mid-journey relocation / arrival confirmation by room QR.
+  //
+  // `relocatePointId` is a plain id string, NOT the point object, on
+  // purpose: it goes into the route effect's dependency array below, and an
+  // object would be a new reference on every render and re-request the
+  // route forever. When set it wins over the persisted
+  // quickroute_start_location, so "recalculate from where I am now" needs
+  // no new navigation architecture — the existing effect simply resolves a
+  // different start. routeStateKey already includes start_point_id, so the
+  // per-floor step progress resets itself for the new route with no extra
+  // code (see the restore/reset effect further down).
+  const [relocatePointId, setRelocatePointId] = useState(null);
+  // The destination's arrival RoutePoint id. Derived once at component
+  // scope (it used to be a local inside the route effect) because the
+  // rescan handler needs the same value to decide "is this scanned code my
+  // destination?" for legacy points that carry no room_id.
+  const destinationRoutePointId = useMemo(
+    () => getDestinationRoutePointId(room),
+    [room],
+  );
+  // Set only when the user scans the QR of the room they are navigating TO.
+  // This is the authoritative, position-based arrival signal; the existing
+  // "every step ticked" signal is kept as-is and either one is enough.
+  const [scanArrived, setScanArrived] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [scanCode, setScanCode] = useState('');
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanError, setScanError] = useState(null);
+  const [scanNotice, setScanNotice] = useState(null);
   const startLabel = useMemo(() => {
     if (startLabelFromCode) return startLabelFromCode;
     if (!startRoutePoint) return null;
@@ -500,9 +567,13 @@ const IndoorNavigationScreen = () => {
           resolvedStart = null;
         }
 
-        if (resolvedStart?.routePointId) {
+        // A code scanned DURING this journey is the freshest truth about
+        // where the user is, so it outranks the persisted start.
+        const preferredStartPointId = relocatePointId || resolvedStart?.routePointId;
+
+        if (preferredStartPointId) {
           try {
-            const point = await getPublicRoutePointById(resolvedStart.routePointId);
+            const point = await getPublicRoutePointById(preferredStartPointId);
             if (point) startPoint = point;
           } catch (lookupErr) {
             console.warn('Resolved start point lookup failed:', lookupErr);
@@ -538,14 +609,16 @@ const IndoorNavigationScreen = () => {
           // display_name_en/ar/he fields) is stored as-is; `startLabel`
           // above resolves it to the current `lang` and re-resolves
           // instantly on every language change.
-          setStartLabelFromCode(resolvedStart?.label || null);
+          // After a mid-journey rescan the persisted label belongs to the
+          // PREVIOUS location, so it must not be reused — `startLabel`
+          // falls back to the new point's own localized display name.
+          setStartLabelFromCode(relocatePointId ? null : resolvedStart?.label || null);
           setStartRoutePoint(startPoint);
         }
 
         // Resolve the destination's RoutePoint directly from the id the
         // backend stored on the Room when it was placed on the map — never
         // falls back to a nearest/arbitrary guess.
-        const destinationRoutePointId = getDestinationRoutePointId(room);
 
         if (!destinationRoutePointId) {
           if (!cancelled) setRouteError(t.noRoute);
@@ -601,8 +674,21 @@ const IndoorNavigationScreen = () => {
     // re-requests real, backend-generated instruction text in that
     // language (never invented client-side) — see the lang comment above
     // calculateMultiFloorRoute() just above.
+    // `relocatePointId` is in this list so scanning another room's QR
+    // mid-journey recalculates from there to the SAME destination — the
+    // one behaviour change this feature needs from the routing effect. It
+    // is deliberately the point ID (a string), not the point object, so it
+    // is stable across renders and cannot re-trigger this effect forever.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [building?.id, room?.id, optimizationMode, verticalPreference, lang]);
+  }, [
+    building?.id,
+    room?.id,
+    relocatePointId,
+    destinationRoutePointId,
+    optimizationMode,
+    verticalPreference,
+    lang,
+  ]);
 
   const floorSegments = useMemo(
     () => getFloorSegments(routeResult?.segments),
@@ -705,7 +791,14 @@ const IndoorNavigationScreen = () => {
   const activeStep = currentFloorSteps.findIndex((_, i) => !currentFloorCompleted.has(i));
   const isLastFloor = activeFloorIndex === floorSegments.length - 1;
   const currentFloorDone = isFloorComplete(currentFloorSteps.length, currentFloorCompleted);
-  const hasArrived = isNavigating && isLastFloor && currentFloorDone && currentFloorSteps.length > 0;
+  // Two independent, equally valid arrival signals:
+  //   scanArrived  — the user scanned the destination room's own QR. This
+  //                  is position-based and does not require the walkthrough
+  //                  to have been started or every step to be ticked.
+  //   the original — every instruction on the last floor checked off.
+  const steppedThroughToEnd =
+    isNavigating && isLastFloor && currentFloorDone && currentFloorSteps.length > 0;
+  const hasArrived = scanArrived || steppedThroughToEnd;
 
   // 4. Track the real moment of arrival once, so an honest elapsed time
   //    can be shown (Part 2.G) — never a simulated/estimated value.
@@ -851,6 +944,90 @@ const IndoorNavigationScreen = () => {
     setCompletedByFloor({});
     setNavStartedAt(null);
     setArrivedAt(null);
+    setScanArrived(false);
+  };
+
+  // ------------------------------------------------------------------
+  // Scan a room QR mid-journey: relocate, or confirm arrival.
+  //
+  // The QR is only ever a location identifier. It is resolved to a
+  // RoutePoint through the existing PUBLIC endpoints, and the decision of
+  // what that means is a pure function (utils/locationScan.js) so it can be
+  // unit tested without React. Nothing here touches the navigation graph:
+  // recalculation is just the existing route effect running again with a
+  // different start point.
+  // ------------------------------------------------------------------
+  const handleScanSubmit = async (event) => {
+    event?.preventDefault?.();
+
+    const code = scanCode.trim();
+    if (!code || scanBusy) return;
+
+    setScanBusy(true);
+    setScanError(null);
+    setScanNotice(null);
+
+    try {
+      const resolved = await resolveLocationCode(code);
+
+      if (!isScanInActiveBuilding(resolved, building?.id)) {
+        setScanError(t.rescanOtherBuilding);
+        return;
+      }
+
+      const scannedPoint = await getPublicRoutePointById(resolved?.route_point_id);
+
+      const { outcome, startPointId } = classifyScannedLocation({
+        scannedPoint,
+        destinationRoomId: room?.id ?? null,
+        destinationRoutePointId,
+        currentStartPointId: startRoutePoint?.id ?? null,
+      });
+
+      if (outcome === 'invalid') {
+        setScanError(t.rescanInvalid);
+        return;
+      }
+
+      // Persist the new position under the SAME key BarcodeEntryScreen
+      // uses, so a reload mid-journey resumes from here rather than from
+      // the original entrance.
+      const record = buildStartLocationRecord(resolved);
+      if (record) {
+        try {
+          localStorage.setItem(START_LOCATION_KEY, JSON.stringify(record));
+        } catch {
+          // A private-mode storage failure must never block navigation.
+        }
+      }
+
+      if (outcome === 'arrived') {
+        // Confirmed by position, not by ticking steps.
+        setScanArrived(true);
+        setScanOpen(false);
+        setScanCode('');
+        return;
+      }
+
+      if (outcome === 'unchanged') {
+        setScanNotice(t.rescanSame);
+        return;
+      }
+
+      // outcome === 'relocate' — same destination, new starting point. The
+      // route effect below re-runs because relocatePointId is one of its
+      // dependencies, and routeStateKey changes so step progress resets.
+      setScanArrived(false);
+      setRelocatePointId(startPointId);
+      setScanOpen(false);
+      setScanCode('');
+      setScanNotice(t.relocatedTo(resolved?.label || code));
+    } catch (err) {
+      console.warn('Location code rescan failed:', err);
+      setScanError(t.rescanInvalid);
+    } finally {
+      setScanBusy(false);
+    }
   };
 
   const hasRealRoute = floorSegments.length > 0;
@@ -1026,6 +1203,69 @@ const IndoorNavigationScreen = () => {
                 <p className="s18-arrival-sub">{room ? roomDisplayName : t.arrivedSub}</p>
                 {destFloorLabel && <p className="s18-arrival-floor">{destFloorLabel}</p>}
               </div>
+            </div>
+          )}
+
+          {/* Room-QR relocation / arrival confirmation.
+              Deliberately a small inline control, not a redesign: it reuses
+              the same typed-code input the entry screen uses and the same
+              public resolve endpoint. Hidden once the user has arrived —
+              there is nothing left to recalculate. */}
+          {hasRealRoute && !hasArrived && (
+            <div className="s18-rescan">
+              {!scanOpen ? (
+                <button
+                  type="button"
+                  className="s18-rescan-cta"
+                  onClick={() => {
+                    setScanOpen(true);
+                    setScanError(null);
+                    setScanNotice(null);
+                  }}
+                >
+                  {t.rescanCta}
+                </button>
+              ) : (
+                <form className="s18-rescan-form" onSubmit={handleScanSubmit}>
+                  <p className="s18-rescan-title">{t.rescanTitle}</p>
+                  <p className="s18-rescan-hint">{t.rescanHint}</p>
+                  <input
+                    className="s18-rescan-input"
+                    type="text"
+                    value={scanCode}
+                    onChange={(e) => setScanCode(e.target.value)}
+                    placeholder={t.rescanPlaceholder}
+                    aria-label={t.rescanPlaceholder}
+                    autoComplete="off"
+                    disabled={scanBusy}
+                  />
+                  <div className="s18-rescan-actions">
+                    <button
+                      type="submit"
+                      className="s18-rescan-submit"
+                      disabled={scanBusy || !scanCode.trim()}
+                    >
+                      {t.rescanSubmit}
+                    </button>
+                    <button
+                      type="button"
+                      className="s18-rescan-cancel"
+                      onClick={() => {
+                        setScanOpen(false);
+                        setScanCode('');
+                        setScanError(null);
+                      }}
+                      disabled={scanBusy}
+                    >
+                      {t.rescanCancel}
+                    </button>
+                  </div>
+                  {scanError && <p className="s18-rescan-error">{scanError}</p>}
+                </form>
+              )}
+              {!scanOpen && scanNotice && (
+                <p className="s18-rescan-notice">{scanNotice}</p>
+              )}
             </div>
           )}
 

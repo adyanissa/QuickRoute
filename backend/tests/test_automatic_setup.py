@@ -326,7 +326,9 @@ async def test_auto_connect_nearest_creates_exactly_one_edge(client):
     new_point = new_point_response.json()
 
     edges = client.get(
-        "/api/route-edges", params={"map_id": map_item["id"]}
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
     ).json()
 
     edges_touching_new_point = [
@@ -356,7 +358,9 @@ async def test_auto_connect_all_valid_connects_multiple_branches(client):
     junction = junction_response.json()
 
     edges = client.get(
-        "/api/route-edges", params={"map_id": map_item["id"]}
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
     ).json()
 
     edges_touching_junction = [
@@ -697,7 +701,9 @@ def test_auto_connect_nearby_never_crosses_a_real_wall_via_create_route_point(cl
     assert new_point["auto_connected_edge_ids"] == []
 
     edges = client.get(
-        "/api/route-edges", params={"map_id": map_item["id"]}
+        "/api/route-edges",
+        params={"map_id": map_item["id"]},
+        headers=auth_headers(token),
     ).json()
     assert edges == []
 

@@ -89,10 +89,28 @@ test('calculateMultiFloorRoute is called with verticalTransportPreference, which
 // 7. Changing verticalPreference re-requests the route for the SAME
 //    start/destination (it's a dependency of the route-loading effect).
 test('verticalPreference is a dependency of the route-loading effect (a change re-requests the route)', () => {
-  const effectDepsMatch = screenSource.match(
-    /}, \[building\?\.id, room\?\.id, optimizationMode, verticalPreference, lang\]\);/,
+  // Asserts the INTENT (verticalPreference is one of the route effect's
+  // dependencies) rather than the exact, full dependency list. The list is
+  // legitimately allowed to grow — `relocatePointId` was added to it so a
+  // room QR scanned mid-journey recalculates from the new position — and
+  // pinning the whole array made an unrelated, correct feature look like a
+  // regression.
+  // Format-agnostic on purpose: this asserts the INTENT (verticalPreference
+  // is one of the route effect's dependencies) rather than one exact,
+  // single-line dependency list. The list is legitimately allowed to grow
+  // and to be wrapped across lines — `relocatePointId` and
+  // `destinationRoutePointId` were added so a room QR scanned mid-journey
+  // recalculates from the new position — and pinning the literal array made
+  // an unrelated, correct feature look like a regression.
+  const routeEffectDeps = (screenSource.match(/}, \[[\s\S]*?\]\);/g) || []).find(
+    (deps) => /\bverticalPreference\b/.test(deps),
   );
-  assert.ok(effectDepsMatch, 'expected verticalPreference in the route-loading effect dependency array');
+  assert.ok(routeEffectDeps, 'expected a route-loading effect dependency array containing verticalPreference');
+  // The other dependencies that must never be dropped from it.
+  assert.match(routeEffectDeps, /\bbuilding\?\.id\b/);
+  assert.match(routeEffectDeps, /\broom\?\.id\b/);
+  assert.match(routeEffectDeps, /\boptimizationMode\b/);
+  assert.match(routeEffectDeps, /\blang\b/);
 });
 
 // 8. routeStateKey incorporates the preference, so a change resets

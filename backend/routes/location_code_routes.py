@@ -16,9 +16,16 @@ from schemas.location_code_schema import (
     LocationCodeResponse,
     LocationCodeResolveResponse,
 )
-import secrets
-import string
-from core.auth_deps import get_current_user, user_can_manage_building
+from services.room_location_code_service import (
+    generate_location_code_candidate,
+)
+from core.auth_deps import (
+    get_accessible_building_ids,
+    get_current_user,
+    require_any_admin,
+    user_can_access_building,
+    user_can_manage_building,
+)
 from core.errors import (
     LOCATION_CODE_NOT_FOUND,
     LOCATION_CODE_ALREADY_EXISTS,
@@ -252,12 +259,12 @@ async def create_location_code(
     return await location_code_to_response(new_entry)
 
 
-def _generate_code_candidate() -> str:
-    # 8 unambiguous uppercase alphanumeric characters (no 0/O/1/I) — short
-    # enough to type from a printed label, long enough that collisions are
-    # rare even before the uniqueness retry loop below.
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    return "".join(secrets.choice(alphabet) for _ in range(8))
+# The code format lives in services/room_location_code_service so the manual
+# "Generate code" button below and the automatic per-room QR issued during
+# semantic/auto-connect apply can never drift into two different formats.
+# Re-exported under the original private name so nothing else in this module
+# has to change.
+_generate_code_candidate = generate_location_code_candidate
 
 
 @router.post(
@@ -335,7 +342,26 @@ async def get_all_location_codes(
     building_id: Optional[str] = Query(default=None),
     map_id: Optional[str] = Query(default=None),
     is_active: Optional[bool] = Query(default=None),
+    admin: User = Depends(require_any_admin),
 ):
+    """
+    Admin inventory of QR/location codes.
+
+    This is an ADMIN listing, not part of the public wayfinding contract:
+    the anonymous QR flow only ever calls GET /resolve/{code} below, with a
+    code the user physically scanned. This endpoint previously had no auth
+    dependency at all, which made the entire physical QR label inventory
+    (every code string, plus its building/map/route-point ids) publicly
+    enumerable by anyone who could reach the API — exactly the class of
+    leak GET /api/route-points/public was explicitly hardened against (see
+    routes/route_point_routes.py, which refuses to list without a
+    map_id/building_id filter for the same reason). Every other admin
+    listing in this codebase already requires authentication.
+
+    Results are additionally narrowed to the caller's authorized buildings,
+    the same way GET /api/rooms and GET /api/route-edges are.
+    """
+
     query = {}
 
     if building_id:
@@ -347,6 +373,19 @@ async def get_all_location_codes(
     if is_active is not None:
         query["is_active"] = is_active
 
+    accessible_building_ids = get_accessible_building_ids(admin)
+
+    if accessible_building_ids is not None:
+        if building_id:
+            # An explicit out-of-scope building_id is rejected outright
+            # rather than silently re-scoped, so an admin UI bug can never
+            # show a restricted admin a list that LOOKS like the building
+            # they asked for but quietly is not.
+            if not user_can_access_building(admin, building_id):
+                raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+        else:
+            query["building_id"] = {"$in": accessible_building_ids}
+
     entries = await LocationCode.find(query).to_list()
     return [await location_code_to_response(entry) for entry in entries]
 
@@ -355,11 +394,20 @@ async def get_all_location_codes(
     "/{code_id}",
     response_model=LocationCodeResponse,
 )
-async def get_location_code_by_id(code_id: PydanticObjectId):
+async def get_location_code_by_id(
+    code_id: PydanticObjectId,
+    admin: User = Depends(require_any_admin),
+):
+    """Admin detail view — see get_all_location_codes above for why this
+    is authenticated and scope-checked rather than public."""
+
     entry = await LocationCode.get(code_id)
 
     if not entry:
         raise HTTPException(**LOCATION_CODE_NOT_FOUND)
+
+    if not user_can_access_building(admin, entry.building_id):
+        raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
 
     return await location_code_to_response(entry)
 

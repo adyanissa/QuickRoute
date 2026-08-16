@@ -104,6 +104,17 @@ import '../styles/adminScreens.css';
 // original-image pixels at click time via resolveSnapThresholdPx() using
 // the live render scale, with a small native-pixel floor so extremely
 // zoomed-out views still have a sane minimum hit area.
+// Backend reason codes from services/room_location_code_service.
+// ensure_room_location_codes -> the translation key that explains them.
+// Any unrecognised reason falls back to showing the raw code rather than
+// silently hiding a room from the admin.
+const SEMANTIC_DEST_REVIEW_REASONS = {
+  no_arrival_point: 'semanticDestReasonNoArrivalPoint',
+  arrival_point_missing_or_inactive: 'semanticDestReasonInactivePoint',
+  not_connected_to_graph: 'semanticDestReasonNotConnected',
+  arrival_point_has_no_building: 'semanticDestReasonNoBuilding',
+};
+
 const SNAP_SCREEN_PX = 14;
 const SNAP_MIN_NATIVE_PX = 10;
 
@@ -345,6 +356,18 @@ const UI = {
     semanticDestResultTitle: 'Destinations created successfully',
     semanticDestResultRoomsLine: (r) => `Rooms created: ${r.rooms_created}`,
     semanticDestResultPointsLine: (r) => `Route points created: ${r.route_points_created}`,
+    // "Every accepted navigable room gets its own QR" — reported by the
+    // same apply response, so no extra request is needed here.
+    semanticDestResultQrLine: (r) =>
+      `Room QR codes: ${r.qr_codes_created ?? 0} created, ${r.qr_codes_reused ?? 0} already existed`,
+    semanticDestResultNotNavigableLine: (r) =>
+      `Not navigable yet: ${(r.rooms_unconnected ?? 0) + (r.rooms_unplaced ?? 0)} room(s) — no QR issued`,
+    semanticDestNotNavigableHint:
+      'A room only gets a QR once it has a location on the map AND a connection to the corridor graph. Place any unplaced rooms, then run Auto Connect Destinations — the codes are issued automatically.',
+    semanticDestReasonNoArrivalPoint: 'not placed on the map yet',
+    semanticDestReasonInactivePoint: 'its map point is missing or inactive',
+    semanticDestReasonNotConnected: 'not connected to the corridor graph',
+    semanticDestReasonNoBuilding: 'its map has no building assigned',
     semanticDestResultUpdatedLine: (r) => `Existing destinations updated: ${r.rooms_updated}`,
     semanticDestResultNestedLine: (r) => `Nested destinations created: ${r.nested_relationships_created}`,
     semanticDestResultNeedsReviewLine: (r) => `Items needing review: ${r.skipped + r.ambiguous}`,
@@ -775,6 +798,16 @@ const UI = {
     semanticDestResultTitle: 'تم إنشاء الوجهات بنجاح',
     semanticDestResultRoomsLine: (r) => `الغرف التي تم إنشاؤها: ${r.rooms_created}`,
     semanticDestResultPointsLine: (r) => `نقاط المسار التي تم إنشاؤها: ${r.route_points_created}`,
+    semanticDestResultQrLine: (r) =>
+      `رموز QR للغرف: ${r.qr_codes_created ?? 0} تم إنشاؤها، ${r.qr_codes_reused ?? 0} موجودة مسبقًا`,
+    semanticDestResultNotNavigableLine: (r) =>
+      `غير قابلة للملاحة بعد: ${(r.rooms_unconnected ?? 0) + (r.rooms_unplaced ?? 0)} غرفة — لم يتم إصدار رمز`,
+    semanticDestNotNavigableHint:
+      'تحصل الغرفة على رمز QR فقط بعد تحديد موقعها على الخريطة وربطها بشبكة الممرات. حدد مواقع الغرف غير المحددة ثم شغّل الربط التلقائي للوجهات — تُصدر الرموز تلقائيًا.',
+    semanticDestReasonNoArrivalPoint: 'لم يتم تحديد موقعها على الخريطة',
+    semanticDestReasonInactivePoint: 'نقطة الخريطة مفقودة أو غير مفعلة',
+    semanticDestReasonNotConnected: 'غير مرتبطة بشبكة الممرات',
+    semanticDestReasonNoBuilding: 'لا يوجد مبنى مرتبط بخريطتها',
     semanticDestResultUpdatedLine: (r) => `الوجهات الحالية التي تم تحديثها: ${r.rooms_updated}`,
     semanticDestResultNestedLine: (r) => `الوجهات المتداخلة التي تم إنشاؤها: ${r.nested_relationships_created}`,
     semanticDestResultNeedsReviewLine: (r) => `عناصر تحتاج إلى مراجعة: ${r.skipped + r.ambiguous}`,
@@ -1203,6 +1236,16 @@ const UI = {
     semanticDestResultTitle: 'היעדים נוצרו בהצלחה',
     semanticDestResultRoomsLine: (r) => `חדרים שנוצרו: ${r.rooms_created}`,
     semanticDestResultPointsLine: (r) => `נקודות מסלול שנוצרו: ${r.route_points_created}`,
+    semanticDestResultQrLine: (r) =>
+      `קודי QR לחדרים: ${r.qr_codes_created ?? 0} נוצרו, ${r.qr_codes_reused ?? 0} כבר היו קיימים`,
+    semanticDestResultNotNavigableLine: (r) =>
+      `עדיין לא ניתנות לניווט: ${(r.rooms_unconnected ?? 0) + (r.rooms_unplaced ?? 0)} חדרים — לא הונפק קוד`,
+    semanticDestNotNavigableHint:
+      'חדר מקבל קוד QR רק לאחר שמוקם על המפה וחובר לרשת המסדרונות. מקם את החדרים החסרים ואז הפעל חיבור אוטומטי של יעדים — הקודים מונפקים אוטומטית.',
+    semanticDestReasonNoArrivalPoint: 'טרם מוקם על המפה',
+    semanticDestReasonInactivePoint: 'נקודת המפה חסרה או לא פעילה',
+    semanticDestReasonNotConnected: 'לא מחובר לרשת המסדרונות',
+    semanticDestReasonNoBuilding: 'למפה שלו לא משויך בניין',
     semanticDestResultUpdatedLine: (r) => `יעדים קיימים שעודכנו: ${r.rooms_updated}`,
     semanticDestResultNestedLine: (r) => `יעדים מקוננים שנוצרו: ${r.nested_relationships_created}`,
     semanticDestResultNeedsReviewLine: (r) => `פריטים הדורשים בדיקה: ${r.skipped + r.ambiguous}`,
@@ -10207,7 +10250,41 @@ const AdminMapScreen = () => {
                           <div>{t.semanticDestResultNestedLine(semanticDestApplyResult)}</div>
                           <div>{t.semanticDestResultNeedsReviewLine(semanticDestApplyResult)}</div>
                           <div>{t.semanticDestResultFailedLine(semanticDestApplyResult)}</div>
+                          <div>{t.semanticDestResultQrLine(semanticDestApplyResult)}</div>
+                          <div>{t.semanticDestResultNotNavigableLine(semanticDestApplyResult)}</div>
                         </div>
+
+                        {/* Rooms that were accepted but could not become
+                            navigable, named rather than only counted, so the
+                            admin knows exactly what still needs doing before
+                            those rooms get a QR. */}
+                        {semanticDestApplyResult.rooms_needing_review?.length > 0 && (
+                          <div
+                            style={{
+                              fontSize: 11.5,
+                              textAlign: isRTL ? 'right' : 'left',
+                              background: '#fff8e6',
+                              border: '1px solid #f0d9a0',
+                              borderRadius: 10,
+                              padding: 12,
+                              marginBottom: 16,
+                              lineHeight: 1.8,
+                            }}
+                          >
+                            <div style={{ marginBottom: 6 }}>
+                              {t.semanticDestNotNavigableHint}
+                            </div>
+                            <ul style={{ margin: 0, paddingInlineStart: 18 }}>
+                              {semanticDestApplyResult.rooms_needing_review.map((entry) => (
+                                <li key={entry.room_id}>
+                                  {entry.name} — {SEMANTIC_DEST_REVIEW_REASONS[entry.reason]
+                                    ? t[SEMANTIC_DEST_REVIEW_REASONS[entry.reason]]
+                                    : entry.reason}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
 
                         {semanticDestApplyResult.warnings?.length > 0 && (
                           <div

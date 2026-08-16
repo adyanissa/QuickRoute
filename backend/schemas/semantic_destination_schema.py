@@ -184,3 +184,26 @@ class SemanticDestinationApplyResult(BaseModel):
     # writes — semantic_item_id -> human-readable reason. Empty on every
     # other response (success, or a non-batch partial-tolerant apply).
     item_errors: Dict[str, str] = Field(default_factory=dict)
+
+    # "Every accepted navigable room gets its own QR" — filled in by
+    # services/room_location_code_service.ensure_room_location_codes, which
+    # apply_semantic_destinations calls at the end of a successful run.
+    # All default to 0/[] so every existing caller and test that never looks
+    # at them keeps working unchanged.
+    #
+    # NOTE ON EXPECTED VALUES: this endpoint creates no RouteEdge, so a
+    # brand-new destination is not navigable yet and correctly lands in
+    # rooms_unconnected here. Its code is issued by the auto-connect apply,
+    # which runs the same routine once the arrival point has an edge.
+    qr_codes_created: int = 0
+    qr_codes_reused: int = 0
+    # Room exists but has no usable arrival RoutePoint yet — semantic
+    # analysis carries no coordinates, so an admin must place these.
+    rooms_unplaced: int = 0
+    # Arrival point exists but is not joined to the corridor graph. NOT
+    # navigable, deliberately given no QR rather than an invented edge.
+    rooms_unconnected: int = 0
+    # [{room_id, name, reason}] for both cases above, so the admin UI can
+    # name the rooms that could not become navigable instead of only
+    # counting them.
+    rooms_needing_review: List[Dict[str, str]] = Field(default_factory=list)
