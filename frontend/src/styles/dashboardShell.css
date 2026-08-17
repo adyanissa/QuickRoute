@@ -1,0 +1,803 @@
+/* ─── QuickRoute Admin Dashboard Shell ──────────────────────────────────── */
+/* Desktop-first shell for the global admin Overview (/screen/05):          */
+/* slim white sidebar + navy gradient upper area fading into the existing   */
+/* soft light-blue content background. Every colour/radius/shadow below     */
+/* comes from the tokens already defined in global.css, so this is the      */
+/* same QuickRoute visual identity as adminScreens.css — never a new theme. */
+/* All classes are prefixed `qrd-` and are used only by the dashboard, so   */
+/* no existing `.adm-*` screen can be affected by anything in this file.    */
+/* Layout is written with logical properties (inline-start/end, margin-     */
+/* inline) so the same rules serve LTR (en) and RTL (ar/he) unchanged.      */
+
+.qrd-root {
+  display: flex;
+  /* src/index.css is Vite's leftover template stylesheet and still sets
+     `#root { text-align: center }` globally. Neutralized here for the
+     dashboard subtree only — editing index.css would change every other
+     screen's inherited alignment, which is out of scope for this task. */
+  text-align: start;
+  align-items: stretch;
+  width: 100%;
+  /* #root is a column flex container (src/index.css). Without an explicit
+     flex here the shell is a shrinkable flex item, so a long page was
+     squeezed back to the container's height and its background stopped at
+     the fold. `1 0 auto` = fill the viewport on a short page, never shrink
+     below the content on a long one. */
+  flex: 1 0 auto;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--bg-primary);
+  font-family: var(--font-body);
+  color: var(--text-primary);
+}
+
+/* ── Sidebar ────────────────────────────────────────────────────────────── */
+
+.qrd-sidebar {
+  flex: 0 0 258px;
+  width: 258px;
+  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 26px 16px 20px;
+  background: #ffffff;
+  border-inline-end: 1px solid rgba(42, 82, 152, 0.10);
+  box-shadow: 0 0 40px rgba(42, 82, 152, 0.05);
+  z-index: 3;
+}
+
+.qrd-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px 22px;
+  min-width: 0;
+}
+
+.qrd-brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--blue-dark);
+}
+
+.qrd-brand-text {
+  font-family: var(--font-brand);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--blue-dark);
+  white-space: nowrap;
+}
+
+.qrd-brand-text span {
+  color: var(--blue-mid);
+}
+
+.qrd-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.qrd-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: start;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.qrd-nav-item:hover {
+  background: var(--bg-secondary);
+}
+
+.qrd-nav-item.is-active {
+  background: linear-gradient(135deg, var(--blue-dark), var(--blue-mid));
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(26, 58, 107, 0.22);
+}
+
+.qrd-nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0.95;
+}
+
+.qrd-sidebar-foot {
+  margin-block-start: auto;
+  padding-block-start: 18px;
+  border-block-start: 1px solid rgba(42, 82, 152, 0.10);
+}
+
+.qrd-logout {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid rgba(42, 82, 152, 0.12);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: start;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.qrd-logout:hover {
+  background: #fdf1f1;
+  color: #b23b3b;
+  border-color: rgba(178, 59, 59, 0.2);
+}
+
+/* ── Main column ────────────────────────────────────────────────────────── */
+/* The navy gradient is the FIRST background layer, pinned to the top and   */
+/* fading into the soft light-blue that fills the rest of the column.       */
+
+.qrd-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 100vh;
+  padding: 0 34px 44px;
+  background:
+    linear-gradient(
+      180deg,
+      #0d2244 0%,
+      #1a3a6b 28%,
+      #2a5298 52%,
+      #4474be 70%,
+      #b9d3ee 88%,
+      var(--bg-primary) 100%
+    ) no-repeat top center / 100% 372px,
+    linear-gradient(180deg, var(--bg-primary) 0%, var(--blue-pale) 100%);
+}
+
+/* Sub-pages carry a Back control, a breadcrumb, a title and often a
+   description, all of which are light-on-dark. The band is sized so that
+   whole header block stays inside the solid part of the gradient and the
+   page body below it lands on the light background — a shorter band put
+   dark-navy body text on a dark background and made it unreadable. */
+.qrd-main.is-compact {
+  background:
+    linear-gradient(
+      180deg,
+      #0d2244 0%,
+      #1a3a6b 30%,
+      #2a5298 56%,
+      #4474be 74%,
+      #b9d3ee 90%,
+      var(--bg-primary) 100%
+    ) no-repeat top center / 100% 360px,
+    linear-gradient(180deg, var(--bg-primary) 0%, var(--blue-pale) 100%);
+}
+
+.qrd-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+  padding: 20px 0 4px;
+}
+
+.qrd-topbar-divider {
+  width: 1px;
+  height: 30px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.qrd-user {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.qrd-avatar {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  color: #ffffff;
+  font-family: var(--font-brand);
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.qrd-user-meta {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+
+.qrd-user-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qrd-user-role {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+}
+
+/* ── Intro ──────────────────────────────────────────────────────────────── */
+
+.qrd-intro {
+  padding: 26px 0 24px;
+}
+
+.qrd-intro-title {
+  font-family: var(--font-brand);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+}
+
+.qrd-intro-sub {
+  margin-block-start: 6px;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.76);
+}
+
+/* ── Breadcrumbs / context bar ──────────────────────────────────────────── */
+
+.qrd-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding-block-end: 18px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.qrd-crumb {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.qrd-crumb-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
+  cursor: pointer;
+}
+
+.qrd-crumb-btn:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+.qrd-crumb-current {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.qrd-crumb-sep {
+  opacity: 0.5;
+  display: flex;
+}
+
+/* ── Stat cards ─────────────────────────────────────────────────────────── */
+
+.qrd-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.qrd-stat {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 18px;
+  background: var(--bg-card);
+  border: 1px solid rgba(42, 82, 152, 0.07);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.qrd-stat-icon {
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qrd-stat-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.qrd-stat-num {
+  font-family: var(--font-brand);
+  font-size: 25px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--blue-dark);
+}
+
+.qrd-stat-lbl {
+  margin-block-start: 2px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.qrd-stat-hint {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* ── Section headings ───────────────────────────────────────────────────── */
+
+.qrd-section {
+  margin-block-start: 30px;
+}
+
+.qrd-section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-block-end: 14px;
+}
+
+.qrd-section-title {
+  font-family: var(--font-brand);
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.qrd-section-sub {
+  margin-block-start: 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.qrd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 17px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--blue-dark), var(--blue-mid));
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(26, 58, 107, 0.2);
+  white-space: nowrap;
+}
+
+.qrd-btn.is-ghost {
+  background: #ffffff;
+  color: var(--blue-mid);
+  border: 1px solid rgba(42, 82, 152, 0.16);
+  box-shadow: var(--shadow-card);
+}
+
+/* ── Entity cards (site / building / map group / floor) ─────────────────── */
+
+.qrd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.qrd-entity {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  padding: 18px 20px;
+  border: 1px solid rgba(42, 82, 152, 0.07);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  text-align: start;
+  font-family: var(--font-body);
+  transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+}
+
+.qrd-entity:hover {
+  box-shadow: var(--shadow-soft);
+  border-color: rgba(42, 82, 152, 0.16);
+  transform: translateY(-1px);
+}
+
+.qrd-entity-icon {
+  width: 54px;
+  height: 54px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--blue-dark), var(--blue-mid));
+}
+
+.qrd-entity-icon.is-soft {
+  background: var(--bg-secondary);
+  color: var(--blue-mid);
+  border: 1px solid rgba(42, 82, 152, 0.10);
+}
+
+.qrd-entity-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.qrd-entity-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.qrd-entity-place {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-block-start: 3px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.qrd-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 30px;
+  margin-block-start: 12px;
+}
+
+.qrd-metric {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+
+.qrd-metric-num {
+  font-family: var(--font-brand);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.qrd-metric-lbl {
+  margin-block-start: 2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.qrd-pill {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-radius: 100px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: #e6f6ec;
+  color: #2c7a4b;
+  white-space: nowrap;
+}
+
+.qrd-pill.is-muted {
+  background: #eef1f6;
+  color: var(--text-secondary);
+}
+
+.qrd-entity-chev {
+  flex-shrink: 0;
+  display: flex;
+  color: var(--text-muted);
+}
+
+/* ── Category tabs ──────────────────────────────────────────────────────── */
+
+.qrd-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block-end: 14px;
+}
+
+.qrd-tab {
+  padding: 8px 15px;
+  border: 1px solid rgba(42, 82, 152, 0.12);
+  border-radius: 100px;
+  background: #ffffff;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.qrd-tab.is-active {
+  background: linear-gradient(135deg, var(--blue-dark), var(--blue-mid));
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.qrd-tab-count {
+  opacity: 0.65;
+  margin-inline-start: 6px;
+  font-weight: 700;
+}
+
+/* ── Contextual tool grid (only after a map is selected) ────────────────── */
+
+.qrd-tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: 14px;
+}
+
+.qrd-tool {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 16px 17px;
+  border: 1px solid rgba(42, 82, 152, 0.07);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  text-align: start;
+  font-family: var(--font-body);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.qrd-tool:hover {
+  box-shadow: var(--shadow-soft);
+  border-color: rgba(42, 82, 152, 0.16);
+}
+
+.qrd-tool.is-destructive .qrd-tool-icon {
+  background: #fdeeee;
+  color: #b23b3b;
+}
+
+.qrd-tool.is-destructive:hover {
+  border-color: rgba(178, 59, 59, 0.25);
+}
+
+.qrd-tool-icon {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary);
+  color: var(--blue-mid);
+}
+
+.qrd-tool-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.qrd-tool-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.qrd-tool-desc {
+  margin-block-start: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* ── States ─────────────────────────────────────────────────────────────── */
+
+.qrd-panel {
+  padding: 44px 24px;
+  border: 1px dashed rgba(42, 82, 152, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.7);
+  text-align: center;
+}
+
+.qrd-panel-icon {
+  display: flex;
+  justify-content: center;
+  margin-block-end: 12px;
+  color: var(--blue-soft);
+}
+
+.qrd-panel-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.qrd-panel-hint {
+  margin-block-start: 5px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.qrd-alert {
+  margin-block-end: 16px;
+  padding: 13px 16px;
+  border-radius: var(--radius-sm);
+  background: #ffe9e9;
+  color: #a92323;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+
+@media (max-width: 1180px) {
+  .qrd-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .qrd-root {
+    flex-direction: column;
+  }
+
+  .qrd-sidebar {
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 0;
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 12px 16px;
+    border-inline-end: none;
+    border-block-end: 1px solid rgba(42, 82, 152, 0.10);
+  }
+
+  .qrd-brand {
+    /* Horizontal sidebar: nothing may shrink below its own content, or
+       the nav pills would visually overlap the wordmark instead of the
+       row simply scrolling. */
+    flex-shrink: 0;
+    padding: 0;
+    padding-inline-end: 8px;
+  }
+
+  .qrd-nav {
+    flex-shrink: 0;
+    flex-direction: row;
+    gap: 6px;
+  }
+
+  .qrd-nav-item,
+  .qrd-logout,
+  .qrd-sidebar-foot {
+    flex-shrink: 0;
+  }
+
+  .qrd-nav-item,
+  .qrd-logout {
+    /* The vertical sidebar's full-width items must size to their own
+       label once the sidebar becomes a horizontal row. */
+    width: auto;
+    padding: 9px 13px;
+    white-space: nowrap;
+  }
+
+  .qrd-sidebar-foot {
+    margin-block-start: 0;
+    margin-inline-start: auto;
+    padding-block-start: 0;
+    border-block-start: none;
+  }
+
+  .qrd-main {
+    padding: 0 18px 34px;
+  }
+
+  .qrd-intro-title {
+    font-size: 24px;
+  }
+
+  .qrd-entity {
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+}
+
+@media (max-width: 620px) {
+  /* Only the logo mark survives on a phone-width nav row — the wordmark
+     would otherwise eat most of the scrollable width. */
+  .qrd-brand-text {
+    display: none;
+  }
+
+  .qrd-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .qrd-topbar {
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .qrd-topbar-divider {
+    display: none;
+  }
+
+  .qrd-section-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .qrd-metrics {
+    gap: 18px;
+  }
+
+  .qrd-entity-icon {
+    width: 46px;
+    height: 46px;
+  }
+}

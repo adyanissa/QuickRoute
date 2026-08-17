@@ -46,6 +46,12 @@ class InvitationCode(Document):
     is_used: bool = False
 
     created_by_user_id: Optional[str] = None
+    # Denormalized at creation time so the audit trail survives the
+    # creator's account being deleted through Users & Access. The live
+    # lookup by created_by_user_id is still preferred when the account
+    # still exists (a renamed admin should read correctly), and this is
+    # the fallback rather than the source of truth.
+    created_by_name: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     used_at: Optional[datetime] = None

@@ -10,9 +10,21 @@
 // logic/invitation_code_logic.py:CREATABLE_ROLES_BY_CREATOR exactly —
 // this list only decides which options the dropdown OFFERS; the backend
 // is the real enforcement point) ──────────────────────────────────────
+// Final admin user/access model: invitation codes are how ADMINISTRATORS
+// are created, so `regular_user` is no longer offered here. An ordinary
+// QuickRoute visitor never needs an invitation — they self-register
+// through POST /api/auth/register, which requires no code at all, so
+// removing the option cannot break the normal user flow.
+//
+// The backend still accepts a regular_user invitation (historical codes
+// must keep validating and the role is not privileged); this list only
+// decides what the admin UI OFFERS. The privileged part of the hierarchy
+// — who may hand out super_admin / global_manager — still mirrors
+// backend logic/invitation_code_logic.py:CREATABLE_ROLES_BY_CREATOR
+// exactly, and the backend remains the enforcement point.
 const CREATABLE_ROLES_BY_CREATOR = {
-  super_admin: ['super_admin', 'global_manager', 'building_manager', 'regular_user'],
-  global_manager: ['building_manager', 'regular_user'],
+  super_admin: ['super_admin', 'global_manager', 'building_manager'],
+  global_manager: ['building_manager'],
 };
 
 export function getAllowedRoleOptions(creatorRole) {
@@ -45,10 +57,24 @@ export function isCreateEnabled(form) {
   if (!form?.role) return false;
 
   if (requiresBuildingSelection(form.role)) {
-    return Array.isArray(form.buildingIds) && form.buildingIds.length > 0;
+    // EXACTLY one building: a Building Manager administers one building
+    // in full (including maps uploaded into it later), so the assignment
+    // has to be unambiguous. The backend rejects any other count.
+    return Array.isArray(form.buildingIds) && form.buildingIds.length === 1;
   }
 
   return true;
+}
+
+// A Building Manager's building choice is single-select: picking a second
+// building REPLACES the first rather than adding to it.
+export function selectAssignedBuilding(form, buildingId) {
+  if (!requiresBuildingSelection(form?.role)) return form;
+  const current = (form.buildingIds || [])[0];
+  return {
+    ...form,
+    buildingIds: current === buildingId ? [] : [buildingId],
+  };
 }
 
 // ── Expiration presets -> absolute ISO datetime the backend accepts. ──

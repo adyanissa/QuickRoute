@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import QRCode from 'qrcode';
 import { useLang } from '../context/LangContext';
 import { useAdmin } from '../context/AdminContext';
@@ -198,8 +198,7 @@ const QrPreview = ({ value }) => {
 };
 
 const AdminLocationCodesScreen = () => {
-  const { lang, setLang } = useLang();
-  const navigate = useNavigate();
+  const { lang } = useLang();
   const { buildings, maps, routePoints, loadBuildings, loadMaps, loadRoutePoints } = useAdmin();
 
   const isRTL = lang === 'ar' || lang === 'he';
@@ -427,32 +426,14 @@ const AdminLocationCodesScreen = () => {
   };
 
   return (
-    <div className="layout-wrapper">
-      <div className="layout-shell adm-shell" dir={isRTL ? 'rtl' : 'ltr'}>
+    <div className="qrd-page">
+      <div className="qrd-pagebody" dir={isRTL ? 'rtl' : 'ltr'}>
 
-        <div className="adm-inner-header">
-          <div className="adm-topbar">
-            <button
-              className={`adm-back-btn${isRTL ? ' adm-back-btn-rtl' : ''}`}
-              onClick={() => (view !== 'list' ? setView('list') : navigate('/screen/05'))}
-            >
-              <BackArrow flip={isRTL} />
-              {t.back}
-            </button>
-            <div className="adm-lang-pill" role="group">
-              {LANGUAGES.map((l) => (
-                <button key={l.code}
-                  className={`adm-lang-btn${lang === l.code ? ' active' : ''}`}
-                  onClick={() => setLang(l.code)}>
-                  {l.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="adm-inner-heading">
-            <div className="adm-inner-icon"><CodeIcon /></div>
-            <h1 className="adm-inner-title">{t.title}</h1>
-          </div>
+        <div className="qrd-headwrap">
+          <AdminScreenHeader
+            pageKey="locationCodes"
+            onBack={view !== 'list' ? () => setView('list') : undefined}
+          />
         </div>
 
         <div className="adm-content">

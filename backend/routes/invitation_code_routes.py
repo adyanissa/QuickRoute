@@ -81,7 +81,10 @@ def invitation_code_to_response(
         is_active=entry.is_active,
         is_used=entry.is_used,
         created_by_user_id=entry.created_by_user_id,
-        created_by_name=created_by_name,
+        # Live name first (an admin who renamed themselves reads
+        # correctly); the denormalized copy keeps history intact once the
+        # creating account has been deleted.
+        created_by_name=created_by_name or getattr(entry, "created_by_name", None),
         created_at=entry.created_at,
         used_at=entry.used_at,
         used_by_user_id=entry.used_by_user_id,
@@ -266,6 +269,7 @@ async def create_invitation_code(
         intended_email=data.intended_email,
         expires_at=data.expires_at,
         created_by_user_id=str(user.id),
+        created_by_name=user.full_name,
     )
 
     await new_entry.insert()

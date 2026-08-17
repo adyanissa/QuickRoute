@@ -981,8 +981,29 @@ async def upload_map(
     "",
     response_model=List[MapResponse],
 )
-async def get_all_maps():
+async def get_all_maps(admin: User = Depends(require_any_admin)):
+    """
+    Admin-only listing, narrowed to the caller's authorized scope.
+
+    Before the admin dashboard scope-isolation task this endpoint had NO
+    dependency at all and returned every Map in the database — including
+    every other institution's floor plans, processing state and source
+    paths — to any caller. Consumers were traced before adding the
+    dependency: only admin screens list maps (AdminContext, AdminMapScreen,
+    AdminRoomsScreen). The public/anonymous wayfinding flow resolves a
+    single Map through GET /api/maps/{id}, which keeps its existing
+    optional-auth contract, so end-user navigation is unaffected.
+
+    Authentication is required rather than optional so a scoped manager
+    cannot bypass their own scope by dropping the Authorization header.
+    """
+
     maps = await Map.find_all().to_list()
+    # Filtered in Python rather than in the query because map-level scope
+    # is a precedence rule (map_ids > map_group_ids > building_ids) that
+    # already has exactly one implementation in core/auth_deps.py — this
+    # endpoint reuses it instead of re-expressing it as a Mongo filter.
+    maps = [m for m in maps if user_can_access_map(admin, m)]
     group_codes = await build_group_code_cache(maps)
 
     return [
@@ -998,12 +1019,32 @@ async def get_all_maps():
     "/current",
     response_model=MapResponse,
 )
-async def get_current_map():
+async def get_current_map(
+    user: Optional[User] = Depends(get_current_user_optional),
+):
     current_map = await Map.find_one(
         Map.is_current == True
     )
 
     if not current_map:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No current map found",
+        )
+
+    # Scope isolation: an admin-tier caller must not be handed a map
+    # outside their scope just because it happens to carry the legacy
+    # collection-wide `is_current` flag. Anonymous callers and
+    # regular_user keep the pre-existing public behavior exactly (this
+    # endpoint predates admin scoping and is part of the kiosk-style
+    # flow's contract), and the "no map for you" answer is the same 404
+    # an empty collection produces, so no out-of-scope map's existence is
+    # revealed.
+    if (
+        user is not None
+        and user.role != "regular_user"
+        and not user_can_access_map(user, current_map)
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No current map found",
@@ -1782,16 +1823,29 @@ async def copy_map_calibration(
 )
 async def delete_map(
     map_id: PydanticObjectId,
-    # RBAC/dashboard cleanup task, Phase 2: deliberately left at
-    # require_global_admin rather than opened to building_manager — this
-    # is a cascading, destructive delete (Rooms/RoutePoints/RouteEdges/
-    # LocationCodes all go with it) and the spec never explicitly grants
-    # building_manager a delete-Map capability, only "manage permitted
-    # Maps/Rooms/RoutePoints/..." for global_manager. Safer to keep this
-    # narrower than to guess a destructive permission into existence.
+    # PERMANENT STRUCTURAL DELETION is reserved for the global tier
+    # (super_admin / global_manager). A building_manager is a full
+    # OPERATIONAL administrator of its assigned building — it uploads
+    # maps, creates map groups, adds floors, edits metadata and manages
+    # every room/route-point/location-code inside that building — but it
+    # may not permanently destroy a map, because this delete cascades
+    # (Rooms, RoutePoints, RouteEdges and LocationCodes all go with it)
+    # and is unrecoverable.
+    #
+    # The role gate is only the FIRST half: a scoped global_manager must
+    # still be inside the map's own building, which the explicit
+    # user_can_access_map() check below enforces. Role alone never
+    # authorizes a delete here.
     admin: User = Depends(require_global_admin),
 ):
     map_item = await Map.get(map_id)
+
+    # Final Building Manager rule: deleting a map is administration of the
+    # map's OWN building, resolved from the stored Map document rather
+    # than from anything the client sent. A building_manager may delete a
+    # map inside its assigned building and is refused on every other one.
+    if map_item is not None and not user_can_access_map(admin, map_item):
+        raise HTTPException(**FORBIDDEN_MAP_SCOPE)
 
     if not map_item:
         raise HTTPException(

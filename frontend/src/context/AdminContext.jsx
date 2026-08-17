@@ -1,5 +1,8 @@
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import { apiRequest } from '../api/api';
+import { getMapGroups } from '../api/mapGroupsApi';
+import { useAuth } from './AuthContext';
+import { userCanAccessMap, userCanAccessMapGroup } from '../utils/dashboardPermissions';
 import {
   getBuildings,
   createBuilding as apiCreateBuilding,
@@ -30,6 +33,19 @@ const buildingToViewModel = (b) => ({
   // being available on every building the frontend already loads —
   // never a second round-trip, never a synthesized value.
   campus: (b.campus || '').trim(),
+
+  // Dashboard redesign — two more real Building fields the view-model
+  // used to drop. `category` above is normalized to 'general' when the
+  // backend value is null, which makes "no category set" impossible to
+  // tell apart from a building genuinely categorized as general, so the
+  // untouched value is kept alongside it: the dashboard's category tabs
+  // are built ONLY from real, persisted Building.category values and must
+  // never show a tab for a default this adapter invented. `isActive`
+  // mirrors Building.is_active (BuildingResponse always returns it) so
+  // the dashboard's status pill reflects real state instead of assuming
+  // every building is active.
+  rawCategory: (b.category || '').trim(),
+  isActive: b.is_active !== false,
 });
 
 const buildingToApiPayload = (b) => ({
@@ -39,6 +55,12 @@ const buildingToApiPayload = (b) => ({
   short_tag: b.tag || null,
   icon_color: b.iconColor || null,
   category: b.category || null,
+  // Site/campus was silently DROPPED here before: the form could never set
+  // it, so every building fell back to the auto-created value (often the
+  // map group's code) and the dashboard had no real Site name to show.
+  // BuildingCreate/BuildingUpdate have always accepted `campus` — this only
+  // stops the frontend from throwing it away.
+  campus: b.campus || null,
 });
 
 const roomToViewModel = (r) => ({
@@ -196,6 +218,12 @@ const mapToApiPayload = (map) => ({
 const AdminContext = createContext(null);
 
 export const AdminProvider = ({ children }) => {
+  // Scope isolation: this provider is mounted app-wide (it wraps the public
+  // screens too), so its loaders are gated on the caller actually being an
+  // admin. An anonymous visitor or a regular_user therefore never issues an
+  // admin request at all — no 401/403 noise, and no admin payload is ever
+  // fetched "just in case". Every consumer of useAdmin() is an admin screen.
+  const { user, isAdmin } = useAuth();
   // ── Map state (list + current + upload/processing status) ────────────────
   const [mapData, setMapData] = useState(EMPTY_MAP);
   const [maps, setMaps] = useState([]);
@@ -212,6 +240,14 @@ export const AdminProvider = ({ children }) => {
 
   // ── Route points (read-only here; managed by AdminRoutesScreen) ───────────
   const [routePoints, setRoutePoints] = useState([]);
+
+  // ── Map groups (one scoped fetch shared by every admin screen) ───────────
+  // GET /api/map-groups is admin-only and backend-scoped, so what arrives is
+  // already this account's authorized set. The extra client-side pass below
+  // is display hygiene for the map/map-group precedence, never the security
+  // boundary — the backend applies the same rule and is authoritative.
+  const [mapGroups, setMapGroups] = useState([]);
+  const [mapGroupsLoadedFor, setMapGroupsLoadedFor] = useState(null);
 
   // ── Loaders ──────────────────────────────────────────────────────────────
   const loadMaps = useCallback(async () => {
@@ -270,6 +306,36 @@ export const AdminProvider = ({ children }) => {
     }
   }, []);
 
+  const loadMapGroups = useCallback(async () => {
+    if (!isAdmin) {
+      setMapGroups([]);
+      return;
+    }
+    try {
+      const groups = await getMapGroups();
+      const scoped = groups
+        .map((group) => ({
+          ...group,
+          floors: (group.floors || []).filter((floor) =>
+            userCanAccessMap(user, {
+              id: floor.id,
+              buildingId: floor.buildingId || group.buildingId,
+              mapGroupId: floor.mapGroupId || group.id,
+            }),
+          ),
+        }))
+        .filter(
+          (group) =>
+            userCanAccessMapGroup(user, { id: group.id, buildingId: group.buildingId }) ||
+            group.floors.length > 0,
+        );
+      setMapGroups(scoped);
+    } catch (err) {
+      console.error('Failed to load map groups:', err);
+      setMapGroups([]);
+    }
+  }, [isAdmin, user]);
+
   const loadRoutePoints = useCallback(async () => {
     try {
       const data = await apiRequest('/api/route-points');
@@ -280,12 +346,51 @@ export const AdminProvider = ({ children }) => {
     }
   }, []);
 
+  // Admin inventory is loaded once per authenticated admin, and never for a
+  // public visitor. `loadedFor` derives the loading flag instead of a
+  // setState inside the effect body.
+  const adminKey = isAdmin ? String(user?.id || user?.email || 'admin') : '';
+  const mapGroupsPending = Boolean(adminKey) && mapGroupsLoadedFor !== adminKey;
+
   useEffect(() => {
-    loadMaps();
-    loadBuildings();
-    loadRooms();
-    loadRoutePoints();
-  }, [loadMaps, loadBuildings, loadRooms, loadRoutePoints]);
+    if (!isAdmin) {
+      return undefined;
+    }
+    // Kicked off asynchronously so the effect body itself performs no
+    // synchronous state write (each loader sets its own loading flag).
+    let cancelled = false;
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      loadMaps();
+      loadBuildings();
+      loadRooms();
+      loadRoutePoints();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, loadMaps, loadBuildings, loadRooms, loadRoutePoints]);
+
+  useEffect(() => {
+    if (!adminKey) return;
+    let cancelled = false;
+    loadMapGroups().finally(() => {
+      if (!cancelled) setMapGroupsLoadedFor(adminKey);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [adminKey, loadMapGroups]);
+
+  const mapGroupsByBuildingId = useMemo(() => {
+    const grouped = {};
+    for (const group of mapGroups) {
+      const key = group.buildingId || '';
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(group);
+    }
+    return grouped;
+  }, [mapGroups]);
 
   // ── Map mutation ───────────────────────────────────────────────────────────
   const updateMap = async (data) => {
@@ -403,6 +508,11 @@ export const AdminProvider = ({ children }) => {
 
         routePoints,
         loadRoutePoints,
+
+        mapGroups,
+        mapGroupsByBuildingId,
+        mapGroupsLoading: mapGroupsPending,
+        loadMapGroups,
       }}
     >
       {children}

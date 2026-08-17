@@ -1,7 +1,20 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import { useLang } from '../context/LangContext';
 import { useAdmin } from '../context/AdminContext';
+import { useAuth } from '../context/AuthContext';
+import { canCreateBuildings } from '../utils/dashboardPermissions';
+import { buildingRoute } from '../utils/adminNavigation';
+import {
+  buildSites,
+  buildCategoryTabs,
+  filterBuildingsByCategory,
+  ALL_CATEGORIES_KEY,
+} from '../utils/dashboardModel';
+import { CategoryTabs } from '../components/dashboard/DashboardCards';
+import { ChevronIcon } from '../components/dashboard/DashboardPrimitives';
+import { SiteIcon, BuildingIcon } from '../components/dashboard/DashboardIcons';
 import '../styles/adminScreens.css';
 
 const LANGUAGES = [
@@ -19,12 +32,18 @@ const CATEGORY_OPTIONS = [
 const UI = {
   en: {
     title: 'Locations',
+    allCategories: 'All',
+    uncategorized: 'Uncategorized',
+    unassignedSite: 'Unspecified site',
+    emptyFiltered: 'No buildings match this category',
+    openWorkspace: 'Open workspace',
     back: 'Back',
     section: 'Buildings & Centers',
     addBtn: 'Add Building',
     editTitle: 'Edit Building',
     addTitle: 'Add Building',
     fields: {
+      campus: 'Site / Campus',
       nameEn: 'Name (English)', name: 'Name (Hebrew/Local)', subtitle: 'Subtitle / Description',
       tag: 'Short Tag', category: 'Category', iconColor: 'Icon Color (hex)',
     },
@@ -40,12 +59,18 @@ const UI = {
   },
   ar: {
     title: 'المواقع',
+    allCategories: 'الكل',
+    uncategorized: 'بدون تصنيف',
+    unassignedSite: 'موقع غير محدد',
+    emptyFiltered: 'لا توجد مبانٍ ضمن هذا التصنيف',
+    openWorkspace: 'فتح مساحة العمل',
     back: 'رجوع',
     section: 'المباني والمراكز',
     addBtn: 'إضافة مبنى',
     editTitle: 'تعديل المبنى',
     addTitle: 'إضافة مبنى',
     fields: {
+      campus: 'الموقع / الحرم',
       nameEn: 'الاسم (إنجليزي)', name: 'الاسم (محلي)', subtitle: 'وصف قصير',
       tag: 'وسم قصير', category: 'التصنيف', iconColor: 'لون الأيقونة (hex)',
     },
@@ -61,12 +86,18 @@ const UI = {
   },
   he: {
     title: 'מיקומים',
+    allCategories: 'הכל',
+    uncategorized: 'ללא קטגוריה',
+    unassignedSite: 'אתר לא מוגדר',
+    emptyFiltered: 'אין מבנים בקטגוריה הזו',
+    openWorkspace: 'פתח סביבת עבודה',
     back: 'חזרה',
     section: 'מבנים ומרכזים',
     addBtn: 'הוסף מבנה',
     editTitle: 'ערוך מבנה',
     addTitle: 'הוסף מבנה',
     fields: {
+      campus: 'אתר / קמפוס',
       nameEn: 'שם (אנגלית)', name: 'שם (עברית/מקומי)', subtitle: 'תיאור קצר',
       tag: 'תגית קצרה', category: 'קטגוריה', iconColor: 'צבע אייקון (hex)',
     },
@@ -125,12 +156,18 @@ const DeleteIcon = () => (
 const EMPTY_BUILDING = {
   id: '', nameEn: '', name: '', subtitle: '', tag: '', category: 'general', iconColor: '#2a5298',
   iconBg: 'rgba(42,82,152,0.12)',
+  // Site/campus is a real persisted Building field the backend has always
+  // accepted; this form simply never offered it, which is why buildings
+  // ended up grouped under whatever value the automatic map-upload setup
+  // wrote (often the map group's code).
+  campus: '',
 };
 
 // ── AdminLocationsScreen ──────────────────────────────────────────────────────
 const AdminLocationsScreen = () => {
-  const { lang, setLang } = useLang();
-  const navigate          = useNavigate();
+  const { lang } = useLang();
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const {
     buildings,
     buildingsLoading,
@@ -143,11 +180,32 @@ const AdminLocationsScreen = () => {
   const t     = UI[lang];
 
   const [view,      setView]      = useState('list');  // 'list' | 'add' | 'edit'
+  const [categoryKey, setCategoryKey] = useState(ALL_CATEGORIES_KEY);
   const [form,      setForm]      = useState({ ...EMPTY_BUILDING });
   const [confirmId, setConfirmId] = useState(null);
   const [error,     setError]     = useState('');
 
   const setField = (k, v) => setForm((p) => ({ ...p, [k]: v }));
+
+  // `buildings` arrives already narrowed to this account by the backend
+  // (GET /api/locations/buildings), so grouping/filtering here only decides
+  // presentation — it never widens what was returned.
+  const canCreate = canCreateBuildings(user);
+
+  const categoryTabs = useMemo(
+    () => buildCategoryTabs(buildings, t.allCategories, t.uncategorized),
+    [buildings, t.allCategories, t.uncategorized],
+  );
+
+  const visibleBuildings = useMemo(
+    () => filterBuildingsByCategory(buildings, categoryKey),
+    [buildings, categoryKey],
+  );
+
+  const sites = useMemo(
+    () => buildSites(visibleBuildings, t.unassignedSite),
+    [visibleBuildings, t.unassignedSite],
+  );
 
   const openAdd = () => {
     setForm({ ...EMPTY_BUILDING });
@@ -186,35 +244,16 @@ const AdminLocationsScreen = () => {
   };
 
   return (
-    <div className="layout-wrapper">
-      <div className="layout-shell adm-shell" dir={isRTL ? 'rtl' : 'ltr'}>
+    <div className="qrd-page">
+      <div className="qrd-pagebody" dir={isRTL ? 'rtl' : 'ltr'}>
 
         {/* ── Header ──────────────────────────────────────────────────── */}
-        <div className="adm-inner-header">
-          <div className="adm-topbar">
-            <button
-              className={`adm-back-btn${isRTL ? ' adm-back-btn-rtl' : ''}`}
-              onClick={() => view !== 'list' ? setView('list') : navigate('/screen/05')}
-            >
-              <BackArrow flip={isRTL} />
-              {t.back}
-            </button>
-            <div className="adm-lang-pill" role="group">
-              {LANGUAGES.map((l) => (
-                <button key={l.code}
-                  className={`adm-lang-btn${lang === l.code ? ' active' : ''}`}
-                  onClick={() => setLang(l.code)}>
-                  {l.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="adm-inner-heading">
-            <div className="adm-inner-icon"><LocationIcon /></div>
-            <h1 className="adm-inner-title">
-              {view === 'add' ? t.addTitle : view === 'edit' ? t.editTitle : t.title}
-            </h1>
-          </div>
+        <div className="qrd-headwrap">
+          <AdminScreenHeader
+            pageKey="sites"
+            onBack={view !== 'list' ? () => setView('list') : undefined}
+            title={view === 'add' ? t.addTitle : view === 'edit' ? t.editTitle : undefined}
+          />
         </div>
 
         {/* ── Content ─────────────────────────────────────────────────── */}
@@ -232,74 +271,134 @@ const AdminLocationsScreen = () => {
           {/* ── List view ── */}
           {view === 'list' && (
             <>
-              <div className="adm-btn-row">
-                <button className="adm-btn adm-btn-primary" onClick={openAdd}>
-                  <AddIcon /> {t.addBtn}
-                </button>
-              </div>
+              {/* Creating a building is require_global_admin on the backend
+                  (POST /api/locations/buildings), so a building_manager
+                  browses and edits its own buildings here but is never shown
+                  an Add action it would be rejected for. */}
+              {canCreate && (
+                <div className="adm-btn-row">
+                  <button className="adm-btn adm-btn-primary" onClick={openAdd}>
+                    <AddIcon /> {t.addBtn}
+                  </button>
+                </div>
+              )}
+
+              {/* Tabs are built only from Building.category values that
+                  actually exist on the authorized buildings — never from a
+                  building's name, and never rendered when there is nothing
+                  to filter by. */}
+              <CategoryTabs
+                tabs={categoryTabs}
+                activeKey={categoryKey}
+                onSelect={setCategoryKey}
+              />
 
               <div className="adm-section-row">
                 <span className="adm-section-lbl">{t.section}</span>
-                <span className="adm-section-count">{t.count(buildings.length)}</span>
+                <span className="adm-section-count">{t.count(visibleBuildings.length)}</span>
               </div>
 
               {buildingsLoading ? (
                 <div className="adm-empty">
                   <div className="adm-empty-txt">{t.loading}</div>
                 </div>
-              ) : buildings.length === 0 ? (
+              ) : visibleBuildings.length === 0 ? (
                 <div className="adm-empty">
                   <div className="adm-empty-icon"><LocationIcon /></div>
-                  <div className="adm-empty-txt">{t.empty}</div>
-                  <div className="adm-empty-hint">{t.emptyHint}</div>
+                  <div className="adm-empty-txt">
+                    {buildings.length === 0 ? t.empty : t.emptyFiltered}
+                  </div>
+                  {buildings.length === 0 && (
+                    <div className="adm-empty-hint">{t.emptyHint}</div>
+                  )}
                 </div>
               ) : (
-                <div className="adm-list">
-                  {buildings.map((b) => (
-                    <div key={b.id} className="adm-list-item">
-                      <div className="adm-list-item-row">
-                        <div className="adm-list-item-dot"
-                          style={{ background: b.iconColor, width: 12, height: 12, borderRadius: '50%' }} />
-                        <div className="adm-list-item-info">
-                          <div className="adm-list-item-name">{b.nameEn}</div>
-                          <div className="adm-list-item-meta">
-                            <span className="adm-tag adm-tag-blue">{b.tag}</span>
-                            <span className="adm-tag-txt">{b.subtitle}</span>
-                          </div>
-                        </div>
-                        <div className="adm-list-item-acts">
-                          <button className="adm-icon-btn" onClick={() => openEdit(b)} title="Edit">
-                            <EditIcon />
-                          </button>
-                          <button className="adm-icon-btn adm-icon-btn-danger"
-                            onClick={() => setConfirmId(confirmId === b.id ? null : b.id)}
-                            title="Delete">
-                            <DeleteIcon />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Inline delete confirmation */}
-                      {confirmId === b.id && (
-                        <div className="adm-delete-strip">
-                          <span className="adm-delete-strip-msg">{t.confirmDelete}</span>
-                          <div className="adm-delete-strip-acts">
-                            <button className="adm-btn adm-btn-cancel"
-                              style={{ padding: '5px 12px', fontSize: 12 }}
-                              onClick={() => setConfirmId(null)}>
-                              {t.cancel}
-                            </button>
-                            <button className="adm-btn adm-btn-confirm-delete"
-                              style={{ padding: '5px 12px', fontSize: 12 }}
-                              onClick={() => handleDelete(b.id)}>
-                              {t.yes}
-                            </button>
-                          </div>
-                        </div>
-                      )}
+                /* Grouped by the building's REAL persisted Site (campus).
+                   A building with no campus falls under one neutral label —
+                   its own name/code is never promoted to a site name. */
+                sites.map((site) => (
+                  <div className="qrd-group" key={site.key} style={{ marginBottom: 14 }}>
+                    <div className="qrd-group-head" style={{ cursor: 'default' }}>
+                      <span className="qrd-group-icon" aria-hidden="true">
+                        <SiteIcon size={22} />
+                      </span>
+                      <span className="qrd-group-body">
+                        <span className="qrd-group-name">{site.name}</span>
+                        <span className="qrd-group-meta">{t.count(site.buildings.length)}</span>
+                      </span>
                     </div>
-                  ))}
-                </div>
+
+                    <div className="qrd-floors">
+                      {site.buildings.map((b) => (
+                        <div key={b.id}>
+                          <div className="qrd-floor" style={{ cursor: 'default' }}>
+                            <span
+                              className="qrd-floor-icon"
+                              aria-hidden="true"
+                              style={{ color: b.iconColor }}
+                            >
+                              <BuildingIcon size={18} />
+                            </span>
+
+                            <button
+                              type="button"
+                              className="qrd-floor-name"
+                              title={t.openWorkspace}
+                              onClick={() => navigate(buildingRoute(b.id))}
+                              style={{
+                                border: 'none',
+                                background: 'transparent',
+                                cursor: 'pointer',
+                                textAlign: 'start',
+                                color: 'inherit',
+                                padding: 0,
+                              }}
+                            >
+                              {b.nameEn || b.name}
+                              {b.tag ? (
+                                <span className="adm-tag adm-tag-blue" style={{ marginInlineStart: 8 }}>
+                                  {b.tag}
+                                </span>
+                              ) : null}
+                            </button>
+
+                            <div className="adm-list-item-acts">
+                              <button className="adm-icon-btn" onClick={() => openEdit(b)} title={t.editTitle}>
+                                <EditIcon />
+                              </button>
+                              <button className="adm-icon-btn adm-icon-btn-danger"
+                                onClick={() => setConfirmId(confirmId === b.id ? null : b.id)}
+                                title={t.delete}>
+                                <DeleteIcon />
+                              </button>
+                              <span className="qrd-floor-chev" aria-hidden="true">
+                                <ChevronIcon rtl={isRTL} />
+                              </span>
+                            </div>
+                          </div>
+
+                          {confirmId === b.id && (
+                            <div className="adm-delete-strip">
+                              <span className="adm-delete-strip-msg">{t.confirmDelete}</span>
+                              <div className="adm-delete-strip-acts">
+                                <button className="adm-btn adm-btn-cancel"
+                                  style={{ padding: '5px 12px', fontSize: 12 }}
+                                  onClick={() => setConfirmId(null)}>
+                                  {t.cancel}
+                                </button>
+                                <button className="adm-btn adm-btn-confirm-delete"
+                                  style={{ padding: '5px 12px', fontSize: 12 }}
+                                  onClick={() => handleDelete(b.id)}>
+                                  {t.yes}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))
               )}
             </>
           )}
@@ -322,6 +421,12 @@ const AdminLocationsScreen = () => {
                 <input className="adm-form-input" value={form.name || ''}
                   onChange={(e) => setField('name', e.target.value)}
                   placeholder="e.g. מרכז הלב" />
+              </div>
+              <div className="adm-form-group">
+                <label className="adm-form-label">{t.fields.campus}</label>
+                <input className="adm-form-input" value={form.campus || ''}
+                  onChange={(e) => setField('campus', e.target.value)}
+                  placeholder="e.g. Main Campus" />
               </div>
               <div className="adm-form-group">
                 <label className="adm-form-label">{t.fields.subtitle}</label>

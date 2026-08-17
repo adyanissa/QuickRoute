@@ -27,8 +27,49 @@
   box-sizing: border-box;
 }
 
-html, body, #root {
-  height: 100%;
+/* Vertical scroll model (admin shell + every other screen): the DOCUMENT
+   owns vertical scrolling. Nothing below this point creates a second
+   vertical scroll container.
+
+   This block used to read `html, body, #root { height: 100% }`, which made
+   every one of those boxes exactly one viewport tall. #root is also a
+   column flex container (src/index.css), so the admin shell inside it was
+   shrunk back to the viewport height and its light-blue background stopped
+   there — while the content itself kept going. Everything past the first
+   viewport was therefore painted on the bare canvas.
+
+   `min-height` lets the same boxes start at a full viewport and then grow
+   with their content, so short pages still fill the screen and long pages
+   extend naturally. 100dvh follows the mobile browser's dynamic toolbar,
+   with 100vh left above it as the fallback for browsers without dvh. */
+html {
+  min-height: 100%;
+  width: 100%;
+}
+
+/* The dark strip: src/index.css (Vite's leftover template stylesheet)
+   declares `color-scheme: light dark` and paints the ROOT element
+   `var(--bg)`, which resolves to #16171d under a dark-mode OS. A root
+   element's background propagates to the CANVAS, so that colour filled
+   every pixel the shell did not cover — the black region below long
+   pages. QuickRoute has no dark theme, so the canvas is pinned to the
+   app's own light background at the source rather than patched per
+   screen.
+   Declared on `:root` (not `html`): index.css uses `:root`, which has
+   higher specificity than a type selector, so an `html { ... }` rule here
+   would silently lose no matter what order the stylesheets load in. The
+   two template variables that also flip dark are neutralized for the same
+   reason — `--border` paints #root's side rules. */
+:root {
+  background: var(--bg-primary);
+  color-scheme: light;
+  --bg: var(--bg-primary);
+  --border: rgba(42, 82, 152, 0.10);
+}
+
+body, #root {
+  min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
 }
 

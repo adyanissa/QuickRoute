@@ -1,0 +1,337 @@
+/* ─── Users & Access ────────────────────────────────────────────────────
+   Uses the shared admin shell's tokens only (global.css variables, the
+   same radii/shadows/borders as every other page) — this page adds no new
+   visual language, just the table/dialog primitives it needs.
+   Logical properties throughout, so EN/AR/HE need no separate rules. */
+
+/* Room below the table so a menu opened on the LAST row has somewhere to
+   land inside the page instead of pressing against the viewport edge.
+   This is page gutter, not a height hack: the section still sizes to its
+   content and the document remains the only vertical scroll container. */
+.qra-page-tail {
+  padding-block-end: 84px;
+}
+
+.qra-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-block-end: 16px;
+}
+
+.qra-search {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 10px 14px;
+  border: 1px solid rgba(42, 82, 152, 0.14);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  color: var(--text-primary);
+}
+
+.qra-select {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border: 1px solid rgba(42, 82, 152, 0.14);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.qra-search:focus,
+.qra-select:focus {
+  outline: 2px solid rgba(42, 82, 152, 0.3);
+  outline-offset: 1px;
+}
+
+/* ── Table ─────────────────────────────────────────────────────────────
+   A CSS grid rather than a <table> so the same markup can reflow into
+   stacked cards on a phone without a second component. */
+
+.qra-table {
+  border: 1px solid rgba(42, 82, 152, 0.07);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  /* NOT `overflow: hidden`. It was here only to clip the header row's
+     background to the card's rounded corners, but it also clipped the
+     absolutely-positioned row action menu: on the last rows the menu was
+     cut off at the card's bottom edge and its Delete item became
+     unclickable. The corners are rounded on the first/last row instead,
+     which needs no clipping at all. */
+}
+
+/* Rounded card corners without clipping anything. */
+.qra-row:first-child {
+  border-start-start-radius: var(--radius-md);
+  border-start-end-radius: var(--radius-md);
+}
+
+.qra-row:last-child {
+  border-end-start-radius: var(--radius-md);
+  border-end-end-radius: var(--radius-md);
+}
+
+.qra-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1.6fr 1fr 1.6fr 52px;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  font-size: 13.5px;
+}
+
+.qra-row + .qra-row {
+  border-block-start: 1px solid rgba(42, 82, 152, 0.07);
+}
+
+.qra-head {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}
+
+.qra-name {
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.qra-you {
+  margin-inline-start: 6px;
+  color: var(--blue-soft);
+}
+
+.qra-email,
+.qra-scope {
+  color: var(--text-secondary);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.qra-role {
+  display: inline-block;
+  padding: 4px 11px;
+  border-radius: 100px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: var(--bg-secondary);
+  color: var(--blue-mid);
+  white-space: nowrap;
+}
+
+.qra-role.is-super_admin {
+  background: #efeafc;
+  color: #5b46b5;
+}
+
+.qra-role.is-global_manager {
+  background: #e8effc;
+  color: #2a5298;
+}
+
+.qra-role.is-building_manager {
+  background: #e6f4ec;
+  color: #2c7a4b;
+}
+
+/* ── Row actions (never a bare Delete button per row) ─────────────────── */
+
+.qra-actions {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.qra-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.qra-menu-btn:hover {
+  background: var(--bg-secondary);
+  border-color: rgba(42, 82, 152, 0.1);
+  color: var(--text-primary);
+}
+
+.qra-menu {
+  position: absolute;
+  inset-block-start: 36px;
+  inset-inline-end: 0;
+  z-index: 5;
+  /* Absolutely positioned, so it contributes to the DOCUMENT's scrollable
+     area (the single vertical scroll owner) rather than to a container of
+     its own — a menu opened on the last row is scrolled to, never
+     trapped. */
+  min-width: 150px;
+  padding: 5px;
+  border: 1px solid rgba(42, 82, 152, 0.12);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-soft);
+}
+
+.qra-menu button {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  text-align: start;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.qra-menu button:hover {
+  background: var(--bg-secondary);
+}
+
+.qra-menu button.is-destructive {
+  color: #a33232;
+}
+
+.qra-menu button.is-destructive:hover {
+  background: #fdf1f1;
+}
+
+/* ── Dialogs ───────────────────────────────────────────────────────────── */
+
+.qra-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(13, 34, 68, 0.42);
+  backdrop-filter: blur(2px);
+}
+
+.qra-dialog {
+  width: 100%;
+  max-width: 440px;
+  max-height: 86vh;
+  overflow-y: auto;
+  /* This is the one intentional scroll container on the page: a modal's
+     own body. It never chains into the document behind the backdrop. */
+  overscroll-behavior: contain;
+  padding: 22px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: 0 24px 60px rgba(13, 34, 68, 0.3);
+}
+
+.qra-dialog-title {
+  font-family: var(--font-brand);
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.qra-dialog-body {
+  margin-block-start: 8px;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.qra-field {
+  display: block;
+  margin-block-start: 16px;
+}
+
+.qra-label {
+  display: block;
+  margin-block-end: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.qra-input {
+  width: 100%;
+  padding: 10px 13px;
+  border: 1px solid rgba(42, 82, 152, 0.16);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  color: var(--text-primary);
+}
+
+.qra-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-block-start: 22px;
+}
+
+.qrd-danger-btn.is-solid {
+  background: #a33232;
+  border-color: #a33232;
+  color: #ffffff;
+}
+
+.qrd-danger-btn.is-solid:hover {
+  background: #8a2a2a;
+}
+
+.qrd-danger-btn[disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── Responsive: the same rows become stacked cards ─────────────────────── */
+
+@media (max-width: 900px) {
+  .qra-head {
+    display: none;
+  }
+
+  .qra-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 16px 18px;
+  }
+
+  .qra-row > [data-label]::before {
+    content: attr(data-label) ': ';
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .qra-actions {
+    justify-content: flex-start;
+    margin-block-start: 4px;
+  }
+
+  .qra-menu {
+    inset-inline-end: auto;
+    inset-inline-start: 0;
+  }
+}

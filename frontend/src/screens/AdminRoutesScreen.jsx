@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import { useNavigate } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
 import { useAdmin } from '../context/AdminContext';
@@ -225,7 +226,7 @@ const UI = {
 const EMPTY_ROUTE = { name: '', point_type: 'hallway', floor: 0, x: 0, y: 0, is_accessible: true };
 
 const AdminRoutesScreen = () => {
-  const { lang, setLang } = useLang();
+  const { lang } = useLang();
   const navigate = useNavigate();
   const { buildings } = useAdmin();
 
@@ -481,33 +482,13 @@ const AdminRoutesScreen = () => {
   };
 
   return (
-    <div className="layout-wrapper">
-      <div className="layout-shell adm-shell" dir={isRTL ? 'rtl' : 'ltr'}>
-        <div className="adm-inner-header">
-          <div className="adm-topbar">
-            <button
-              className={`adm-back-btn${isRTL ? ' adm-back-btn-rtl' : ''}`}
-              onClick={() => (view !== 'list' ? setView('list') : navigate('/screen/05'))}
-            >
-              {t.back}
-            </button>
-            <div className="adm-lang-pill" role="group">
-              {LANGUAGES.map((language) => (
-                <button
-                  key={language.code}
-                  className={`adm-lang-btn${lang === language.code ? ' active' : ''}`}
-                  onClick={() => setLang(language.code)}
-                >
-                  {language.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="adm-inner-heading">
-            <h1 className="adm-inner-title">
-              {view === 'add' ? t.addTitle : view === 'edit' ? t.editTitle : t.title}
-            </h1>
-          </div>
+    <div className="qrd-page">
+      <div className="qrd-pagebody" dir={isRTL ? 'rtl' : 'ltr'}>
+        <div className="qrd-headwrap">
+          <AdminScreenHeader
+            pageKey="routes"
+            onBack={view !== 'list' ? () => setView('list') : undefined}
+          />
         </div>
 
         <div className="adm-content">

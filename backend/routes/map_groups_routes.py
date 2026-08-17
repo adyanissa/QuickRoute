@@ -60,7 +60,15 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field, ValidationError
 
-from core.auth_deps import require_global_admin
+from core.auth_deps import (
+    require_any_admin,
+    require_global_admin,
+    user_can_access_building,
+    get_accessible_building_ids,
+    user_can_access_map,
+    user_can_access_map_group,
+)
+from core.errors import MAP_GROUP_FORBIDDEN_SCOPE, FORBIDDEN_BUILDING_SCOPE
 from models.building_model import Building
 from models.map_group_model import MapGroup
 from models.map_model import Map
@@ -175,12 +183,59 @@ async def _load_group_or_404(group_id: str) -> MapGroup:
     return group
 
 
-async def group_to_response(group: MapGroup) -> MapGroupResponse:
+def _require_group_scope(admin: User, group: MapGroup) -> None:
+    """Final Building Manager rule: a map group is administrable by any
+    admin-tier account whose scope covers the group's OWN building —
+    resolved server-side from the stored MapGroup, never from anything the
+    client sent. A building_manager assigned Building A may therefore
+    fully administer every map group inside A (including ones created
+    after the assignment), and is refused on every group in Building B
+    even when both buildings share a site/campus.
+
+    This check is the SCOPE half of the decision and applies to every
+    map-group endpoint. The ROLE half differs by operation:
+
+      create / add floors / update / validate  -> require_any_admin, so a
+          building_manager can fully operate inside its own building
+          (these endpoints were require_global_admin before the final
+          rule, which blocked a manager from working in its OWN building);
+
+      delete group / delete floor              -> require_global_admin,
+          because permanently destroying a map group or an uploaded floor
+          is structural and unrecoverable, and stays with super_admin /
+          global_manager.
+
+    Either way the role gate alone never authorizes anything: a scoped
+    global_manager still has to pass this same building/group check."""
+    if not user_can_access_map_group(admin, group):
+        raise HTTPException(**MAP_GROUP_FORBIDDEN_SCOPE)
+
+
+def _require_building_scope(admin: User, building_id: Optional[str]) -> None:
+    """Same rule for an endpoint whose target is a building rather than an
+    existing group (map-group creation)."""
+    if not user_can_access_building(admin, building_id):
+        raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
+
+
+async def group_to_response(
+    group: MapGroup, viewer: Optional[User] = None
+) -> MapGroupResponse:
     floor_maps = await Map.find(Map.map_group_id == str(group.id)).to_list()
     # Sort by numeric floor value (requirement: floor maps are always
     # returned/rendered in ascending floor order); floors without a number
     # (should not normally happen — floor is required on creation) sort last.
     floor_maps.sort(key=lambda m: (m.floor is None, m.floor))
+
+    # Scope isolation (admin dashboard task): a caller narrowed to specific
+    # maps (building_manager.map_ids) must not learn that SIBLING floors of
+    # the same group exist. `floors`/`floor_count` therefore describe what
+    # THIS caller may access, never the group's unfiltered contents.
+    # `viewer=None` (anonymous/internal call) keeps the original behavior
+    # untouched, and super_admin/unnarrowed callers keep every floor because
+    # user_can_access_map() returns True for all of them.
+    if viewer is not None:
+        floor_maps = [m for m in floor_maps if user_can_access_map(viewer, m)]
 
     return MapGroupResponse(
         id=str(group.id),
@@ -389,7 +444,7 @@ async def create_map_group(
     campus: Optional[str] = Form(default=None),
     address: Optional[str] = Form(default=None),
     description: Optional[str] = Form(default=None),
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     cleaned_name = name.strip()
     if len(cleaned_name) < 2:
@@ -413,9 +468,25 @@ async def create_map_group(
     validate_no_duplicate_floors(floor_entries, existing_floor_numbers=set())
 
     resolved_code = await resolve_group_code(cleaned_name, code)
+
+    # A scope-narrowed admin must name the building explicitly: the
+    # find-or-create fallback below would otherwise mint a BRAND NEW
+    # building from the campus/title text, which is an account silently
+    # widening its own scope boundary. Only an admin whose scope already
+    # covers every building (super_admin, or a project-wide/all_buildings
+    # global_manager) may use the auto-create path.
+    if get_accessible_building_ids(admin) is not None and not building_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select the building this map group belongs to.",
+        )
+
     resolved_building_id = await resolve_map_building_id(
         building_id, campus, cleaned_name
     )
+
+    # Authorize the ACTUAL target building — never the id the client sent.
+    _require_building_scope(admin, resolved_building_id)
 
     saved_files = await _save_floor_files(files, floor_entries)
 
@@ -473,9 +544,10 @@ async def add_floors_to_map_group(
     background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     floors_json: str = Form(...),
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     group = await _load_group_or_404(group_id)
+    _require_group_scope(admin, group)
 
     floor_entries = parse_floors_json(floors_json)
 
@@ -527,22 +599,82 @@ async def add_floors_to_map_group(
 )
 async def get_all_map_groups(
     building_id: Optional[str] = None,
+    admin: User = Depends(require_any_admin),
 ):
+    """
+    Admin-only listing, narrowed to the caller's authorized scope.
+
+    Before the admin dashboard scope-isolation task this endpoint had NO
+    dependency at all: any caller (including an unauthenticated one, and
+    including a building_manager scoped to a single map) received every
+    MapGroup in the database together with every one of its floors. That
+    is the "existence leakage" this task had to close — a manager
+    responsible for one hospital could enumerate every other institution
+    QuickRoute serves.
+
+    Consumers were traced before adding the dependency: the only callers
+    are admin screens (the admin dashboard, AdminMapScreen, AdminRoutesScreen).
+    The public/anonymous wayfinding flow never lists map groups — it
+    resolves a single Map by id through GET /api/maps/{id}, which keeps
+    its existing optional-auth contract — so requiring an admin here
+    cannot break end-user navigation.
+
+    Requiring authentication (rather than optional-auth) is deliberate:
+    an optional-auth endpoint that returns everything to anonymous callers
+    would let a scoped manager bypass their own scope simply by dropping
+    the Authorization header.
+    """
+
     query = {}
+
     if building_id:
+        # An explicit out-of-scope request is rejected rather than silently
+        # re-scoped — same convention as GET /api/rooms and the RoutePoint
+        # list endpoints already use.
+        accessible_ids = get_accessible_building_ids(admin)
+        if accessible_ids is not None and building_id not in accessible_ids:
+            raise HTTPException(**FORBIDDEN_BUILDING_SCOPE)
         query["building_id"] = building_id
+    else:
+        accessible_ids = get_accessible_building_ids(admin)
+        if accessible_ids is not None:
+            query["building_id"] = {"$in": accessible_ids}
 
     groups = await MapGroup.find(query).to_list()
-    return [await group_to_response(group) for group in groups]
+
+    responses = []
+    for group in groups:
+        response = await group_to_response(group, viewer=admin)
+        # A group survives when the caller may access the group itself, or
+        # when at least one floor inside it is in scope — the latter covers
+        # a building_manager narrowed only by map_ids, who has no
+        # group-level access (see _building_and_group_allowed) but must
+        # still be able to reach its own maps. A group with neither is not
+        # returned at all, so its name/code never reaches the client.
+        if user_can_access_map_group(admin, group) or response.floors:
+            responses.append(response)
+
+    return responses
 
 
 @router.get(
     "/{group_id}",
     response_model=MapGroupResponse,
 )
-async def get_map_group_by_id(group_id: str):
+async def get_map_group_by_id(
+    group_id: str,
+    admin: User = Depends(require_any_admin),
+):
+    """Same scope rule as the list above, so a manager cannot reach an
+    out-of-scope group by pasting its id into the URL / a fetch call.
+    404 before 403: a nonexistent id always 404s regardless of scope."""
     group = await _load_group_or_404(group_id)
-    return await group_to_response(group)
+    response = await group_to_response(group, viewer=admin)
+
+    if not user_can_access_map_group(admin, group) and not response.floors:
+        raise HTTPException(**MAP_GROUP_FORBIDDEN_SCOPE)
+
+    return response
 
 
 # ---------------------------------------------------------
@@ -557,9 +689,10 @@ async def get_map_group_by_id(group_id: str):
 )
 async def validate_map_group_navigation(
     group_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     group = await _load_group_or_404(group_id)
+    _require_group_scope(admin, group)
     result = await validate_multi_floor_navigation(group)
     return result.to_dict()
 
@@ -582,9 +715,10 @@ class MapGroupUpdate(BaseModel):
 async def update_map_group(
     group_id: str,
     update_data: MapGroupUpdate,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_any_admin),
 ):
     group = await _load_group_or_404(group_id)
+    _require_group_scope(admin, group)
 
     payload = update_data.model_dump(exclude_unset=True)
 
@@ -611,9 +745,10 @@ async def update_map_group(
 async def delete_map_group_floor(
     group_id: str,
     map_id: PydanticObjectId,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_global_admin),
 ):
     group = await _load_group_or_404(group_id)
+    _require_group_scope(admin, group)
 
     map_item = await Map.get(map_id)
     if not map_item or map_item.map_group_id != str(group.id):
@@ -647,9 +782,10 @@ async def delete_map_group_floor(
 )
 async def delete_map_group(
     group_id: str,
-    _admin: User = Depends(require_global_admin),
+    admin: User = Depends(require_global_admin),
 ):
     group = await _load_group_or_404(group_id)
+    _require_group_scope(admin, group)
 
     floor_maps = await Map.find(Map.map_group_id == str(group.id)).to_list()
 

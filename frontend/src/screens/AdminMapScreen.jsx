@@ -6,6 +6,7 @@ import {
   useState,
 } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import { useLang } from '../context/LangContext';
 import {
   getMaps,
@@ -96,6 +97,7 @@ import {
 } from '../utils/batchDestinationPlacement';
 import FloatingToolPanel from '../components/FloatingToolPanel';
 import { useAuth } from '../context/AuthContext';
+import { canDeleteMapResources } from '../utils/dashboardPermissions';
 import '../styles/adminScreens.css';
 
 // Snap target for Draw Walkable Path, in on-screen pixels — this is what
@@ -1569,7 +1571,7 @@ const DeleteIcon = () => (
 );
 
 const AdminMapScreen = () => {
-  const { lang, setLang } = useLang();
+  const { lang } = useLang();
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1606,6 +1608,12 @@ const AdminMapScreen = () => {
   // creates a point from a plain click (see the mode==='edit-points'
   // branch in the canvas click handler), it only selects/edits/moves an
   // EXISTING one, so it must never share state with the create-flow.
+  // Permanent structural deletion (map / map group / floor) is
+  // super_admin + global_manager only, mirroring the backend's own gate.
+  // A building_manager simply never sees these controls — no disabled
+  // button, no locked state — and the API refuses the request anyway.
+  const canDeleteStructures = canDeleteMapResources(user);
+
   const [searchParams] = useSearchParams();
   const [editPointTarget, setEditPointTarget] = useState(null); // the RoutePoint currently open in the edit panel
   const [editPointMoving, setEditPointMoving] = useState(false); // true while the next map click repositions editPointTarget
@@ -5355,62 +5363,15 @@ const AdminMapScreen = () => {
   ]);
 
   return (
-    <div className="layout-wrapper">
+    <div className="qrd-page">
       <div
-        className="layout-shell adm-shell"
+        className="qrd-pagebody"
         dir={isRTL ? 'rtl' : 'ltr'}
       >
-        <div className="adm-inner-header">
-          <div className="adm-topbar">
-            <button
-              className={`adm-back-btn${
-                isRTL
-                  ? ' adm-back-btn-rtl'
-                  : ''
-              }`}
-              onClick={() =>
-                navigate('/screen/05')
-              }
-            >
-              <BackArrow flip={isRTL} />
-              {t.back}
-            </button>
-
-            <div
-              className="adm-lang-pill"
-              role="group"
-            >
-              {LANGUAGES.map(
-                (language) => (
-                  <button
-                    key={language.code}
-                    className={`adm-lang-btn${
-                      lang === language.code
-                        ? ' active'
-                        : ''
-                    }`}
-                    onClick={() =>
-                      setLang(
-                        language.code,
-                      )
-                    }
-                  >
-                    {language.label}
-                  </button>
-                ),
-              )}
-            </div>
-          </div>
-
-          <div className="adm-inner-heading">
-            <div className="adm-inner-icon">
-              <MapIcon />
-            </div>
-
-            <h1 className="adm-inner-title">
-              {t.title}
-            </h1>
-          </div>
+        <div className="qrd-headwrap">
+          <AdminScreenHeader
+            pageKey="mapManagement"
+          />
 
           {/* Part 4 — arrived from the Add/Edit Room screen's "Add /
               Upload New Map" action. The Room draft is already saved
@@ -5517,14 +5478,16 @@ const AdminMapScreen = () => {
                                   >
                                     {t.editDetails}
                                   </button>
-                                  <button
-                                    type="button"
-                                    className="adm-btn adm-btn-cancel"
-                                    style={{ padding: '4px 10px', fontSize: 11.5 }}
-                                    onClick={() => handleDeleteMapGroupFloor(group, floorMap)}
-                                  >
-                                    {t.deleteMap}
-                                  </button>
+                                  {canDeleteStructures && (
+                                    <button
+                                      type="button"
+                                      className="adm-btn adm-btn-cancel"
+                                      style={{ padding: '4px 10px', fontSize: 11.5 }}
+                                      onClick={() => handleDeleteMapGroupFloor(group, floorMap)}
+                                    >
+                                      {t.deleteMap}
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             ))}
@@ -5538,14 +5501,16 @@ const AdminMapScreen = () => {
                               >
                                 {t.addFloor}
                               </button>
-                              <button
-                                type="button"
-                                className="adm-btn adm-btn-cancel"
-                                style={{ padding: '5px 12px', fontSize: 12 }}
-                                onClick={() => handleDeleteMapGroup(group)}
-                              >
-                                {t.deleteGroup}
-                              </button>
+                              {canDeleteStructures && (
+                                <button
+                                  type="button"
+                                  className="adm-btn adm-btn-cancel"
+                                  style={{ padding: '5px 12px', fontSize: 12 }}
+                                  onClick={() => handleDeleteMapGroup(group)}
+                                >
+                                  {t.deleteGroup}
+                                </button>
+                              )}
                             </div>
 
                             {addFloorGroupId === group.id && (
@@ -6072,18 +6037,20 @@ const AdminMapScreen = () => {
                   {t.editDetails}
                 </button>
 
-                <button
-                  className="adm-btn adm-btn-danger"
-                  onClick={() =>
-                    setView(
-                      'confirm-delete',
-                    )
-                  }
-                  disabled={!activeMap?.id}
-                >
-                  <DeleteIcon />
-                  {t.deleteMap}
-                </button>
+                {canDeleteStructures && (
+                  <button
+                    className="adm-btn adm-btn-danger"
+                    onClick={() =>
+                      setView(
+                        'confirm-delete',
+                      )
+                    }
+                    disabled={!activeMap?.id}
+                  >
+                    <DeleteIcon />
+                    {t.deleteMap}
+                  </button>
+                )}
               </div>
 
               {/* Automatic semantic map analysis (real backend — see

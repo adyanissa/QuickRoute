@@ -1,0 +1,401 @@
+/* ─── Legacy admin pages inside the shared admin shell ──────────────────── */
+/* Every admin screen used to paint its own full-width navy hero header      */
+/* (`.adm-inner-header`) inside its own `.layout-wrapper > .adm-shell`, which */
+/* is what made Map Management / Invitation Codes / Locations feel like       */
+/* separate websites. Those wrappers are gone; each screen now renders        */
+/*                                                                           */
+/*   <div className="qrd-page">                                              */
+/*     <AdminPageHeader ... />                                               */
+/*     <div className="adm-content"> ...unchanged page body... </div>        */
+/*   </div>                                                                  */
+/*                                                                           */
+/* inside AdminLayout's shell. This file only neutralizes the layout the      */
+/* removed wrappers used to provide (own scroll container, own max-width,     */
+/* own page padding) so the page body inherits the shell's content width,     */
+/* padding and background. Every other `.adm-*` rule — cards, buttons, forms, */
+/* lists, tags, the full-map workspace — is untouched and keeps working       */
+/* exactly as before. */
+
+.qrd-page,
+.qrd-pagebody {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  /* Deliberately transparent: the shell owns the background, the width and
+     the scrolling. These two classes replaced `.layout-wrapper` /
+     `.layout-shell .adm-shell` on every admin screen — a pure className
+     swap, so no screen's JSX nesting changed. */
+  background: none;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  min-height: 0;
+}
+
+.qrd-headwrap {
+  display: contents;
+}
+
+/* The shell owns scrolling and horizontal padding now. */
+.qrd-page .adm-content,
+.qrd-page .adm-body {
+  flex: initial;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 0 8px;
+  overflow: visible;
+}
+
+/* The legacy screens centred their primary action row because they were
+   built for a 430px-wide mobile shell. Inside the full-width admin shell
+   that reads as a stray floating button, so it aligns with the content. */
+.qrd-page .adm-btn-row {
+  justify-content: flex-start;
+}
+
+/* ── Page header (Back + breadcrumb + title + description + action) ─────── */
+/* Sits on the shell's navy band, so its type is light-on-dark.             */
+
+.qrd-pagehead {
+  padding: 20px 0 22px;
+}
+
+.qrd-back {
+  display: inline-flex;
+  cursor: pointer;
+  font-family: var(--font-body);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px 7px 11px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  backdrop-filter: blur(8px);
+  transition: background 0.15s ease;
+}
+
+.qrd-back:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.qrd-pagehead .qrd-crumbs {
+  padding-block: 14px 10px;
+}
+
+.qrd-pagehead-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.qrd-pagehead-main {
+  min-width: 0;
+}
+
+.qrd-pagehead-title {
+  font-family: var(--font-brand);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+  overflow-wrap: anywhere;
+}
+
+.qrd-pagehead-desc {
+  margin-block-start: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.76);
+}
+
+.qrd-pagehead-action {
+  flex-shrink: 0;
+}
+
+/* ── Building Workspace: map groups + their floors on one page ──────────── */
+
+.qrd-group {
+  border: 1px solid rgba(42, 82, 152, 0.08);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.qrd-group + .qrd-group {
+  margin-block-start: 14px;
+}
+
+.qrd-group-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px 18px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: start;
+  font-family: var(--font-body);
+}
+
+.qrd-group-head:hover {
+  background: var(--bg-secondary);
+}
+
+.qrd-group-icon {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--blue-dark), var(--blue-mid));
+}
+
+.qrd-group-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.qrd-group-name {
+  font-size: 15.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.qrd-group-meta {
+  margin-block-start: 2px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.qrd-group-toggle {
+  flex-shrink: 0;
+  display: flex;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.qrd-group-toggle.is-open {
+  transform: rotate(90deg);
+}
+
+[dir='rtl'] .qrd-group-toggle.is-open {
+  transform: rotate(-90deg);
+}
+
+.qrd-floors {
+  border-block-start: 1px solid rgba(42, 82, 152, 0.08);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qrd-floor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: start;
+  font-family: var(--font-body);
+  color: var(--text-primary);
+}
+
+.qrd-floor:hover {
+  background: var(--bg-secondary);
+  border-color: rgba(42, 82, 152, 0.1);
+}
+
+.qrd-floor-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-secondary);
+  color: var(--blue-mid);
+}
+
+.qrd-floor-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* src/index.css sets a 18px root font, so any <button> rendered as a
+     floor/building row must state its own size rather than inheriting. */
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.qrd-floor-chev {
+  flex-shrink: 0;
+  display: flex;
+  color: var(--text-muted);
+}
+
+/* ── Context summary strip (Site / Building / Map Group / Floor) ────────── */
+
+.qrd-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 30px;
+  padding: 16px 20px;
+  margin-block-end: 20px;
+  border: 1px solid rgba(42, 82, 152, 0.07);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+}
+
+.qrd-context-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.qrd-context-lbl {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.qrd-context-val {
+  margin-block-start: 3px;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+/* ── Danger zone ────────────────────────────────────────────────────────
+   ONE panel — no nested white card inside a red box. It is the final
+   section of the Floor Workspace, visually separated from the ordinary
+   tools above it by its own top rule and spacing, and it only ever links
+   to the existing Navigation Data Cleanup screen.
+   Written with logical properties so the action sits at the inline end in
+   LTR and mirrors to the other side in Arabic/Hebrew with no RTL-specific
+   component or override. */
+
+.qrd-danger {
+  margin-block-start: 34px;
+  padding: 18px 20px;
+  border: 1px solid rgba(178, 59, 59, 0.2);
+  border-radius: var(--radius-md);
+  background: #fdf6f6;
+}
+
+.qrd-danger-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #a33232;
+}
+
+.qrd-danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px 24px;
+  margin-block-start: 10px;
+}
+
+.qrd-danger-row + .qrd-danger-row {
+  margin-block-start: 16px;
+  padding-block-start: 16px;
+  border-block-start: 1px solid rgba(178, 59, 59, 0.14);
+}
+
+.qrd-danger-text {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.qrd-danger-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.qrd-danger-copy {
+  margin-block-start: 4px;
+  max-width: 62ch;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: #8a5a5a;
+}
+
+.qrd-danger-btn {
+  flex-shrink: 0;
+  padding: 9px 18px;
+  border: 1px solid rgba(163, 50, 50, 0.35);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: #a33232;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.qrd-danger-btn:hover {
+  background: #a33232;
+  border-color: #a33232;
+  color: #ffffff;
+}
+
+@media (max-width: 900px) {
+  .qrd-pagehead-title {
+    font-size: 23px;
+  }
+
+  .qrd-context {
+    gap: 10px 20px;
+  }
+}
+
+@media (max-width: 620px) {
+  /* Narrow widths: the action drops under the text and spans the panel
+     rather than being squeezed beside it. */
+  .qrd-danger-btn {
+    width: 100%;
+  }
+}

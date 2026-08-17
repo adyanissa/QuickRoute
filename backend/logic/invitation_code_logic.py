@@ -80,6 +80,15 @@ async def generate_unique_code(custom_code: Optional[str] = None) -> str:
 # forbidden entirely at the route dependency level (require_global_admin),
 # but this table is also enforced directly so it stays correct even if the
 # route-level dependency ever changes.
+# Final admin user/access model: the ADMIN invitation UI no longer offers
+# `regular_user` (see frontend utils/invitationCodeFormHelpers.js) because
+# an ordinary QuickRoute visitor is never invited by an administrator —
+# they self-register through POST /api/auth/register, which needs no code
+# at all. The role deliberately REMAINS creatable here: it is not a
+# privileged role, existing regular_user invitations must keep validating,
+# and the requirement was explicitly about the admin choices rather than
+# destroying the role. Privileged assignment is what this table guards,
+# and that hierarchy is unchanged.
 CREATABLE_ROLES_BY_CREATOR: dict[str, set[str]] = {
     "super_admin": {"super_admin", "global_manager", "building_manager", "regular_user"},
     "global_manager": {"building_manager", "regular_user"},
@@ -148,10 +157,14 @@ async def validate_role_and_scope_for_creation(
     elif role == "building_manager":
         if all_buildings:
             raise HTTPException(**INVALID_BUILDING_SCOPE_FOR_ROLE)
-        if not building_ids:
+        # Final rule: a Building Manager administers EXACTLY ONE building.
+        # Assigning the building (rather than the maps inside it) is what
+        # makes floors uploaded later automatically visible to them, and
+        # exactly one keeps the scope boundary unambiguous.
+        if len(building_ids) != 1:
             raise HTTPException(
                 status_code=400,
-                detail="Building manager invitation codes require at least one building",
+                detail="A Building Manager invitation must assign exactly one building.",
             )
 
     else:

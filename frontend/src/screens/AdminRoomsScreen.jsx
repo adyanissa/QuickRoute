@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
 import { useAdmin } from '../context/AdminContext';
@@ -545,7 +546,7 @@ const MapDestinationPicker = ({ map, routePoints, routeEdges, marker, onPick, t 
 
 // ── AdminRoomsScreen ──────────────────────────────────────────────────────────
 const AdminRoomsScreen = () => {
-  const { lang, setLang } = useLang();
+  const { lang } = useLang();
   const navigate          = useNavigate();
   const location          = useLocation();
   const {
@@ -1001,35 +1002,15 @@ const AdminRoomsScreen = () => {
   };
 
   return (
-    <div className="layout-wrapper">
-      <div className="layout-shell adm-shell" dir={isRTL ? 'rtl' : 'ltr'}>
+    <div className="qrd-page">
+      <div className="qrd-pagebody" dir={isRTL ? 'rtl' : 'ltr'}>
 
         {/* ── Header ──────────────────────────────────────────────────── */}
-        <div className="adm-inner-header">
-          <div className="adm-topbar">
-            <button
-              className={`adm-back-btn${isRTL ? ' adm-back-btn-rtl' : ''}`}
-              onClick={() => view !== 'list' ? setView('list') : navigate('/screen/05')}
-            >
-              <BackArrow flip={isRTL} />
-              {t.back}
-            </button>
-            <div className="adm-lang-pill" role="group">
-              {LANGUAGES.map((l) => (
-                <button key={l.code}
-                  className={`adm-lang-btn${lang === l.code ? ' active' : ''}`}
-                  onClick={() => setLang(l.code)}>
-                  {l.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="adm-inner-heading">
-            <div className="adm-inner-icon"><RoomIcon /></div>
-            <h1 className="adm-inner-title">
-              {view === 'add' ? t.addTitle : view === 'edit' ? t.editTitle : t.title}
-            </h1>
-          </div>
+        <div className="qrd-headwrap">
+          <AdminScreenHeader
+            pageKey="rooms"
+            onBack={view !== 'list' ? () => setView('list') : undefined}
+          />
         </div>
 
         {/* ── Content ─────────────────────────────────────────────────── */}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
 import { getMapById } from '../api/mapsApi';
@@ -607,8 +608,8 @@ const AdminMapAnalysisScreen = () => {
 
   if (!mapId) {
     return (
-      <div className="layout-wrapper">
-        <div className="layout-shell adm-shell" dir={isRTL ? 'rtl' : 'ltr'}>
+      <div className="qrd-page">
+        <div className="qrd-pagebody" dir={isRTL ? 'rtl' : 'ltr'}>
           <div className="adm-content">
             <div className="adm-empty"><div className="adm-empty-txt">{t.noMapId}</div></div>
           </div>
@@ -618,20 +619,12 @@ const AdminMapAnalysisScreen = () => {
   }
 
   return (
-    <div className="layout-wrapper">
-      <div className="layout-shell adm-shell" dir={isRTL ? 'rtl' : 'ltr'}>
-        <div className="adm-inner-header">
-          <div className="adm-topbar">
-            <button className={`adm-back-btn${isRTL ? ' adm-back-btn-rtl' : ''}`} onClick={() => navigate(-1)}>
-              {t.back}
-            </button>
-          </div>
-          <div className="adm-inner-heading">
-            <h1 className="adm-inner-title">
-              {t.title}
-              {map && ` — [${map.mapGroupCode || ''}] ${formatFloorDisplay(map.floor, map.floorLabel)} — ${map.title}`}
-            </h1>
-          </div>
+    <div className="qrd-page">
+      <div className="qrd-pagebody" dir={isRTL ? 'rtl' : 'ltr'}>
+        <div className="qrd-headwrap">
+          <AdminScreenHeader
+            pageKey="analysis"
+          />
         </div>
 
         <div className="adm-content">

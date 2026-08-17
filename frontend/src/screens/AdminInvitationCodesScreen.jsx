@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import { useLang } from '../context/LangContext';
 import { useAdmin } from '../context/AdminContext';
 import { useAuth } from '../context/AuthContext';
@@ -10,6 +10,7 @@ import {
 } from '../api/invitationCodesApi';
 import {
   getAllowedRoleOptions,
+  selectAssignedBuilding,
   requiresBuildingSelection,
   isSystemWideRole,
   resetScopeOnRoleChange,
@@ -299,8 +300,7 @@ const emptyForm = () => ({
 });
 
 const AdminInvitationCodesScreen = () => {
-  const { lang, setLang } = useLang();
-  const navigate = useNavigate();
+  const { lang } = useLang();
   const { user } = useAuth();
   const { buildings, loadBuildings } = useAdmin();
 
@@ -366,16 +366,11 @@ const AdminInvitationCodesScreen = () => {
     setForm((prev) => resetScopeOnRoleChange(prev, newRole));
   };
 
+  // Building Manager assignment is single-select — one building, in full.
+  // Picking another building replaces the current choice instead of
+  // accumulating a multi-building scope the backend would now reject.
   const toggleBuilding = (buildingId) => {
-    setForm((prev) => {
-      const has = prev.buildingIds.includes(buildingId);
-      return {
-        ...prev,
-        buildingIds: has
-          ? prev.buildingIds.filter((id) => id !== buildingId)
-          : [...prev.buildingIds, buildingId],
-      };
-    });
+    setForm((prev) => selectAssignedBuilding(prev, buildingId));
   };
 
   const expiresAt = useMemo(
@@ -449,32 +444,14 @@ const AdminInvitationCodesScreen = () => {
   };
 
   return (
-    <div className="layout-wrapper">
-      <div className="layout-shell adm-shell" dir={isRTL ? 'rtl' : 'ltr'}>
+    <div className="qrd-page">
+      <div className="qrd-pagebody" dir={isRTL ? 'rtl' : 'ltr'}>
 
-        <div className="adm-inner-header">
-          <div className="adm-topbar">
-            <button
-              className={`adm-back-btn${isRTL ? ' adm-back-btn-rtl' : ''}`}
-              onClick={() => (view !== 'list' ? setView('list') : navigate('/screen/05'))}
-            >
-              <BackArrow flip={isRTL} />
-              {t.back}
-            </button>
-            <div className="adm-lang-pill" role="group">
-              {LANGUAGES.map((l) => (
-                <button key={l.code}
-                  className={`adm-lang-btn${lang === l.code ? ' active' : ''}`}
-                  onClick={() => setLang(l.code)}>
-                  {l.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="adm-inner-heading">
-            <div className="adm-inner-icon"><KeyIcon /></div>
-            <h1 className="adm-inner-title">{t.title}</h1>
-          </div>
+        <div className="qrd-headwrap">
+          <AdminScreenHeader
+            pageKey="invitations"
+            onBack={view !== 'list' ? () => setView('list') : undefined}
+          />
         </div>
 
         <div className="adm-content">

@@ -7,6 +7,14 @@ the backward-compatibility backfill endpoint.
 Run with: pytest backend/tests/test_map_groups.py -v
 """
 
+
+# NOTE (admin dashboard scope-isolation task): GET /api/map-groups and
+# GET /api/map-groups/{id} used to have no dependency at all, so these
+# assertions could read a group back anonymously. Both endpoints are now
+# admin-only and scope-narrowed (see routes/map_groups_routes.py), so the
+# read-backs below authenticate with the same admin token that created the
+# group. Nothing else about what these tests assert has changed.
+
 import base64
 import io
 
@@ -200,7 +208,9 @@ def test_group_listing_and_get_by_id_return_the_same_group(client):
     assert list_response.status_code == 200
     assert any(g["id"] == created["id"] for g in list_response.json())
 
-    get_response = client.get(f"/api/map-groups/{created['id']}")
+    get_response = client.get(
+        f"/api/map-groups/{created['id']}", headers=auth_headers(token)
+    )
     assert get_response.status_code == 200
     assert get_response.json()["code"] == "QRMALL-002"
 
@@ -277,7 +287,9 @@ def test_adding_a_floor_with_a_number_already_used_is_rejected(client):
     assert response.status_code == 409, response.text
 
     # The group must still have exactly its original 3 floors.
-    refreshed = client.get(f"/api/map-groups/{group['id']}").json()
+    refreshed = client.get(
+        f"/api/map-groups/{group['id']}", headers=auth_headers(token)
+    ).json()
     assert refreshed["floor_count"] == 3
 
 
@@ -334,7 +346,9 @@ def test_deleting_one_floor_does_not_delete_the_whole_group(client):
     )
     assert delete_response.status_code == 200, delete_response.text
 
-    refreshed = client.get(f"/api/map-groups/{group['id']}")
+    refreshed = client.get(
+        f"/api/map-groups/{group['id']}", headers=auth_headers(token)
+    )
     assert refreshed.status_code == 200
     assert refreshed.json()["floor_count"] == 2
     assert all(f["id"] != floor_to_delete for f in refreshed.json()["floors"])
@@ -351,7 +365,12 @@ def test_deleting_a_group_cascades_to_every_floor(client):
     assert delete_response.status_code == 200
     assert delete_response.json()["deleted_floor_count"] == 3
 
-    assert client.get(f"/api/map-groups/{group['id']}").status_code == 404
+    assert (
+        client.get(
+            f"/api/map-groups/{group['id']}", headers=auth_headers(token)
+        ).status_code
+        == 404
+    )
 
     for map_id in floor_ids:
         assert client.get(f"/api/maps/{map_id}").status_code == 404

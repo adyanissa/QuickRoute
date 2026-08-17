@@ -34,17 +34,22 @@ function test(name, fn) {
 
 // ── 1. Allowed role options depend on creator role ─────────────────────
 
-test('getAllowedRoleOptions: super_admin can create every role', () => {
+// Final admin user/access model: invitation codes create ADMINISTRATORS,
+// so `regular_user` is no longer offered — an ordinary visitor
+// self-registers through POST /api/auth/register and never needs a code.
+// The privileged half of the hierarchy is unchanged.
+test('getAllowedRoleOptions: super_admin can create every ADMIN role', () => {
   assert.deepEqual(getAllowedRoleOptions('super_admin'), [
     'super_admin',
     'global_manager',
     'building_manager',
-    'regular_user',
   ]);
+  assert.equal(getAllowedRoleOptions('super_admin').includes('regular_user'), false);
 });
 
-test('getAllowedRoleOptions: global_manager can only create building_manager/regular_user', () => {
-  assert.deepEqual(getAllowedRoleOptions('global_manager'), ['building_manager', 'regular_user']);
+test('getAllowedRoleOptions: global_manager can only create building_manager', () => {
+  assert.deepEqual(getAllowedRoleOptions('global_manager'), ['building_manager']);
+  assert.equal(getAllowedRoleOptions('global_manager').includes('regular_user'), false);
 });
 
 test('getAllowedRoleOptions: building_manager and regular_user get no creatable roles', () => {

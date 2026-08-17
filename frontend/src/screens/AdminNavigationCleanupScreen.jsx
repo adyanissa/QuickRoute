@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import { useLang } from '../context/LangContext';
 import {
   getMapsNavigationOverview,
@@ -168,8 +168,7 @@ const UI = {
 };
 
 export default function AdminNavigationCleanupScreen() {
-  const { lang, setLang } = useLang();
-  const navigate = useNavigate();
+  const { lang } = useLang();
   const isRTL = lang === 'ar' || lang === 'he';
   const t = UI[lang] || UI.en;
 
@@ -313,31 +312,12 @@ export default function AdminNavigationCleanupScreen() {
   };
 
   return (
-    <div className="layout-wrapper">
-      <div className="layout-shell adm-shell" dir={isRTL ? 'rtl' : 'ltr'}>
-        <div className="adm-inner-header">
-          <div className="adm-topbar">
-            <button
-              className={`adm-back-btn${isRTL ? ' adm-back-btn-rtl' : ''}`}
-              onClick={() => navigate('/screen/05')}
-            >
-              {t.back}
-            </button>
-            <div className="adm-lang-pill" role="group">
-              {LANGUAGES.map((language) => (
-                <button
-                  key={language.code}
-                  className={`adm-lang-btn${lang === language.code ? ' active' : ''}`}
-                  onClick={() => setLang(language.code)}
-                >
-                  {language.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="adm-inner-heading">
-            <h1 className="adm-inner-title">{t.title}</h1>
-          </div>
+    <div className="qrd-page">
+      <div className="qrd-pagebody" dir={isRTL ? 'rtl' : 'ltr'}>
+        <div className="qrd-headwrap">
+          <AdminScreenHeader
+            pageKey="cleanup"
+          />
         </div>
 
         <div className="adm-content">

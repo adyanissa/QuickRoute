@@ -32,6 +32,7 @@ from routes.navigation_routes import (
     router as navigation_router,
 )
 from routes.room_routes import router as room_router
+from routes.user_admin_routes import router as user_admin_router
 from routes.route_edge_routes import (
     router as route_edge_router,
 )
@@ -276,6 +277,7 @@ app.mount(
 app.include_router(navigation_router)
 app.include_router(auth_router)
 app.include_router(invitation_code_router)
+app.include_router(user_admin_router)
 app.include_router(building_router)
 app.include_router(map_router)
 app.include_router(navigation_cleanup_router)
