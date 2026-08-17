@@ -44,6 +44,7 @@ import { getVerticalConnectorById } from '../api/verticalConnectorsApi';
 import { calculateRoute } from '../api/navigationApi';
 import {
   previewSemanticDestinations,
+  previewDestinationAutoPlacement,
   applySemanticDestinations,
 } from '../api/mapAnalysisApi';
 import {
@@ -82,7 +83,18 @@ import {
   isDraftNamingValid as computeIsDraftNamingValid,
   updateDraftPointName,
 } from '../utils/drawPathHelpers';
-import { computeDefaultPanelPosition } from '../utils/floatingPanelHelpers';
+import {
+  clampPanelPosition,
+  computeDefaultPanelPosition,
+  computeSnapPosition,
+} from '../utils/floatingPanelHelpers';
+import {
+  MAP_PANEL_IDS,
+  createInitialMapPanelState,
+  getMapPanelWidth,
+  raiseMapPanel,
+  writeStoredMapPanelState,
+} from '../utils/mapPanelLayout';
 import { computeOriginalImageCoords } from '../utils/destinationPlacement';
 import {
   buildBatchQueueItemIds,
@@ -94,8 +106,14 @@ import {
   buildBatchDraftStorageKey,
   serializeBatchDraft,
   deserializeBatchDraft,
+  indexAutoPlacementSuggestions,
+  applyAutoPlacementSuggestions,
+  buildAutoPlacementReviewList,
 } from '../utils/batchDestinationPlacement';
 import FloatingToolPanel from '../components/FloatingToolPanel';
+import NavigationBuildPreviewPanel from '../components/NavigationBuildPreviewPanel';
+import MapToolboxPanel, { TOOLBOX_WIDTH } from '../components/MapToolboxPanel';
+import { previewNavigationBuild } from '../api/navigationBuildApi';
 import { useAuth } from '../context/AuthContext';
 import { canDeleteMapResources } from '../utils/dashboardPermissions';
 import '../styles/adminScreens.css';
@@ -380,6 +398,63 @@ const UI = {
 
     // ── Fast Batch Destination Placement ("Place All Destinations") ─────────
     semanticBatchPlaceAll: 'Place All Destinations',
+    // ── Automatic Navigation Build (Phase A preview) ───────────────────────
+    navBuildMode: 'Automatic Navigation Build',
+    // ── Floating map toolbox (presentation only) ──────────────────────────
+    toolboxTitle: 'Navigation Tools',
+    toolboxMove: 'Move the tools panel',
+    toolboxMinimize: 'Collapse the tools panel',
+    toolboxRestore: 'Expand the tools panel',
+    toolboxGroupDraw: 'Draw',
+    toolboxGroupRouting: 'Routing',
+    toolboxGroupDestinations: 'Destinations',
+    toolboxGroupEditing: 'Map & graph editing',
+    toolboxGroupAutomation: 'Automation',
+    // Shortened button labels. The full wording stays in each button's
+    // tooltip; the action behind it is unchanged.
+    semanticDestModeShort: 'Create from Analysis',
+    syncRoomsActionShort: 'Sync Rooms',
+    navBuildModeShort: 'Automatic Build',
+    navBuildTitle: 'Automatic Navigation Build',
+    navBuildReadOnly:
+      'Preview only — nothing is saved. No rooms, points, connections or QR codes are created.',
+    navBuildRun: 'Preview Automatic Navigation Build',
+    navBuildRunning: 'Analyzing the floor plan…',
+    navBuildFailed: 'Automatic navigation build preview failed',
+    navBuildRefused: 'Nothing could be generated for this map.',
+    navBuildStage: 'Stage',
+    navBuildLayers: 'Show on the map',
+    navBuildLayer_region: 'Building region',
+    navBuildLayer_rejected: 'Rejected areas',
+    navBuildLayer_graph: 'Transit graph',
+    navBuildLayer_arrivals: 'Room arrival points',
+    navBuildLayer_attachments: 'Room connections',
+    navBuildLayer_rejectedEdges: 'Rejected edges',
+    navBuildTransitNodes: 'Transit nodes proposed',
+    navBuildTransitEdges: 'Transit connections proposed',
+    navBuildRoomsPositioned: 'Rooms positioned automatically',
+    navBuildRoomsConnected: 'Rooms connected to the graph',
+    navBuildAcceptedRooms: 'Accepted rooms scanned',
+    navBuildWouldCreateQr: 'QR codes an apply WOULD create',
+    navBuildNeedsReview: 'Rooms that still need you',
+    navBuildShowDiagnostics: 'Show diagnostics',
+    navBuildHideDiagnostics: 'Hide diagnostics',
+    navBuildLabelSource: 'Labels read from',
+    // ── Automatic placement from the map's own printed labels ──────────────
+    // Deliberate wording: "from the map label". This is never described as
+    // door detection — no door, opening or room outline is detected
+    // anywhere in this feature.
+    semanticAutoPlacedBadge: 'Positioned from map label',
+    semanticAutoPlacedDetail: (label) => `Matched the label "${label}" printed on this map.`,
+    semanticAutoPlacedConnects: (name) => `Reaches ${name} with a clear line.`,
+    semanticAutoPlacedCheckHint: 'Check it, move it, or reject it like any other destination.',
+    semanticAutoPlacedSummary: (placed, total) =>
+      `${placed} of ${total} destinations were positioned from labels printed on this map.`,
+    semanticAutoPlacedNeedsClick: 'These still need a location:',
+    semanticAutoPlaceReasonNoLabelMatch: 'no matching label on the map',
+    semanticAutoPlaceReasonAmbiguous: 'more than one label matches',
+    semanticAutoPlaceReasonNoConnection: 'no clear path to a corridor point',
+    semanticAutoPlaceReasonNeedsConfirmation: 'needs a location you confirm',
     semanticBatchPanelTitle: 'Batch Placement',
     semanticBatchDestinationOf: (i, n) => `Destination ${i} of ${n}`,
     semanticBatchClickInstructions: 'Click the door location on the map.',
@@ -820,6 +895,55 @@ const UI = {
 
     // ── Fast Batch Destination Placement ("Place All Destinations") ─────────
     semanticBatchPlaceAll: 'تحديد مواقع جميع الوجهات',
+    navBuildMode: 'بناء التنقل التلقائي',
+    toolboxTitle: 'أدوات التنقل',
+    toolboxMove: 'تحريك لوحة الأدوات',
+    toolboxMinimize: 'طي لوحة الأدوات',
+    toolboxRestore: 'توسيع لوحة الأدوات',
+    toolboxGroupDraw: 'الرسم',
+    toolboxGroupRouting: 'المسارات',
+    toolboxGroupDestinations: 'الوجهات',
+    toolboxGroupEditing: 'تحرير الخريطة والشبكة',
+    toolboxGroupAutomation: 'الأتمتة',
+    semanticDestModeShort: 'إنشاء من التحليل',
+    syncRoomsActionShort: 'مزامنة الغرف',
+    navBuildModeShort: 'بناء تلقائي',
+    navBuildTitle: 'بناء التنقل التلقائي',
+    navBuildReadOnly:
+      'معاينة فقط — لا يتم حفظ أي شيء. لا يتم إنشاء غرف أو نقاط أو وصلات أو رموز QR.',
+    navBuildRun: 'معاينة بناء التنقل التلقائي',
+    navBuildRunning: 'جارٍ تحليل مخطط الطابق…',
+    navBuildFailed: 'فشلت معاينة بناء التنقل التلقائي',
+    navBuildRefused: 'تعذّر إنشاء أي شيء لهذه الخريطة.',
+    navBuildStage: 'المرحلة',
+    navBuildLayers: 'إظهار على الخريطة',
+    navBuildLayer_region: 'منطقة المبنى',
+    navBuildLayer_rejected: 'المناطق المرفوضة',
+    navBuildLayer_graph: 'شبكة الممرات',
+    navBuildLayer_arrivals: 'نقاط الوصول للغرف',
+    navBuildLayer_attachments: 'وصلات الغرف',
+    navBuildLayer_rejectedEdges: 'الوصلات المرفوضة',
+    navBuildTransitNodes: 'نقاط الممرات المقترحة',
+    navBuildTransitEdges: 'وصلات الممرات المقترحة',
+    navBuildRoomsPositioned: 'غرف تم تحديد موقعها تلقائيًا',
+    navBuildRoomsConnected: 'غرف متصلة بالشبكة',
+    navBuildAcceptedRooms: 'الغرف المقبولة التي تم فحصها',
+    navBuildWouldCreateQr: 'رموز QR التي سيتم إنشاؤها عند التطبيق',
+    navBuildNeedsReview: 'غرف ما زالت بحاجة إليك',
+    navBuildShowDiagnostics: 'إظهار التشخيصات',
+    navBuildHideDiagnostics: 'إخفاء التشخيصات',
+    navBuildLabelSource: 'مصدر النصوص',
+    semanticAutoPlacedBadge: 'تم تحديد الموقع من نص الخريطة',
+    semanticAutoPlacedDetail: (label) => `تمت مطابقة النص "${label}" المطبوع على هذه الخريطة.`,
+    semanticAutoPlacedConnects: (name) => `يصل إلى ${name} بخط واضح.`,
+    semanticAutoPlacedCheckHint: 'يمكنك مراجعته أو نقله أو رفضه مثل أي وجهة أخرى.',
+    semanticAutoPlacedSummary: (placed, total) =>
+      `تم تحديد موقع ${placed} من ${total} وجهة من النصوص المطبوعة على هذه الخريطة.`,
+    semanticAutoPlacedNeedsClick: 'ما زالت هذه الوجهات بحاجة إلى موقع:',
+    semanticAutoPlaceReasonNoLabelMatch: 'لا يوجد نص مطابق على الخريطة',
+    semanticAutoPlaceReasonAmbiguous: 'أكثر من نص واحد مطابق',
+    semanticAutoPlaceReasonNoConnection: 'لا يوجد مسار واضح إلى نقطة ممر',
+    semanticAutoPlaceReasonNeedsConfirmation: 'بحاجة إلى موقع تؤكده بنفسك',
     semanticBatchPanelTitle: 'التحديد الجماعي للمواقع',
     semanticBatchDestinationOf: (i, n) => `الوجهة ${i} من ${n}`,
     semanticBatchClickInstructions: 'اضغطي على موقع الباب على الخريطة.',
@@ -1258,6 +1382,55 @@ const UI = {
 
     // ── Fast Batch Destination Placement ("Place All Destinations") ─────────
     semanticBatchPlaceAll: 'מיקום כל היעדים',
+    navBuildMode: 'בניית ניווט אוטומטית',
+    toolboxTitle: 'כלי ניווט',
+    toolboxMove: 'הזזת חלונית הכלים',
+    toolboxMinimize: 'כיווץ חלונית הכלים',
+    toolboxRestore: 'הרחבת חלונית הכלים',
+    toolboxGroupDraw: 'שרטוט',
+    toolboxGroupRouting: 'ניתוב',
+    toolboxGroupDestinations: 'יעדים',
+    toolboxGroupEditing: 'עריכת מפה ורשת',
+    toolboxGroupAutomation: 'אוטומציה',
+    semanticDestModeShort: 'יצירה מהניתוח',
+    syncRoomsActionShort: 'סנכרון חדרים',
+    navBuildModeShort: 'בנייה אוטומטית',
+    navBuildTitle: 'בניית ניווט אוטומטית',
+    navBuildReadOnly:
+      'תצוגה מקדימה בלבד — שום דבר לא נשמר. לא נוצרים חדרים, נקודות, חיבורים או קודי QR.',
+    navBuildRun: 'הצג בניית ניווט אוטומטית',
+    navBuildRunning: 'מנתח את תוכנית הקומה…',
+    navBuildFailed: 'התצוגה המקדימה של בניית הניווט נכשלה',
+    navBuildRefused: 'לא ניתן היה ליצור דבר עבור מפה זו.',
+    navBuildStage: 'שלב',
+    navBuildLayers: 'הצג על המפה',
+    navBuildLayer_region: 'אזור המבנה',
+    navBuildLayer_rejected: 'אזורים שנדחו',
+    navBuildLayer_graph: 'רשת המסדרונות',
+    navBuildLayer_arrivals: 'נקודות הגעה לחדרים',
+    navBuildLayer_attachments: 'חיבורי חדרים',
+    navBuildLayer_rejectedEdges: 'חיבורים שנדחו',
+    navBuildTransitNodes: 'צמתי מסדרון מוצעים',
+    navBuildTransitEdges: 'חיבורי מסדרון מוצעים',
+    navBuildRoomsPositioned: 'חדרים שמוקמו אוטומטית',
+    navBuildRoomsConnected: 'חדרים המחוברים לרשת',
+    navBuildAcceptedRooms: 'חדרים מאושרים שנסרקו',
+    navBuildWouldCreateQr: 'קודי QR שייווצרו בעת החלה',
+    navBuildNeedsReview: 'חדרים שעדיין זקוקים לך',
+    navBuildShowDiagnostics: 'הצג אבחון',
+    navBuildHideDiagnostics: 'הסתר אבחון',
+    navBuildLabelSource: 'מקור הכיתובים',
+    semanticAutoPlacedBadge: 'מוקם לפי הכיתוב במפה',
+    semanticAutoPlacedDetail: (label) => `הותאם לכיתוב "${label}" המודפס במפה זו.`,
+    semanticAutoPlacedConnects: (name) => `מגיע אל ${name} בקו פנוי.`,
+    semanticAutoPlacedCheckHint: 'אפשר לבדוק, להזיז או לדחות אותו כמו כל יעד אחר.',
+    semanticAutoPlacedSummary: (placed, total) =>
+      `${placed} מתוך ${total} יעדים מוקמו לפי כיתובים המודפסים במפה זו.`,
+    semanticAutoPlacedNeedsClick: 'היעדים האלה עדיין זקוקים למיקום:',
+    semanticAutoPlaceReasonNoLabelMatch: 'אין כיתוב תואם במפה',
+    semanticAutoPlaceReasonAmbiguous: 'יותר מכיתוב אחד תואם',
+    semanticAutoPlaceReasonNoConnection: 'אין מסלול פנוי לנקודת מסדרון',
+    semanticAutoPlaceReasonNeedsConfirmation: 'זקוק למיקום שתאשר',
     semanticBatchPanelTitle: 'מיקום קבוצתי',
     semanticBatchDestinationOf: (i, n) => `יעד ${i} מתוך ${n}`,
     semanticBatchClickInstructions: 'לחץ על מיקום הדלת במפה.',
@@ -1570,6 +1743,24 @@ const DeleteIcon = () => (
   </svg>
 );
 
+// Where the floating map toolbox remembers its position and collapsed
+// state. UI preference only — frontend storage, no backend field and no
+// endpoint. Every read and write is guarded, because a browser with
+// storage disabled must still get a perfectly usable toolbox.
+const TOOLBOX_STORAGE_KEY = 'quickroute:mapToolbox:v1';
+
+function readStoredToolboxState() {
+  try {
+    const raw = window.localStorage.getItem(TOOLBOX_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 const AdminMapScreen = () => {
   const { lang } = useLang();
   const { user } = useAuth();
@@ -1688,6 +1879,22 @@ const AdminMapScreen = () => {
   // same full-map session, and resets to a fresh default each time the
   // full-map view is reopened (see the isMapOpen effect below).
   const [panelPosition, setPanelPosition] = useState(null);
+
+  // The floating "Navigation Tools" toolbox that replaced the fixed
+  // horizontal mode bar. Deliberately its OWN position/collapsed state
+  // rather than sharing `panelPosition` with the Add Point / Draw / Test
+  // Route panels: those are mutually exclusive and only one is mounted at
+  // a time, whereas the toolbox is always on screen alongside whichever
+  // of them is open, so a shared position would make the two stack.
+  const [toolboxPosition, setToolboxPosition] = useState(null);
+  const [toolboxCollapsed, setToolboxCollapsed] = useState(false);
+  // Position / collapsed / stacking for the map panels that were
+  // converted from fixed boxes into FloatingToolPanel instances. Keyed by
+  // MAP_PANEL_IDS; one entry per panel, created the first time that panel
+  // becomes visible. Deliberately SEPARATE from the shared
+  // `panelPosition` / `isPanelCollapsed` pair below, which the five
+  // already-draggable panels keep using exactly as before.
+  const [mapPanels, setMapPanels] = useState({});
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
   const isPanelDraggingRef = useRef(false);
   // The floating panel's drag/dock/clamp boundary — the FULL editor
@@ -1845,6 +2052,35 @@ const AdminMapScreen = () => {
   // exists — a genuinely new point can only ever be manually placed).
   const [semanticDestManualPlaceTargetId, setSemanticDestManualPlaceTargetId] = useState(null);
   const [semanticDestApplyResult, setSemanticDestApplyResult] = useState(null);
+
+  // Automatic Navigation Build (Phase A) — a READ-ONLY proposal for the
+  // whole floor: the detected building region, a hidden transit graph
+  // derived from the drawing, room arrival points, and which rooms could
+  // not be resolved. Nothing here is ever saved; there is no apply
+  // endpoint yet by design.
+  const [navBuildResult, setNavBuildResult] = useState(null);
+  const [navBuildLoading, setNavBuildLoading] = useState(false);
+  const [navBuildError, setNavBuildError] = useState('');
+  const [navBuildOpen, setNavBuildOpen] = useState(false);
+  const [navBuildLayers, setNavBuildLayers] = useState({
+    region: true,
+    rejected: false,
+    graph: true,
+    arrivals: true,
+    attachments: true,
+    rejectedEdges: false,
+  });
+
+  // The server's automatic-placement preview for the SAME publication —
+  // a location suggested for each accepted room from the labels PRINTED
+  // on this map, already checked against the wall mask and line of sight
+  // (backend/services/destination_auto_placement_service.py). Read-only
+  // on the server side; here it only ever pre-fills the batch queue, and
+  // every suggestion stays movable and rejectable like any manual one.
+  // Null means the preview was never run or could not be reached — in
+  // which case the batch queue behaves exactly as it did before this
+  // feature existed.
+  const [semanticAutoPlacement, setSemanticAutoPlacement] = useState(null);
 
   // Fast batch destination placement ("Place All Destinations") — a
   // DISTINCT sub-workflow layered on top of the proposals array above.
@@ -2481,6 +2717,38 @@ const AdminMapScreen = () => {
         panelWidth: 300,
         panelHeight: 320,
         isRTL,
+      });
+    });
+
+    // The toolbox docks to the far side by default, so the top-left of
+    // the map stays clear for the floor selector and the plan itself is
+    // the dominant thing on screen. A position the admin has dragged to
+    // (restored from localStorage below) always wins.
+    setToolboxPosition((previous) => {
+      if (previous) return previous;
+
+      const workspaceRect =
+        fullMapWorkspaceRef.current?.getBoundingClientRect() || rect;
+
+      const stored = readStoredToolboxState();
+
+      if (stored && stored.position) {
+        return clampPanelPosition({
+          x: stored.position.x,
+          y: stored.position.y,
+          panelWidth: TOOLBOX_WIDTH,
+          panelHeight: 360,
+          containerWidth: workspaceRect.width,
+          containerHeight: workspaceRect.height,
+        });
+      }
+
+      return computeSnapPosition({
+        side: isRTL ? 'left' : 'right',
+        panelWidth: TOOLBOX_WIDTH,
+        panelHeight: 360,
+        containerWidth: workspaceRect.width,
+        containerHeight: workspaceRect.height,
       });
     });
   };
@@ -4802,6 +5070,19 @@ const AdminMapScreen = () => {
       setSemanticDestPublicationId(response.publication_id || null);
       setSemanticDestProposals(proposals);
       setSemanticDestPhase('preview');
+
+      // Ask, separately and non-fatally, whether the map's own printed
+      // labels can supply the locations these proposals are missing. A
+      // failure here must never break the preview the admin just asked
+      // for — it only means every destination is placed by hand, which
+      // is exactly the behavior that existed before this feature.
+      try {
+        const autoPlacement = await previewDestinationAutoPlacement(activeMap.id, { lang });
+        setSemanticAutoPlacement(autoPlacement || null);
+      } catch (autoPlacementError) {
+        console.error('Automatic destination placement preview failed:', autoPlacementError);
+        setSemanticAutoPlacement(null);
+      }
     } catch (error) {
       console.error('Create Destinations from Approved Analysis preview failed:', error);
       setSemanticDestError(error.message || t.semanticDestPreviewFailed);
@@ -4943,9 +5224,459 @@ const AdminMapScreen = () => {
     setSemanticDestProposals([]);
     setSemanticDestSummary(null);
     setSemanticDestApplyResult(null);
+    setSemanticAutoPlacement(null);
   };
 
   // ── Fast batch destination placement ("Place All Destinations") ────────
+
+  // ── Floating "Navigation Tools" toolbox ───────────────────────────────
+  // UI preference only. The storage key and reader live at MODULE scope
+  // (above this component) rather than in the component body: they hold
+  // no state, and syncFullMapMetrics — defined far earlier — calls the
+  // reader. Keeping them out here means that call can never depend on how
+  // far through the component body evaluation has got.
+
+  useEffect(() => {
+    const stored = readStoredToolboxState();
+    if (stored && typeof stored.collapsed === 'boolean') {
+      setToolboxCollapsed(stored.collapsed);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isMapOpen || !toolboxPosition) return;
+
+    try {
+      window.localStorage.setItem(
+        TOOLBOX_STORAGE_KEY,
+        JSON.stringify({
+          position: toolboxPosition,
+          collapsed: toolboxCollapsed,
+        }),
+      );
+    } catch {
+      // Storage unavailable (private mode, quota, disabled). The toolbox
+      // simply starts from its default next time.
+    }
+  }, [isMapOpen, toolboxPosition, toolboxCollapsed]);
+
+  // ── Converted floating map panels ─────────────────────────────────────
+  //
+  // Everything below drives ONLY the five panels that used to be fixed
+  // absolutely-positioned boxes: Preview Destinations, the Auto Connect
+  // preview, the fast-batch review screen, the Automatic Navigation Build
+  // preview, and the Edit Route Point detail panel.
+  //
+  // Add Point, Draw Walkable Path, Vertical Connections, Test Route and
+  // the fast-batch sequential placement panel are NOT touched by any of
+  // it — they keep sharing `panelPosition` / `isPanelCollapsed` and never
+  // get an entry in `mapPanels`.
+
+  const visibleMapPanelIds = useMemo(() => {
+    const ids = [];
+
+    if (mode === 'auto-connect' && autoConnectPhase === 'preview') {
+      ids.push(MAP_PANEL_IDS.autoConnectPreview);
+    }
+    if (mode === 'semantic-destinations' && semanticDestPhase === 'preview') {
+      ids.push(MAP_PANEL_IDS.semanticDestPreview);
+    }
+    if (
+      mode === 'semantic-destinations' &&
+      semanticBatchActive &&
+      semanticBatchReviewOpen
+    ) {
+      ids.push(MAP_PANEL_IDS.semanticBatchReview);
+    }
+    if (navBuildOpen) {
+      ids.push(MAP_PANEL_IDS.navBuild);
+    }
+    if (mode === 'edit-points' && editPointTarget) {
+      ids.push(MAP_PANEL_IDS.editPoint);
+    }
+
+    return ids;
+  }, [
+    mode,
+    autoConnectPhase,
+    semanticDestPhase,
+    semanticBatchActive,
+    semanticBatchReviewOpen,
+    navBuildOpen,
+    editPointTarget,
+  ]);
+
+  // Give each panel its starting position the first time it becomes
+  // visible in this full-map session — restored from its own localStorage
+  // key when one exists, otherwise from the default-position table. The
+  // panel renders only once its entry exists (one frame later), which is
+  // the same `panelPosition &&` gate the pre-existing panels already use.
+  useEffect(() => {
+    if (!isMapOpen || visibleMapPanelIds.length === 0) return;
+
+    const workspace = fullMapWorkspaceRef.current;
+    if (!workspace) return;
+
+    const rect = workspace.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+
+    setMapPanels((previous) => {
+      let next = previous;
+
+      visibleMapPanelIds.forEach((panelId) => {
+        if (next[panelId]) return;
+        if (next === previous) next = { ...previous };
+
+        next[panelId] = createInitialMapPanelState({
+          panelId,
+          containerWidth: rect.width,
+          containerHeight: rect.height,
+          isRTL,
+        });
+      });
+
+      return next;
+    });
+  }, [isMapOpen, visibleMapPanelIds, isRTL, fullMapMetrics]);
+
+  // Persist each panel's own position/collapsed state under its own key.
+  useEffect(() => {
+    if (!isMapOpen) return;
+
+    Object.keys(mapPanels).forEach((panelId) => {
+      const entry = mapPanels[panelId];
+      if (!entry?.position) return;
+
+      writeStoredMapPanelState(panelId, {
+        position: entry.position,
+        collapsed: entry.collapsed === true,
+      });
+    });
+  }, [isMapOpen, mapPanels]);
+
+  // Closing the full-map view clears the in-memory entries so the next
+  // open re-reads localStorage and re-clamps against the (possibly
+  // resized) workspace. Saved positions themselves are not cleared.
+  useEffect(() => {
+    if (!isMapOpen) setMapPanels({});
+  }, [isMapOpen]);
+
+  const handleMapPanelPositionChange = useCallback((panelId, position) => {
+    setMapPanels((previous) => {
+      const entry = previous[panelId];
+      if (!entry) return previous;
+      if (
+        entry.position?.x === position?.x &&
+        entry.position?.y === position?.y
+      ) {
+        return previous;
+      }
+      return { ...previous, [panelId]: { ...entry, position } };
+    });
+  }, []);
+
+  const handleMapPanelToggleCollapse = useCallback((panelId) => {
+    setMapPanels((previous) => {
+      const entry = previous[panelId];
+      if (!entry) return previous;
+      return {
+        ...previous,
+        [panelId]: { ...entry, collapsed: !entry.collapsed },
+      };
+    });
+  }, []);
+
+  const handleMapPanelFocus = useCallback((panelId) => {
+    // raiseMapPanel returns the same object when the panel is already
+    // frontmost, so this is a no-op re-render-wise for the common case of
+    // clicking around inside the panel you are already using.
+    setMapPanels((previous) => raiseMapPanel(previous, panelId));
+  }, []);
+
+  // Every converted panel takes the same set of FloatingToolPanel props.
+  // Building them in one place keeps the five call sites identical and
+  // makes it impossible to wire one of them up inconsistently. Returns
+  // null until the panel's entry exists, which is what gates its render.
+  const buildMapPanelProps = useCallback(
+    (panelId) => {
+      const entry = mapPanels[panelId];
+      if (!entry?.position) return null;
+
+      return {
+        position: entry.position,
+        onPositionChange: (position) =>
+          handleMapPanelPositionChange(panelId, position),
+        isCollapsed: entry.collapsed === true,
+        onToggleCollapse: () => handleMapPanelToggleCollapse(panelId),
+        onFocusRequest: () => handleMapPanelFocus(panelId),
+        // Same drag guard the pre-existing panels use, so a drag that
+        // ends over the map never also registers as a map click.
+        onDragStateChange: (dragging) => {
+          isPanelDraggingRef.current = dragging;
+        },
+        zIndex: entry.zIndex,
+        width: getMapPanelWidth(panelId),
+        containerRef: fullMapWorkspaceRef,
+        snapTopOffset: 76,
+        isRTL,
+        showSnapControls: true,
+        moveLabel: t.panelMove,
+        minimizeLabel: t.panelMinimize,
+        restoreLabel: t.panelRestore,
+        snapLabels: {
+          left: t.panelDockLeft,
+          right: t.panelDockRight,
+          bottom: t.panelDockBottom,
+        },
+      };
+    },
+    [
+      mapPanels,
+      handleMapPanelPositionChange,
+      handleMapPanelToggleCollapse,
+      handleMapPanelFocus,
+      isRTL,
+      t,
+    ],
+  );
+
+
+  // ── Automatic Navigation Build (Phase A, read-only) ───────────────────
+
+  const handleToggleNavBuildLayer = (key) => {
+    setNavBuildLayers((previous) => ({ ...previous, [key]: !previous[key] }));
+  };
+
+  const handleRunNavBuildPreview = async () => {
+    if (!activeMap?.id) {
+      setNavBuildError(t.noSelectedMap);
+      return;
+    }
+
+    setNavBuildLoading(true);
+    setNavBuildError('');
+
+    try {
+      const response = await previewNavigationBuild(activeMap.id, { lang });
+      setNavBuildResult(response);
+    } catch (error) {
+      console.error('Automatic navigation build preview failed:', error);
+      setNavBuildError(error.message || t.navBuildFailed);
+      setNavBuildResult(null);
+    } finally {
+      setNavBuildLoading(false);
+    }
+  };
+
+  const handleOpenNavBuild = () => {
+    setNavBuildOpen(true);
+    setNavBuildError('');
+  };
+
+  const handleCloseNavBuild = () => {
+    setNavBuildOpen(false);
+    setNavBuildResult(null);
+    setNavBuildError('');
+  };
+
+  // Declared HERE, after every handler it references, and not earlier.
+  // This array is built during render, so a `const` arrow handler defined
+  // further down the component body is still in its temporal dead zone at
+  // that moment — reading it throws "Cannot access ... before
+  // initialization" and the whole Admin Map renders blank. Of the five
+  // handlers used below (closeEditPointPanel, resetCalibrationPoints,
+  // handleStartAutoConnect, handleStartSemanticDestinations,
+  // handleOpenNavBuild), handleOpenNavBuild was the one declared after
+  // the old position. Keeping the array below all of them makes the
+  // ordering safe rather than coincidental.
+  // The tools themselves. Each entry carries the EXACT onClick and the
+  // EXACT active-state expression the old horizontal bar used, so this is
+  // a pure regrouping — no handler is rewritten, wrapped or conditioned
+  // differently. `tooltip` keeps the full original wording for the few
+  // labels shortened to fit a 268px panel.
+  const mapToolGroups = [
+    {
+      id: 'draw',
+      title: t.toolboxGroupDraw,
+      tools: [
+        {
+          id: 'point',
+          icon: 'point',
+          label: t.addPointMode,
+          active: mode === 'point',
+          onClick: () => {
+            if (mode !== 'point') {
+              setMode('point');
+              setDraftPoints([]);
+              setDraftError('');
+            }
+          },
+        },
+        {
+          id: 'draw',
+          icon: 'path',
+          label: t.drawMode,
+          active: mode === 'draw',
+          onClick: () => {
+            if (mode !== 'draw') {
+              setMode('draw');
+              setClickedPoint(null);
+              setPointName('');
+            }
+          },
+        },
+      ],
+    },
+    {
+      id: 'routing',
+      title: t.toolboxGroupRouting,
+      tools: [
+        {
+          id: 'test',
+          icon: 'test',
+          label: t.testMode,
+          active: mode === 'test',
+          onClick: () => {
+            if (mode !== 'test') {
+              setMode('test');
+              setClickedPoint(null);
+              setPointName('');
+            }
+          },
+        },
+        {
+          id: 'connector',
+          icon: 'connector',
+          label: t.connectorMode || 'Vertical Connections',
+          active: mode === 'connector',
+          onClick: () => {
+            if (mode !== 'connector') {
+              setMode('connector');
+              setClickedPoint(null);
+              setPointName('');
+              setConnectorPendingClick(null);
+            }
+          },
+        },
+        {
+          id: 'auto-connect',
+          icon: 'autoConnect',
+          label: t.autoConnectMode,
+          active: mode === 'auto-connect',
+          onClick: () => {
+            if (mode !== 'auto-connect') {
+              handleStartAutoConnect();
+            }
+          },
+        },
+      ],
+    },
+    {
+      id: 'destinations',
+      title: t.toolboxGroupDestinations,
+      tools: [
+        {
+          id: 'semantic-destinations',
+          icon: 'destinations',
+          label: t.semanticDestModeShort || t.semanticDestMode,
+          tooltip: t.semanticDestMode,
+          active: mode === 'semantic-destinations',
+          onClick: () => {
+            if (mode !== 'semantic-destinations') {
+              handleStartSemanticDestinations();
+            }
+          },
+        },
+        {
+          id: 'sync-rooms',
+          icon: 'sync',
+          label: t.syncRoomsActionShort || t.syncRoomsAction,
+          tooltip: t.syncRoomsAction,
+          active: false,
+          onClick: () => {
+            setSyncRoomsError('');
+            setShowSyncRoomsConfirm(true);
+          },
+        },
+      ],
+    },
+    {
+      id: 'editing',
+      title: t.toolboxGroupEditing,
+      tools: [
+        {
+          id: 'edit-points',
+          icon: 'edit',
+          label: t.editPointsMode,
+          active: mode === 'edit-points',
+          onClick: () => {
+            if (mode !== 'edit-points') {
+              setMode('edit-points');
+              setClickedPoint(null);
+              setPointName('');
+              closeEditPointPanel();
+            }
+          },
+        },
+        {
+          id: 'delete-connection',
+          icon: 'deleteEdge',
+          label: t.deleteConnectionMode,
+          active: mode === 'delete-connection',
+          onClick: () => {
+            if (mode !== 'delete-connection') {
+              setMode('delete-connection');
+              setClickedPoint(null);
+              setPointName('');
+              setSelectedEdgeForDeletion(null);
+              setDeleteConnectionVerticalNotice(false);
+              setDeleteConnectionError('');
+            }
+          },
+        },
+        {
+          id: 'calibrate',
+          icon: 'calibrate',
+          label: t.calibrateMode,
+          active: mode === 'calibrate',
+          onClick: () => {
+            if (mode !== 'calibrate') {
+              setMode('calibrate');
+              setClickedPoint(null);
+              setPointName('');
+              resetCalibrationPoints();
+              setCalibrationResult(null);
+            }
+          },
+        },
+      ],
+    },
+    {
+      id: 'automation',
+      title: t.toolboxGroupAutomation,
+      tools: [
+        {
+          id: 'nav-build',
+          icon: 'build',
+          label: t.navBuildModeShort || t.navBuildMode,
+          tooltip: t.navBuildMode,
+          active: navBuildOpen,
+          onClick: handleOpenNavBuild,
+        },
+      ],
+    },
+  ];
+
+  // Why the map's own labels could not answer for one room. Kept as
+  // plain, non-technical reasons: the admin's next action is the same in
+  // every case (click the right spot), so the wording only has to explain
+  // why they are being asked.
+  const describeAutoPlacementStatus = (status) => {
+    if (status === 'no_label_match') return t.semanticAutoPlaceReasonNoLabelMatch;
+    if (status === 'ambiguous_label') return t.semanticAutoPlaceReasonAmbiguous;
+    if (status === 'no_safe_graph_connection') return t.semanticAutoPlaceReasonNoConnection;
+    return t.semanticAutoPlaceReasonNeedsConfirmation;
+  };
 
   const getSemanticBatchDraftKey = () =>
     buildBatchDraftStorageKey({
@@ -4957,26 +5688,45 @@ const AdminMapScreen = () => {
   const handleBeginFreshSemanticBatch = () => {
     const queueItemIds = buildBatchQueueItemIds(semanticDestProposals);
 
+    // Locations the map's own labels already justify (see
+    // semanticAutoPlacement above). These items still enter the queue and
+    // still show their marker — they just start already placed, so the
+    // admin walks only the rooms the drawing could not answer for.
+    const autoPlacementSuggestions = indexAutoPlacementSuggestions(
+      semanticAutoPlacement?.proposals,
+    );
+
     // Existing-linked-point proposals (Section 8: "do not require a new
     // location unless the admin explicitly chooses to replace it") are
     // auto-included in the final save without ever entering the queue.
     setSemanticDestProposals((previous) =>
-      previous.map((proposal) =>
-        proposal.placement_source !== 'needs_manual_placement' &&
-        proposal.localStatus !== 'rejected' &&
-        proposal.localStatus !== 'excluded'
-          ? { ...proposal, localStatus: 'accepted' }
-          : proposal,
+      applyAutoPlacementSuggestions(
+        previous.map((proposal) =>
+          proposal.placement_source !== 'needs_manual_placement' &&
+          proposal.localStatus !== 'rejected' &&
+          proposal.localStatus !== 'excluded'
+            ? { ...proposal, localStatus: 'accepted' }
+            : proposal,
+        ),
+        autoPlacementSuggestions,
       ),
     );
 
+    const statuses = initialBatchStatuses(
+      queueItemIds,
+      queueItemIds.filter((id) => autoPlacementSuggestions[id]),
+    );
+    // Start on the first item that still needs a click, not blindly on
+    // item 0 — which may well already be placed from its label.
+    const firstUnresolved = findNextActiveIndex(queueItemIds, statuses, -1);
+
     setSemanticBatchQueue(queueItemIds);
-    setSemanticBatchStatuses(initialBatchStatuses(queueItemIds));
-    setSemanticBatchIndex(0);
+    setSemanticBatchStatuses(statuses);
+    setSemanticBatchIndex(firstUnresolved === -1 ? 0 : firstUnresolved);
     setSemanticBatchHistory([]);
     setSemanticBatchFeedback('');
     setSemanticBatchAwaitingReplace(false);
-    setSemanticBatchReviewOpen(false);
+    setSemanticBatchReviewOpen(queueItemIds.length > 0 && firstUnresolved === -1);
     setSemanticBatchItemErrors({});
     setSemanticBatchSaveError('');
     setSemanticBatchDraftPrompt(null);
@@ -8041,6 +8791,145 @@ const AdminMapScreen = () => {
                             );
                           })()}
 
+                        {/* ── Automatic Navigation Build preview overlay ──
+                            READ-ONLY. Every shape here is a PROPOSAL held
+                            in memory on the client; none of it exists in
+                            the database. Styles are deliberately distinct
+                            from saved RoutePoints and RouteEdges below so
+                            a proposal can never be mistaken for something
+                            that was actually created. */}
+                        {navBuildOpen && navBuildResult && (
+                          <g>
+                            {navBuildLayers.region &&
+                              (navBuildResult.region_polygons || [])
+                                .filter((polygon) => polygon.decision === 'interior')
+                                .map((polygon, index) => (
+                                  <polygon
+                                    key={`nb-region-${index}`}
+                                    points={polygon.points
+                                      .map((point) => `${point[0]},${point[1]}`)
+                                      .join(' ')}
+                                    fill="#1b7f4b"
+                                    fillOpacity={0.10}
+                                    stroke="#1b7f4b"
+                                    strokeWidth={3}
+                                    strokeOpacity={0.85}
+                                  />
+                                ))}
+
+                            {navBuildLayers.rejected &&
+                              (navBuildResult.region_polygons || [])
+                                .filter((polygon) => polygon.decision === 'rejected')
+                                .map((polygon, index) => (
+                                  <polygon
+                                    key={`nb-rejected-${index}`}
+                                    points={polygon.points
+                                      .map((point) => `${point[0]},${point[1]}`)
+                                      .join(' ')}
+                                    fill="#b03030"
+                                    fillOpacity={0.06}
+                                    stroke="#b03030"
+                                    strokeWidth={2}
+                                    strokeDasharray="10 6"
+                                    strokeOpacity={0.8}
+                                  />
+                                ))}
+
+                            {navBuildLayers.rejectedEdges &&
+                              (navBuildResult.rejected_edges || []).map((edge, index) => (
+                                <line
+                                  key={`nb-rejedge-${index}`}
+                                  x1={edge.from_point[0]}
+                                  y1={edge.from_point[1]}
+                                  x2={edge.to_point[0]}
+                                  y2={edge.to_point[1]}
+                                  stroke="#c0392b"
+                                  strokeWidth={2}
+                                  strokeDasharray="4 5"
+                                  opacity={0.7}
+                                />
+                              ))}
+
+                            {navBuildLayers.graph && (() => {
+                              const nodeByIndex = {};
+                              (navBuildResult.graph_nodes || []).forEach((node) => {
+                                nodeByIndex[node.index] = node;
+                              });
+
+                              return (
+                                <>
+                                  {(navBuildResult.graph_edges || []).map((edge, index) => {
+                                    const from = nodeByIndex[edge.from_index];
+                                    const to = nodeByIndex[edge.to_index];
+                                    if (!from || !to) return null;
+                                    return (
+                                      <line
+                                        key={`nb-edge-${index}`}
+                                        x1={from.x}
+                                        y1={from.y}
+                                        x2={to.x}
+                                        y2={to.y}
+                                        stroke="#2d6cdf"
+                                        strokeWidth={4}
+                                        strokeLinecap="round"
+                                        opacity={0.85}
+                                      />
+                                    );
+                                  })}
+                                  {(navBuildResult.graph_nodes || []).map((node) => (
+                                    <circle
+                                      key={`nb-node-${node.index}`}
+                                      cx={node.x}
+                                      cy={node.y}
+                                      r={Math.max(5, fullMapMetrics.naturalWidth * 0.0035)}
+                                      fill="#2d6cdf"
+                                      stroke="white"
+                                      strokeWidth={2}
+                                      opacity={0.95}
+                                    />
+                                  ))}
+                                </>
+                              );
+                            })()}
+
+                            {navBuildLayers.attachments &&
+                              (navBuildResult.rooms || []).map((room) => {
+                                if (!room.arrival_point || !room.attachment) return null;
+                                if (room.attachment.node_x == null) return null;
+                                return (
+                                  <line
+                                    key={`nb-attach-${room.semantic_item_id}`}
+                                    x1={room.arrival_point.x}
+                                    y1={room.arrival_point.y}
+                                    x2={room.attachment.node_x}
+                                    y2={room.attachment.node_y}
+                                    stroke="#7a4bd0"
+                                    strokeWidth={3}
+                                    strokeDasharray="8 5"
+                                    opacity={0.9}
+                                  />
+                                );
+                              })}
+
+                            {navBuildLayers.arrivals &&
+                              (navBuildResult.rooms || []).map((room) => {
+                                if (!room.arrival_point) return null;
+                                return (
+                                  <circle
+                                    key={`nb-arrival-${room.semantic_item_id}`}
+                                    cx={room.arrival_point.x}
+                                    cy={room.arrival_point.y}
+                                    r={Math.max(7, fullMapMetrics.naturalWidth * 0.005)}
+                                    fill="#e08a00"
+                                    stroke="white"
+                                    strokeWidth={2}
+                                    opacity={0.95}
+                                  />
+                                );
+                              })}
+                          </g>
+                        )}
+
                         {/* Existing saved route points */}
                         {routePoints.map((point) => {
                           const pointX = Number(point.x);
@@ -8453,256 +9342,31 @@ const AdminMapScreen = () => {
                     );
                   })()}
 
-                {/* ── Mode toolbar: Add Point / Draw Walkable Path ── */}
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 20,
-                    left: '50%',
-                    transform: 'translateX(-50%)',
-                    display: 'flex',
-                    gap: 8,
-                    background: 'rgba(20, 55, 105, 0.92)',
-                    padding: 6,
-                    borderRadius: 999,
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (mode !== 'point') {
-                        setMode('point');
-                        setDraftPoints([]);
-                        setDraftError('');
-                      }
+                {/* ── Floating "Navigation Tools" toolbox ──
+                    Replaces the fixed horizontal pill that used to run
+                    across the top of the plan. Same eleven tools, same
+                    handlers, same active states — regrouped into a
+                    draggable, collapsible panel so the floor plan is no
+                    longer covered by its own controls. */}
+                {toolboxPosition && (
+                  <MapToolboxPanel
+                    groups={mapToolGroups}
+                    position={toolboxPosition}
+                    onPositionChange={setToolboxPosition}
+                    isCollapsed={toolboxCollapsed}
+                    onToggleCollapse={() =>
+                      setToolboxCollapsed((previous) => !previous)
+                    }
+                    containerRef={fullMapWorkspaceRef}
+                    isRTL={isRTL}
+                    title={t.toolboxTitle}
+                    labels={{
+                      move: t.toolboxMove,
+                      minimize: t.toolboxMinimize,
+                      restore: t.toolboxRestore,
                     }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background: mode === 'point' ? 'white' : 'transparent',
-                      color: mode === 'point' ? '#173b70' : 'white',
-                    }}
-                  >
-                    {t.addPointMode}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (mode !== 'draw') {
-                        setMode('draw');
-                        setClickedPoint(null);
-                        setPointName('');
-                      }
-                    }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background: mode === 'draw' ? 'white' : 'transparent',
-                      color: mode === 'draw' ? '#173b70' : 'white',
-                    }}
-                  >
-                    {t.drawMode}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (mode !== 'test') {
-                        setMode('test');
-                        setClickedPoint(null);
-                        setPointName('');
-                      }
-                    }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background: mode === 'test' ? 'white' : 'transparent',
-                      color: mode === 'test' ? '#173b70' : 'white',
-                    }}
-                  >
-                    {t.testMode}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (mode !== 'connector') {
-                        setMode('connector');
-                        setClickedPoint(null);
-                        setPointName('');
-                        setConnectorPendingClick(null);
-                      }
-                    }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background: mode === 'connector' ? 'white' : 'transparent',
-                      color: mode === 'connector' ? '#173b70' : 'white',
-                    }}
-                  >
-                    {t.connectorMode || 'Vertical Connections'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (mode !== 'calibrate') {
-                        setMode('calibrate');
-                        setClickedPoint(null);
-                        setPointName('');
-                        resetCalibrationPoints();
-                        setCalibrationResult(null);
-                      }
-                    }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background: mode === 'calibrate' ? 'white' : 'transparent',
-                      color: mode === 'calibrate' ? '#173b70' : 'white',
-                    }}
-                  >
-                    {t.calibrateMode}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (mode !== 'delete-connection') {
-                        setMode('delete-connection');
-                        setClickedPoint(null);
-                        setPointName('');
-                        setSelectedEdgeForDeletion(null);
-                        setDeleteConnectionVerticalNotice(false);
-                        setDeleteConnectionError('');
-                      }
-                    }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background:
-                        mode === 'delete-connection' ? 'white' : 'transparent',
-                      color:
-                        mode === 'delete-connection' ? '#173b70' : 'white',
-                    }}
-                  >
-                    {t.deleteConnectionMode}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (mode !== 'auto-connect') {
-                        handleStartAutoConnect();
-                      }
-                    }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background:
-                        mode === 'auto-connect' ? 'white' : 'transparent',
-                      color:
-                        mode === 'auto-connect' ? '#173b70' : 'white',
-                    }}
-                  >
-                    {t.autoConnectMode}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (mode !== 'semantic-destinations') {
-                        handleStartSemanticDestinations();
-                      }
-                    }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background:
-                        mode === 'semantic-destinations' ? 'white' : 'transparent',
-                      color:
-                        mode === 'semantic-destinations' ? '#173b70' : 'white',
-                    }}
-                  >
-                    {t.semanticDestMode}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (mode !== 'edit-points') {
-                        setMode('edit-points');
-                        setClickedPoint(null);
-                        setPointName('');
-                        closeEditPointPanel();
-                      }
-                    }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background: mode === 'edit-points' ? 'white' : 'transparent',
-                      color: mode === 'edit-points' ? '#173b70' : 'white',
-                    }}
-                  >
-                    {t.editPointsMode}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSyncRoomsError('');
-                      setShowSyncRoomsConfirm(true);
-                    }}
-                    style={{
-                      border: 'none',
-                      borderRadius: 999,
-                      padding: '8px 16px',
-                      fontSize: 12.5,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      background: 'transparent',
-                      color: 'white',
-                    }}
-                  >
-                    {t.syncRoomsAction}
-                  </button>
-                </div>
+                  />
+                )}
 
                 {mode === 'connector' && (
                   <div
@@ -8900,59 +9564,38 @@ const AdminMapScreen = () => {
                 )}
 
                 {/* Edit Route Points mode — detail panel for the
-                    currently-selected existing point. Fixed position
-                    (not draggable, unlike the other floating tool
-                    panels) — a deliberate scope reduction: it still
-                    covers every required action (Move Point, Edit Name,
-                    Edit Point Type, inspect connected edges/linked
-                    Room/linked vertical connector, Delete with
-                    confirmation) without touching the shared
-                    floating-panel drag/position state machine the other
-                    modes rely on. */}
-                {mode === 'edit-points' && editPointTarget && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 18,
-                      insetInlineEnd: 18,
-                      width: 300,
-                      maxHeight: 'calc(100% - 36px)',
-                      overflowY: 'auto',
-                      background: 'white',
-                      color: '#173b70',
-                      borderRadius: 16,
-                      boxShadow: '0 8px 28px rgba(20,55,105,0.28)',
-                      padding: 16,
-                      fontSize: 13,
-                      zIndex: 20,
-                    }}
+                    currently-selected existing point. Now a real
+                    FloatingToolPanel like every other map-workspace
+                    panel: draggable, collapsible, and raised to the
+                    front on click. Its own position lives under its own
+                    localStorage key (MAP_PANEL_IDS.editPoint) — it does
+                    NOT share the `panelPosition` state the Add Point /
+                    Draw / Test Route panels use. Every action it offered
+                    before (Move Point, Edit Name, Edit Point Type,
+                    inspect connected edges / linked Room / linked
+                    vertical connector, Delete with confirmation) is
+                    unchanged; the old × close button is now the footer's
+                    Close. */}
+                {mode === 'edit-points' &&
+                  editPointTarget &&
+                  mapPanels[MAP_PANEL_IDS.editPoint]?.position && (
+                  <FloatingToolPanel
+                    title={t.editPointsPanelTitle}
+                    {...buildMapPanelProps(MAP_PANEL_IDS.editPoint)}
+                    footer={
+                      <div className="adm-form-actions">
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-secondary"
+                          onClick={closeEditPointPanel}
+                          style={{ flex: 1 }}
+                        >
+                          {t.cancel || 'Close'}
+                        </button>
+                      </div>
+                    }
                   >
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginBottom: 10,
-                      }}
-                    >
-                      <strong style={{ fontSize: 14 }}>{t.editPointsPanelTitle}</strong>
-                      <button
-                        type="button"
-                        onClick={closeEditPointPanel}
-                        aria-label={t.cancel || 'Close'}
-                        style={{
-                          border: 'none',
-                          background: 'transparent',
-                          color: '#173b70',
-                          fontSize: 16,
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          lineHeight: 1,
-                        }}
-                      >
-                        ×
-                      </button>
-                    </div>
+                    <div style={{ color: '#173b70', fontSize: 13 }}>
 
                     {editPointError && (
                       <div
@@ -9155,7 +9798,8 @@ const AdminMapScreen = () => {
                         </div>
                       )}
                     </div>
-                  </div>
+                    </div>
+                  </FloatingToolPanel>
                 )}
 
                 {/* Auto Connect Destinations to Corridors — scanning
@@ -9183,39 +9827,41 @@ const AdminMapScreen = () => {
                 )}
 
                 {/* Auto Connect Destinations to Corridors — preview review
-                    panel (Section 8). A fixed right-side panel, not a
-                    blocking modal, so the map + temporary overlay lines
-                    above stay visible while reviewing. Only rendered
-                    during 'preview' (the 'confirming'/'result' modals
-                    below take over from there). */}
-                {mode === 'auto-connect' && autoConnectPhase === 'preview' && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 20,
-                      [isRTL ? 'left' : 'right']: 20,
-                      bottom: 20,
-                      width: 'min(380px, 92vw)',
-                      background: 'white',
-                      borderRadius: 14,
-                      boxShadow: '0 12px 40px rgba(9, 26, 53, 0.35)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      overflow: 'hidden',
-                      zIndex: 30,
-                    }}
-                  >
-                    <div
-                      style={{
-                        padding: '16px 18px',
-                        background: '#173b70',
-                        color: 'white',
-                      }}
-                    >
-                      <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 6 }}>
-                        {t.autoConnectPreviewTitle}
+                    panel (Section 8). A draggable FloatingToolPanel, not
+                    a blocking modal, so the map + temporary overlay lines
+                    above stay visible while reviewing — and now movable,
+                    so it never has to sit on top of the destinations it
+                    is describing. Only rendered during 'preview' (the
+                    'confirming'/'result' modals below take over from
+                    there, and those stay modal). */}
+                {mode === 'auto-connect' &&
+                  autoConnectPhase === 'preview' &&
+                  mapPanels[MAP_PANEL_IDS.autoConnectPreview]?.position && (
+                  <FloatingToolPanel
+                    title={t.autoConnectPreviewTitle}
+                    {...buildMapPanelProps(MAP_PANEL_IDS.autoConnectPreview)}
+                    footer={
+                      <div className="adm-form-actions">
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-secondary"
+                          onClick={handleCancelAutoConnect}
+                          style={{ flex: 1 }}
+                        >
+                          {t.cancel}
+                        </button>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-primary"
+                          onClick={handleOpenAutoConnectConfirm}
+                          style={{ flex: 1 }}
+                        >
+                          {t.autoConnectReviewComplete}
+                        </button>
                       </div>
-
+                    }
+                  >
+                    <div className="qr-map-panel-summary">
                       {activeMap?.mapGroupId && (
                         <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
                           <button
@@ -9364,7 +10010,7 @@ const AdminMapScreen = () => {
                       </div>
                     )}
 
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '8px 14px' }}>
+                    <div>
                       {autoConnectProposals.length === 0 && (
                         <div style={{ fontSize: 12.5, color: '#4a6a8f', padding: '12px 4px' }}>
                           {t.autoConnectNothingToReview}
@@ -9559,32 +10205,7 @@ const AdminMapScreen = () => {
                       })}
                     </div>
 
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: 8,
-                        padding: '12px 18px',
-                        borderTop: '1px solid #e3e9f2',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className="adm-btn adm-btn-secondary"
-                        onClick={handleCancelAutoConnect}
-                        style={{ flex: 1 }}
-                      >
-                        {t.cancel}
-                      </button>
-                      <button
-                        type="button"
-                        className="adm-btn adm-btn-primary"
-                        onClick={handleOpenAutoConnectConfirm}
-                        style={{ flex: 1 }}
-                      >
-                        {t.autoConnectReviewComplete}
-                      </button>
-                    </div>
-                  </div>
+                  </FloatingToolPanel>
                 )}
 
                 {/* Auto Connect Destinations to Corridors — confirmation
@@ -9786,33 +10407,34 @@ const AdminMapScreen = () => {
 
                 {/* Create Destinations from Approved Analysis — preview
                     review panel. */}
-                {mode === 'semantic-destinations' && semanticDestPhase === 'preview' && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 20,
-                      [isRTL ? 'left' : 'right']: 20,
-                      bottom: 20,
-                      width: 'min(380px, 92vw)',
-                      background: 'white',
-                      borderRadius: 14,
-                      boxShadow: '0 10px 30px rgba(9, 26, 53, 0.25)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      overflow: 'hidden',
-                      zIndex: 10010,
-                    }}
-                  >
-                    <div
-                      style={{
-                        padding: '14px 18px',
-                        background: '#173b70',
-                        color: 'white',
-                      }}
-                    >
-                      <div style={{ fontSize: 14, fontWeight: 700 }}>
-                        {t.semanticDestPreviewTitle}
+                {mode === 'semantic-destinations' &&
+                  semanticDestPhase === 'preview' &&
+                  mapPanels[MAP_PANEL_IDS.semanticDestPreview]?.position && (
+                  <FloatingToolPanel
+                    title={t.semanticDestPreviewTitle}
+                    {...buildMapPanelProps(MAP_PANEL_IDS.semanticDestPreview)}
+                    footer={
+                      <div className="adm-form-actions">
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-secondary"
+                          onClick={handleCancelSemanticDestinations}
+                          style={{ flex: 1 }}
+                        >
+                          {t.cancel}
+                        </button>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-primary"
+                          onClick={handleOpenSemanticDestConfirm}
+                          style={{ flex: 1 }}
+                        >
+                          {t.autoConnectReviewComplete}
+                        </button>
                       </div>
+                    }
+                  >
+                    <div className="qr-map-panel-summary">
                       {semanticDestSummary && (
                         <div style={{ fontSize: 11.5, marginTop: 6, lineHeight: 1.7, opacity: 0.9 }}>
                           <div>{t.semanticDestScannedCount(semanticDestSummary.scanned)}</div>
@@ -9895,7 +10517,7 @@ const AdminMapScreen = () => {
                       </div>
                     )}
 
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '8px 14px' }}>
+                    <div>
                       {semanticDestProposals.length === 0 && (
                         <div style={{ fontSize: 12.5, color: '#4a6a8f', padding: '12px 4px' }}>
                           {t.semanticDestNothingToReview}
@@ -10066,32 +10688,7 @@ const AdminMapScreen = () => {
                       ))}
                     </div>
 
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: 8,
-                        padding: '12px 18px',
-                        borderTop: '1px solid #e3e9f2',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className="adm-btn adm-btn-secondary"
-                        onClick={handleCancelSemanticDestinations}
-                        style={{ flex: 1 }}
-                      >
-                        {t.cancel}
-                      </button>
-                      <button
-                        type="button"
-                        className="adm-btn adm-btn-primary"
-                        onClick={handleOpenSemanticDestConfirm}
-                        style={{ flex: 1 }}
-                      >
-                        {t.autoConnectReviewComplete}
-                      </button>
-                    </div>
-                  </div>
+                  </FloatingToolPanel>
                 )}
 
                 {/* Create Destinations from Approved Analysis —
@@ -10346,6 +10943,12 @@ const AdminMapScreen = () => {
                         : null;
                       const progress = computeBatchProgress(semanticBatchQueue, semanticBatchStatuses);
                       const canGoNext = activeStatus === 'placed' || activeStatus === 'rejected';
+                      const autoPlacedCount = semanticDestProposals.filter(
+                        (proposal) => proposal.autoPlaced,
+                      ).length;
+                      const autoPlacementReviewList = buildAutoPlacementReviewList(
+                        semanticAutoPlacement?.proposals,
+                      );
 
                       return (
                         <FloatingToolPanel
@@ -10443,6 +11046,49 @@ const AdminMapScreen = () => {
                                 </div>
                               )}
 
+                              {/* Positioned from a label PRINTED on this
+                                  map, then wall- and line-of-sight-checked
+                                  by the server. Never door detection: no
+                                  door, opening or room outline is detected
+                                  anywhere in this flow. Shown prominently
+                                  because the admin must be able to tell an
+                                  automatic position from one they clicked,
+                                  and can move or reject it either way. */}
+                              {activeProposal.autoPlaced && (
+                                <div
+                                  style={{
+                                    marginTop: 10,
+                                    padding: 8,
+                                    borderRadius: 8,
+                                    fontSize: 11.5,
+                                    color: '#1b4d8f',
+                                    background: '#eaf2fd',
+                                    border: '1px solid #c5daf5',
+                                  }}
+                                >
+                                  <div style={{ fontWeight: 700 }}>
+                                    {t.semanticAutoPlacedBadge}
+                                  </div>
+                                  {activeProposal.autoPlacement?.matchedLabel && (
+                                    <div style={{ marginTop: 3 }}>
+                                      {t.semanticAutoPlacedDetail(
+                                        activeProposal.autoPlacement.matchedLabel,
+                                      )}
+                                    </div>
+                                  )}
+                                  {activeProposal.autoPlacement?.matchedGraphElement?.name && (
+                                    <div style={{ marginTop: 3 }}>
+                                      {t.semanticAutoPlacedConnects(
+                                        activeProposal.autoPlacement.matchedGraphElement.name,
+                                      )}
+                                    </div>
+                                  )}
+                                  <div style={{ marginTop: 3, color: '#4a6a8f' }}>
+                                    {t.semanticAutoPlacedCheckHint}
+                                  </div>
+                                </div>
+                              )}
+
                               <div
                                 style={{
                                   marginTop: 10,
@@ -10481,6 +11127,45 @@ const AdminMapScreen = () => {
                                 <div>{t.semanticBatchProgressRejected(progress.rejected)}</div>
                               </div>
 
+                              {/* What the map's labels could and could not
+                                  answer for. The refusals are named, not
+                                  just counted — "5 rooms could not be
+                                  placed" is not something an admin can
+                                  act on. */}
+                              {autoPlacedCount > 0 && (
+                                <div
+                                  style={{
+                                    marginTop: 10,
+                                    fontSize: 11,
+                                    color: '#4a6a8f',
+                                    lineHeight: 1.7,
+                                    borderTop: '1px solid #e3e9f2',
+                                    paddingTop: 10,
+                                  }}
+                                >
+                                  <div>
+                                    {t.semanticAutoPlacedSummary(
+                                      autoPlacedCount,
+                                      semanticBatchQueue.length,
+                                    )}
+                                  </div>
+                                  {autoPlacementReviewList.length > 0 && (
+                                    <>
+                                      <div style={{ marginTop: 6, fontWeight: 600 }}>
+                                        {t.semanticAutoPlacedNeedsClick}
+                                      </div>
+                                      <ul style={{ margin: '4px 0 0', paddingInlineStart: 16 }}>
+                                        {autoPlacementReviewList.map((item) => (
+                                          <li key={item.semanticItemId}>
+                                            {item.name} — {describeAutoPlacementStatus(item.status)}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+
                               {canGoNext && (
                                 <div style={{ marginTop: 8, fontSize: 10.5, color: '#8ba0bd' }}>
                                   {t.semanticBatchEnterHint}
@@ -10497,30 +11182,63 @@ const AdminMapScreen = () => {
                     })()
                   )}
 
+                {navBuildOpen && mapPanels[MAP_PANEL_IDS.navBuild]?.position && (
+                  <NavigationBuildPreviewPanel
+                    result={navBuildResult}
+                    loading={navBuildLoading}
+                    error={navBuildError}
+                    layers={navBuildLayers}
+                    onToggleLayer={handleToggleNavBuildLayer}
+                    onRun={handleRunNavBuildPreview}
+                    onClose={handleCloseNavBuild}
+                    strings={t}
+                    panelProps={buildMapPanelProps(MAP_PANEL_IDS.navBuild)}
+                  />
+                )}
+
                 {/* Fast batch destination placement — Section 5: final
                     review screen, opened automatically once every queue
                     item is placed/rejected (or manually via the panel's
                     review entry once ready). */}
-                {mode === 'semantic-destinations' && semanticBatchActive && semanticBatchReviewOpen && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: 20,
-                      [isRTL ? 'left' : 'right']: 20,
-                      bottom: 20,
-                      width: 'min(420px, 92vw)',
-                      background: 'white',
-                      borderRadius: 14,
-                      boxShadow: '0 10px 30px rgba(9, 26, 53, 0.25)',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      overflow: 'hidden',
-                      zIndex: 10010,
-                    }}
+                {mode === 'semantic-destinations' &&
+                  semanticBatchActive &&
+                  semanticBatchReviewOpen &&
+                  mapPanels[MAP_PANEL_IDS.semanticBatchReview]?.position && (
+                  <FloatingToolPanel
+                    title={t.semanticBatchReviewTitle}
+                    {...buildMapPanelProps(MAP_PANEL_IDS.semanticBatchReview)}
+                    footer={
+                      <div className="adm-form-actions" style={{ flexWrap: 'wrap', gap: 8 }}>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-secondary"
+                          onClick={() => setSemanticBatchReviewOpen(false)}
+                          style={{ flex: 1 }}
+                        >
+                          {t.semanticBatchBackToPlacement}
+                        </button>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-secondary"
+                          onClick={handleRequestExitSemanticBatch}
+                          style={{ flex: 1 }}
+                        >
+                          {t.semanticBatchExit}
+                        </button>
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-primary"
+                          disabled={!isBatchReadyToSave(semanticBatchQueue, semanticBatchStatuses)}
+                          onClick={handleOpenSemanticBatchSaveConfirm}
+                          style={{ flex: 1 }}
+                        >
+                          {t.semanticBatchSaveAll}
+                        </button>
+                      </div>
+                    }
                   >
-                    <div style={{ padding: '14px 18px', background: '#173b70', color: 'white' }}>
-                      <div style={{ fontSize: 14, fontWeight: 700 }}>{t.semanticBatchReviewTitle}</div>
-                      <div style={{ fontSize: 11.5, marginTop: 6, opacity: 0.9 }}>
+                    <div className="qr-map-panel-summary">
+                      <div style={{ fontSize: 11.5, opacity: 0.9 }}>
                         {(() => {
                           const progress = computeBatchProgress(semanticBatchQueue, semanticBatchStatuses);
                           return t.semanticBatchProgressPlaced(progress.placed, progress.total);
@@ -10534,7 +11252,7 @@ const AdminMapScreen = () => {
                       </div>
                     )}
 
-                    <div style={{ flex: 1, overflowY: 'auto', padding: '8px 14px' }}>
+                    <div>
                       {semanticDestProposals
                         .filter(
                           (proposal) =>
@@ -10623,42 +11341,7 @@ const AdminMapScreen = () => {
                         })}
                     </div>
 
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: 8,
-                        padding: '12px 18px',
-                        borderTop: '1px solid #e3e9f2',
-                        flexWrap: 'wrap',
-                      }}
-                    >
-                      <button
-                        type="button"
-                        className="adm-btn adm-btn-secondary"
-                        onClick={() => setSemanticBatchReviewOpen(false)}
-                        style={{ flex: 1 }}
-                      >
-                        {t.semanticBatchBackToPlacement}
-                      </button>
-                      <button
-                        type="button"
-                        className="adm-btn adm-btn-secondary"
-                        onClick={handleRequestExitSemanticBatch}
-                        style={{ flex: 1 }}
-                      >
-                        {t.semanticBatchExit}
-                      </button>
-                      <button
-                        type="button"
-                        className="adm-btn adm-btn-primary"
-                        disabled={!isBatchReadyToSave(semanticBatchQueue, semanticBatchStatuses)}
-                        onClick={handleOpenSemanticBatchSaveConfirm}
-                        style={{ flex: 1 }}
-                      >
-                        {t.semanticBatchSaveAll}
-                      </button>
-                    </div>
-                  </div>
+                  </FloatingToolPanel>
                 )}
 
                 {/* Fast batch destination placement — Section 6: ONE final

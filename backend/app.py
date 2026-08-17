@@ -25,6 +25,7 @@ from routes.map_groups_routes import (
     router as map_groups_router,
 )
 from routes.map_routes import router as map_router
+from routes.navigation_build_routes import router as navigation_build_router
 from routes.navigation_cleanup_routes import (
     router as navigation_cleanup_router,
 )
@@ -281,6 +282,7 @@ app.include_router(user_admin_router)
 app.include_router(building_router)
 app.include_router(map_router)
 app.include_router(navigation_cleanup_router)
+app.include_router(navigation_build_router)
 app.include_router(map_groups_router)
 app.include_router(room_router)
 app.include_router(route_point_router)

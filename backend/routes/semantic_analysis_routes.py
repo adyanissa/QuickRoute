@@ -49,6 +49,13 @@ from services.semantic_destination_service import (
     preview_semantic_destinations,
     apply_semantic_destinations,
 )
+from schemas.auto_placement_schema import (
+    AutoPlacementPreviewRequest,
+    AutoPlacementPreviewResponse,
+)
+from services.destination_auto_placement_service import (
+    preview_destination_auto_placement,
+)
 
 
 router = APIRouter(tags=["Semantic Map Analysis"])
@@ -735,3 +742,46 @@ async def apply_semantic_analysis_destinations(
         all_or_nothing=request.all_or_nothing,
     )
     return SemanticDestinationApplyResult(**result)
+
+
+@router.post(
+    "/api/maps/{map_id}/semantic-analysis/destinations/auto-place/preview",
+    response_model=AutoPlacementPreviewResponse,
+)
+async def preview_semantic_destination_auto_placement(
+    map_id: str,
+    request: AutoPlacementPreviewRequest = Body(
+        default_factory=AutoPlacementPreviewRequest
+    ),
+    admin: User = Depends(require_any_admin),
+):
+    """
+    Suggests a map location for each accepted destination that has none,
+    derived from the text printed on the map itself plus the existing wall
+    mask — never from the AI, which is never asked for coordinates.
+
+    READ-ONLY, deliberately and completely: no Room, RoutePoint, RouteEdge
+    or LocationCode is created or modified here. The suggestions are
+    applied, if the admin accepts them, through the existing
+    .../destinations/apply endpoint, so auto-connect, room sync and QR
+    issuance all keep running on the single graph-write path they already
+    use.
+
+    This is NOT door detection: no door, opening, room polygon or routing
+    topology is detected or invented anywhere in this flow. Anything that
+    cannot be proven safe comes back as needs_arrival_confirmation for the
+    admin to place by hand.
+    """
+
+    map_item = await Map.get(PydanticObjectId(map_id))
+    if not map_item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Map not found")
+
+    _require_map_scope(admin, map_item)
+
+    result = await preview_destination_auto_placement(
+        map_id=map_id,
+        item_external_ids=request.item_external_ids,
+        lang=request.lang,
+    )
+    return AutoPlacementPreviewResponse(**result)

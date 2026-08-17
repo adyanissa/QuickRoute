@@ -1228,6 +1228,197 @@ Every external ID must be unique.
 Every referenced ID must exist as a complete object in the correct top-level array.
 
 ==================================================
+AA. SPACE CLASSIFICATION: ROOM VERSUS CIRCULATION
+==================================================
+
+This section governs how a visible space is classified. It does not add
+any output field. It decides which existing array an entity belongs in:
+
+- a functional destination space goes in places[]
+- a restroom, shower, or equipment/service fixture goes in facilities[]
+- a shared circulation space goes in public_areas[] with an area_type
+
+AA.1 WHAT A ROOM IS
+
+A room is a function-specific enclosed or semi-enclosed interior space.
+
+Typical rooms include office, meeting room, conference room, classroom,
+lecture hall, laboratory, storage, archive, telecom room, server room,
+electrical room, mechanical room, technical room, service room, security
+room, control room, restroom, shower room, changing room, examination
+room, consultation room, treatment room, patient room, kitchen, staff
+room, break room, prayer room, reception room, and closet.
+
+A room normally shows these properties:
+
+- bounded by walls or strong architectural boundaries on most sides
+- entered through one or more doorways or openings
+- intended for a specific function or occupancy
+- often contains furniture, equipment, fixtures, or a room label
+- is not mainly a channel for moving between many other spaces
+
+AA.2 A ROOM DOES NOT BECOME A CORRIDOR
+
+A space that is basically an enclosed functional space is a ROOM even
+when it is large or visually open inside.
+
+A room does not become a corridor merely because:
+
+- it is empty
+- it is large
+- it contains chairs, tables, or desks
+- it has more than one door
+- it has a wide area of open floor
+- it opens onto a corridor
+
+AA.3 WHAT A CORRIDOR IS
+
+A corridor, hallway, or primary circulation space is a space whose main
+purpose is movement between other spaces.
+
+A corridor normally shows these properties:
+
+- an elongated or continuous circulation path
+- it connects multiple rooms or destinations
+- it collects the doors of many rooms
+- it links entrances, lobbies, stairs, elevators, or intersections
+- it is shared movement space rather than a destination in itself
+- it holds fewer room-specific contents than the spaces around it
+
+Spaces that should be treated as circulation include main hallways, side
+hallways that clearly continue circulation, connectors between wings,
+junction areas where hallways meet, and a lobby or vestibule only when it
+genuinely functions as shared circulation rather than as an enclosed
+functional room.
+
+AA.4 WHAT IS NOT A CORRIDOR
+
+Never classify the following as corridor or circulation:
+
+- the interior of any room
+- open floor inside a meeting room, classroom, or open-plan office
+- storage areas
+- mechanical, electrical, telecom, or service rooms
+- restroom interiors and stall areas
+- shafts and utility zones
+- small alcoves and niches
+- furniture clearance space
+- page margins and sheet whitespace
+- title blocks, legends, notes, schedules, and drawing metadata
+- exterior whitespace around the building footprint
+- voids and areas that are not walkable circulation
+
+A space must never be classified as corridor merely because it is white,
+open, or empty.
+
+AA.5 DECISION PROCEDURE
+
+When a space could be either a room or a corridor, decide in this order:
+
+1. Is this space mainly a destination or functional space?
+   If yes, it is a ROOM.
+
+2. Is this space mainly a shared path used to move between multiple rooms
+   or major circulation elements?
+   If yes, it is CIRCULATION.
+
+3. Is the space bounded by walls and labelled with a functional name such
+   as Meeting Room, Office, Storage, Telecom, Mechanical, Electrical,
+   Shower, or Restroom?
+   Then strongly prefer ROOM.
+
+4. Does the space lie in the middle of a chain of doors and clearly act as
+   the common passage between them?
+   Then strongly prefer CIRCULATION.
+
+5. If it remains ambiguous, do not force it into circulation.
+
+AA.6 FOUR-WALL UNDERSTANDING
+
+A space enclosed by four walls, or nearly enclosed by walls with a doorway
+opening, is normally a ROOM.
+
+A real corridor is normally not a simple four-wall enclosed box. It is
+normally part of a connected circulation network.
+
+So a boxed enclosed area carrying a room label is a ROOM, and a long
+connected shared pathway bordered by rooms is CIRCULATION.
+
+AA.7 DOORS AND THRESHOLDS
+
+The doorway or opening is the transition between a room and a corridor.
+
+The room is not the corridor. The corridor is not the room.
+
+When a room opens onto a corridor, the transition is at the doorway
+threshold only. Never reinterpret a room interior as corridor because the
+room opens onto one.
+
+AA.8 CONSERVATIVE BIAS
+
+A false corridor is worse than a missing corridor.
+
+When circulation is uncertain, prefer the honest options the schema
+already provides rather than a confident claim:
+
+- set status to probable or uncertain instead of confirmed
+- lower confidence
+- add a review_items[] entry describing the ambiguity
+
+Do not omit a clearly visible room in order to be cautious. This bias
+applies to circulation claims, not to rooms.
+
+==================================================
+AB. CROPPED AND PARTIAL FLOOR PLANS
+==================================================
+
+A supplied image or page may already be cropped to the building content,
+and page furniture may or may not still be visible.
+
+Apply these rules either way:
+
+1. Ignore page furniture when it is visible, including title blocks,
+   legends, schedules, note columns, revision tables, dimension-only
+   strips, scale bars, north arrows, and symbol keys. None of these are
+   spaces. Never emit them as places, facilities, or public_areas.
+
+2. Focus on the actual architectural floor content.
+
+3. Never infer a corridor from whitespace alone.
+
+4. Treat the cluster of labelled rooms as the strongest available evidence
+   of where the true building content is on the sheet.
+
+5. Do not extrapolate beyond the crop. If circulation clearly continues
+   past the edge of the supplied image, describe only what is visible and
+   record the uncertainty with a review_items[] entry rather than
+   inventing the continuation.
+
+6. A crop does not change any identifier, category, or naming rule. It
+   only limits what is visible.
+
+==================================================
+AC. WHITESPACE AND NON-SPACE REGIONS
+==================================================
+
+Blank or open regions are not automatically spaces.
+
+Do not emit any entity for:
+
+- exterior whitespace around the building footprint
+- page margins and unused sheet area
+- the interior of a title block, legend, or notes panel
+- gaps between drawings on a multi-drawing sheet
+- voids, shafts, and open-to-below areas that are not walkable
+
+An open-to-below area may be recorded as a public_area with area_type
+open_to_below only when it is visibly labelled as such. It is never
+walkable circulation.
+
+If a region is genuinely unreadable, record it in unreadable_areas[]
+rather than guessing what kind of space it is.
+
+==================================================
 1. EXACT TOP-LEVEL STRUCTURE
 ==================================================
 

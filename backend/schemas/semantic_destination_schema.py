@@ -29,7 +29,19 @@ from pydantic import BaseModel, Field
 
 EntityKind = Literal["place", "facility"]
 ProposedAction = Literal["create", "update", "reuse", "skip"]
-PlacementSource = Literal["existing_route_point", "manual", "needs_manual_placement"]
+# "map_label" is the ONLY value that carries geometry the admin did not
+# click, and it does not weaken the rule above: it still comes from the
+# map image itself, never from the AI. It means "a text label printed on
+# this drawing was matched to this item, and a position derived from that
+# label's bounding box passed the wall and line-of-sight checks" — see
+# services/destination_auto_placement_service. It is not door detection,
+# and no door, opening, polygon or topology is implied by it.
+PlacementSource = Literal[
+    "existing_route_point",
+    "manual",
+    "map_label",
+    "needs_manual_placement",
+]
 
 
 class SemanticDestinationPreviewRequest(BaseModel):

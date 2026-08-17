@@ -224,6 +224,31 @@ export async function previewSemanticDestinations(mapId, { itemExternalIds = nul
   });
 }
 
+// Automatic placement preview — asks the server whether the map's OWN
+// printed labels justify a location for each accepted destination that
+// has none. READ-ONLY: it creates and modifies nothing, and anything it
+// cannot prove safe comes back with a status other than
+// 'auto_connectable' for the admin to place by hand. The suggestions it
+// returns are applied through applySemanticDestinations below, exactly
+// like an admin's own map click — there is no separate apply path.
+export async function previewDestinationAutoPlacement(
+  mapId,
+  { itemExternalIds = null, lang = 'en' } = {},
+) {
+  return callRealEndpointOrExplainUnavailable(async () => {
+    return apiRequest(
+      `/api/maps/${mapId}/semantic-analysis/destinations/auto-place/preview`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          item_external_ids: itemExternalIds,
+          lang,
+        }),
+      },
+    );
+  });
+}
+
 // applyOptions: { publicationId, accepted: [{ semantic_item_id, entity_kind,
 // x, y, parent_semantic_item_id, allow_transit_through }], allOrNothing }
 // allOrNothing (fast batch placement's single "Save All Destinations"):

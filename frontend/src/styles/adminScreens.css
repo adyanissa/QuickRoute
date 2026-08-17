@@ -1971,3 +1971,137 @@
 [dir="rtl"] .adm-table th {
   text-align: right;
 }
+
+/* ── Full-map "Navigation Tools" toolbox ───────────────────────────────
+   Replaces the fixed horizontal pill that used to run across the top of
+   the floor plan. Purely presentational; it reuses .tool-panel for the
+   window chrome (drag handle, collapse, clamping) and only adds the
+   grouped button list inside it. */
+
+.qr-map-toolbox .tool-panel-body {
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.qr-toolbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.qr-toolbox-group + .qr-toolbox-group {
+  padding-top: 10px;
+  border-top: 1px solid #e8eef7;
+}
+
+.qr-toolbox-group-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8ba0bd;
+  padding: 0 2px;
+}
+
+.qr-toolbox-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.qr-toolbox-button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #2c4a73;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  text-align: start;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.qr-toolbox-button:hover {
+  background: #f1f6fd;
+  border-color: #dbe6f5;
+  color: #173b70;
+}
+
+.qr-toolbox-button:focus-visible {
+  outline: 2px solid #2d6cdf;
+  outline-offset: 1px;
+}
+
+.qr-toolbox-button.is-active {
+  background: #173b70;
+  border-color: #173b70;
+  color: #ffffff;
+}
+
+.qr-toolbox-button.is-active:hover {
+  background: #12305c;
+  color: #ffffff;
+}
+
+/* Two short lines instead of one very long one, so a label like
+   "Create Destinations from Analysis" never makes the button tall or
+   forces the panel wider. The full original wording stays in the
+   tooltip. */
+.qr-toolbox-button-label {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (max-width: 720px) {
+  .qr-map-toolbox .tool-panel-body {
+    padding: 8px 10px 10px;
+  }
+
+  .qr-toolbox-button {
+    padding: 8px;
+    font-size: 12px;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Converted map-workspace panels (Preview Destinations, Auto Connect
+   preview, fast-batch review, Automatic Navigation Build, Edit Route
+   Point). These used to be fixed absolutely-positioned boxes with their
+   own dark title bar; they now render through FloatingToolPanel, which
+   supplies the header, drag handle, dock/collapse controls and the
+   scrollable body.
+
+   What is left here is the summary strip that used to BE that dark bar:
+   the counts and scope switches still want to read as status rather than
+   as form content, so they keep the dark treatment — just as a card
+   inside the body instead of a second header above it. */
+
+.qr-map-panel-summary {
+  background: #173b70;
+  color: white;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+/* Nothing to summarise (no scope switcher, no counts yet) — collapse the
+   card entirely rather than leaving an empty dark block at the top of
+   the panel. */
+.qr-map-panel-summary:empty {
+  display: none;
+}

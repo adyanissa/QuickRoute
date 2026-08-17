@@ -42,10 +42,19 @@ export function buildBatchQueueItemIds(proposals) {
 // pre-rejected (Section 1: "must not require clicking Accept separately
 // for every destination", but that is not the same as silently
 // pre-accepting a location no admin ever clicked).
-export function initialBatchStatuses(queueItemIds) {
+//
+// `autoPlacedItemIds` is the one exception, and it is not a silent one:
+// those items have a location suggested by the map's OWN printed labels,
+// already checked against the wall mask and line of sight by the server
+// (see backend/services/destination_auto_placement_service.py). They
+// start 'placed' so the admin only has to visit the ones the drawing
+// could not answer for — but they stay in the queue, keep their marker,
+// and can be moved or rejected exactly like any other item.
+export function initialBatchStatuses(queueItemIds, autoPlacedItemIds) {
+  const autoPlaced = new Set(autoPlacedItemIds || []);
   const statuses = {};
   (queueItemIds || []).forEach((id) => {
-    statuses[id] = 'pending';
+    statuses[id] = autoPlaced.has(id) ? 'placed' : 'pending';
   });
   return statuses;
 }
@@ -138,6 +147,99 @@ export function buildBatchAcceptedPayload(proposals) {
           ? proposal.nested_parent_candidate.semantic_item_id
           : null,
       allow_transit_through: Boolean(proposal.allowTransitThrough),
+    }));
+}
+
+// ---------------------------------------------------------------------
+// Seeding the queue from the server's automatic-placement preview
+// (POST .../destinations/auto-place/preview).
+//
+// The server suggests a location for a room by matching its name to a
+// label PRINTED on the map and checking positions near that label against
+// the wall mask and line of sight. It is NOT door detection and it invents
+// nothing: anything it cannot prove comes back with a status other than
+// 'auto_connectable' and stays a manual click.
+//
+// Nothing here changes what gets SENT: a seeded item is still
+// placement_source 'needs_manual_placement' as far as the payload builder
+// is concerned, so it is still only included once x/y are actually set —
+// there is no path by which an unplaced item slips into a save.
+// ---------------------------------------------------------------------
+
+// itemId -> suggestion, for the auto-placed items only. A proposal
+// missing a usable coordinate is ignored no matter what status it claims.
+export function indexAutoPlacementSuggestions(autoPlacementProposals) {
+  const byItemId = {};
+
+  (autoPlacementProposals || []).forEach((proposal) => {
+    if (!proposal || proposal.status !== 'auto_connectable') return;
+
+    const point = proposal.suggested_arrival_point || proposal.suggested_room_point;
+    if (!Array.isArray(point) || point.length < 2) return;
+
+    const [x, y] = point;
+    if (typeof x !== 'number' || typeof y !== 'number') return;
+
+    byItemId[proposal.semantic_item_id] = {
+      x,
+      y,
+      geometryConfidence: proposal.geometry_confidence,
+      semanticMatchConfidence: proposal.semantic_match_confidence,
+      matchedLabel: proposal.diagnostics ? proposal.diagnostics.matched_label : null,
+      matchedGraphElement: proposal.matched_graph_element || null,
+      diagnostics: proposal.diagnostics || null,
+    };
+  });
+
+  return byItemId;
+}
+
+// Copies each suggestion onto its proposal as x/y plus an `autoPlacement`
+// record the UI uses for the badge and the "why here?" detail. Never
+// overwrites a coordinate the admin (or an existing linked point) already
+// supplied, and never touches a rejected/excluded proposal.
+export function applyAutoPlacementSuggestions(proposals, suggestionsByItemId) {
+  const suggestions = suggestionsByItemId || {};
+
+  return (proposals || []).map((proposal) => {
+    if (!proposal) return proposal;
+    if (proposal.localStatus === 'rejected' || proposal.localStatus === 'excluded') {
+      return proposal;
+    }
+    if (proposal.placement_source !== 'needs_manual_placement') return proposal;
+    if (proposal.x != null || proposal.y != null) return proposal;
+
+    const suggestion = suggestions[proposal.semantic_item_id];
+    if (!suggestion) return proposal;
+
+    return {
+      ...proposal,
+      x: suggestion.x,
+      y: suggestion.y,
+      autoPlaced: true,
+      autoPlacement: suggestion,
+    };
+  });
+}
+
+// The rooms the drawing could NOT answer for, in the order the server
+// reported them, each with the reason — this is the "still needs one
+// click" list the admin actually works through. Items already carrying a
+// location are not in it: there is nothing to do for those.
+export function buildAutoPlacementReviewList(autoPlacementProposals) {
+  return (autoPlacementProposals || [])
+    .filter(
+      (proposal) =>
+        proposal &&
+        proposal.status !== 'auto_connectable' &&
+        proposal.status !== undefined &&
+        !(proposal.message || '').includes('already has a map location'),
+    )
+    .map((proposal) => ({
+      semanticItemId: proposal.semantic_item_id,
+      name: proposal.room_name || proposal.semantic_item_id,
+      status: proposal.status,
+      message: proposal.message || null,
     }));
 }
 

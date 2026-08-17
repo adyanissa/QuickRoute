@@ -50,6 +50,17 @@ const FloatingToolPanel = ({
   // unaffected. Defaults to computeSnapPosition's own default (its margin)
   // when omitted, matching the pre-existing plain top-corner dock.
   snapTopOffset,
+  // Stacking order for this panel. Optional and additive: when omitted no
+  // z-index is emitted at all, so the panels that render one-at-a-time
+  // (Add Point / Draw / Vertical Connections / Test Route / batch
+  // placement / the toolbox) keep the exact stacking they had before —
+  // the CSS class's own `z-index: 1`. Only callers that can show several
+  // panels simultaneously pass a number here.
+  zIndex,
+  // Fired on pointer-down anywhere inside the panel. Lets a multi-panel
+  // caller raise the clicked panel to the front. Optional — undefined for
+  // every pre-existing caller, in which case React attaches no handler.
+  onFocusRequest,
   className = '',
 }) => {
   const panelRef = useRef(null);
@@ -301,12 +312,21 @@ const FloatingToolPanel = ({
       // of the fact that the panel and the map image are separate,
       // non-overlapping-in-the-DOM-tree elements to begin with.
       onClick={(event) => event.stopPropagation()}
+      // Capture phase, so a click that lands on a button *inside* the
+      // panel still raises the panel first. This handler only reads the
+      // event — it never calls preventDefault or stopPropagation — so it
+      // cannot interfere with the drag handle's own pointer handlers or
+      // with any control's onClick.
+      onPointerDownCapture={onFocusRequest}
       className={`tool-panel${isCollapsed ? ' tool-panel-collapsed' : ''} ${className}`}
       style={{
         position: 'absolute',
         left: position.x,
         top: position.y,
         width: isCollapsed ? 'auto' : width,
+        // Only emitted when the caller actually asked for one — see the
+        // `zIndex` prop comment above.
+        ...(Number.isFinite(zIndex) ? { zIndex } : {}),
         // Overrides the CSS class's static calc(100vh - 40px) with the
         // real, position-aware limit once the container has been
         // measured. Collapsed panels are just a small pill and never

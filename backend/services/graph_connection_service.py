@@ -174,6 +174,71 @@ def has_clear_line(
     return blocked_fraction <= MAX_BLOCKED_SAMPLE_FRACTION
 
 
+def wall_mask_available(map_id: str) -> bool:
+    """
+    Whether wall detection can actually run for this map right now.
+
+    has_clear_line() deliberately FAILS OPEN — a missing source image
+    means "nothing to reject this connection with", which is right for an
+    admin who is placing points by hand and can see the map. It is exactly
+    wrong for automatic placement, where nobody is looking. Callers that
+    place points without a human in the loop must check this first and
+    refuse when it is False, rather than reading has_clear_line()'s True
+    as evidence of a clear path.
+    """
+
+    return _get_wall_mask(map_id) is not None
+
+
+def is_wall_pixel(
+    map_id: str,
+    x: float,
+    y: float,
+    radius_px: float = 0.0,
+) -> Optional[bool]:
+    """
+    Is the point (x, y) — in full-resolution source-image pixels — on or
+    within radius_px of a detected wall?
+
+    Returns None when it cannot be determined (no source image, so no wall
+    mask). None is NOT False: automatic callers must treat it as a refusal.
+    A point outside the image is True, matching how has_clear_line() counts
+    out-of-bounds samples as blocked.
+
+    Note the mask is built on a downscaled copy of the source image (see
+    _get_wall_mask), so radius_px is converted into mask pixels and always
+    covers at least the single pixel the point lands on.
+    """
+
+    cached = _get_wall_mask(map_id)
+
+    if cached is None:
+        return None
+
+    wall_mask, downscale = cached
+    height, width = wall_mask.shape[:2]
+
+    mx = int(round(float(x) * downscale))
+    my = int(round(float(y) * downscale))
+
+    if not (0 <= mx < width and 0 <= my < height):
+        return True
+
+    mask_radius = int(math.floor(max(0.0, float(radius_px)) * downscale))
+
+    if mask_radius <= 0:
+        return bool(wall_mask[my, mx] > 0)
+
+    x_start = max(0, mx - mask_radius)
+    x_end = min(width, mx + mask_radius + 1)
+    y_start = max(0, my - mask_radius)
+    y_end = min(height, my + mask_radius + 1)
+
+    window = wall_mask[y_start:y_end, x_start:x_end]
+
+    return bool(np.any(window > 0))
+
+
 async def _points_already_connected(
     map_id: str, point_a_id: str, point_b_id: str
 ) -> bool:

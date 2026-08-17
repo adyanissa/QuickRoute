@@ -1,21 +1,30 @@
 """
-Optional OCR-based name suggestion for map-based destination placement.
+Optional OCR for map text. Two independent, non-overlapping uses:
 
-This is a *suggestion only* — nothing in this module ever writes to the
-database, and it is never invoked as part of saving a Room (see
-room_routes.py, which has no dependency on this file at all). The admin
-always confirms or edits the suggested text before anything is saved
-(AdminRoomsScreen.jsx). If OCR isn't available in the current environment
+1. suggest_destination_name(map_id, x, y) — a *suggestion only* for
+   map-based destination placement. Nothing in this module ever writes to
+   the database, and it is never invoked as part of saving a Room (see
+   room_routes.py, which has no dependency on this file at all). The admin
+   always confirms or edits the suggested text before anything is saved
+   (AdminRoomsScreen.jsx).
+
+2. extract_word_boxes(source_path) — every word on the WHOLE image, with
+   its real bounding box, for services/map_label_extraction_service. This
+   one is about geometry, not text quality: it must never crop, pad,
+   rotate or rescale the image, because its callers turn the boxes it
+   returns straight into source-image coordinates.
+
+Both are best effort. If OCR isn't available in the current environment
 (no system `tesseract` binary — pytesseract is a thin Python wrapper
-around it, not a bundled OCR engine) or fails for any reason, this
-returns an "unavailable" result instead of raising, so the map-based
-placement flow always still works with a manually typed name — exactly
-the fallback the product rule requires.
+around it, not a bundled OCR engine) or fails for any reason, they report
+that instead of raising, so every flow that uses them still works without
+OCR — exactly the fallback the product rule requires.
 """
 
 from __future__ import annotations
 
-from typing import NamedTuple, Optional
+from pathlib import Path
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 import cv2
 
@@ -72,6 +81,124 @@ def is_ocr_available() -> bool:
         return True
     except Exception:
         return False
+
+
+def extract_word_boxes(
+    source_path: Path,
+) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    """
+    Every legible word on one map image, with its bounding box in that
+    image's OWN pixels.
+
+    Returns (words, error_reason). Never raises — an unreadable file, a
+    missing OCR engine or a tesseract crash all come back as
+    ([], "<human-readable reason>") so the caller can report the failure
+    instead of handling an exception. An image with no legible text is
+    ([], None): that is a successful read that found nothing.
+
+    Each word:
+        {
+          "line_key":   (block, paragraph, line) as reported by tesseract,
+          "text":       str,
+          "x0","y0","x1","y1": float, image pixels, top-left origin,
+          "confidence": float in 0.0-1.0,
+        }
+
+    GEOMETRY CONTRACT — the reason this exists separately from
+    suggest_destination_name, which crops a 260x160 window and upscales it
+    without recording the factor:
+
+      * the image is passed to tesseract at its native size,
+      * no crop, no resize, no rotation, no padding,
+      * only a grayscale conversion, which moves nothing.
+
+    So a returned box needs no back-transform: it is already in the same
+    space as Map.source_width/source_height, RoutePoint.x/y and the wall
+    mask in services/graph_connection_service.
+
+    Page segmentation is left at tesseract's default rather than sparse
+    mode. Sparse mode finds more isolated text on a floor plan but reports
+    almost every word as its own line, and real line grouping is what lets
+    the caller join "OFFICE" + "428" into one label without guessing.
+    Missing a label costs one admin click; inventing one by fusing two
+    rooms' text would place a room in the wrong place.
+    """
+
+    if not is_ocr_available():
+        return [], "OCR engine (tesseract) is not installed on this server."
+
+    try:
+        if not Path(source_path).exists():
+            return [], "This map has no processed source image to read text from."
+    except Exception as error:  # noqa: BLE001 - path may be anything
+        return [], f"The map's source image could not be located: {error}"
+
+    image = cv2.imread(str(source_path), cv2.IMREAD_GRAYSCALE)
+
+    if image is None:
+        return [], "The map's source image could not be read."
+
+    try:
+        data = pytesseract.image_to_data(
+            image, output_type=pytesseract.Output.DICT
+        )
+    except TesseractNotFoundError:
+        return [], "OCR engine (tesseract) is not installed on this server."
+    except Exception as error:  # noqa: BLE001 - OCR is best-effort
+        return [], f"OCR failed: {error}"
+
+    texts = data.get("text", [])
+    words: List[Dict[str, Any]] = []
+
+    for i, raw_text in enumerate(texts):
+        text = str(raw_text).strip()
+
+        if not text:
+            continue
+
+        try:
+            confidence = float(data["conf"][i])
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+
+        # Tesseract reports -1 for structural rows that carry no word.
+        if confidence < 0:
+            continue
+
+        try:
+            left = float(data["left"][i])
+            top = float(data["top"][i])
+            width = float(data["width"][i])
+            height = float(data["height"][i])
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+
+        if width <= 0 or height <= 0:
+            continue
+
+        def _index(field: str) -> int:
+            try:
+                return int(data[field][i])
+            except (KeyError, IndexError, TypeError, ValueError):
+                return 0
+
+        words.append(
+            {
+                "line_key": (
+                    _index("block_num"),
+                    _index("par_num"),
+                    _index("line_num"),
+                ),
+                "text": text,
+                "x0": left,
+                "y0": top,
+                "x1": left + width,
+                "y1": top + height,
+                "confidence": max(0.0, min(1.0, confidence / 100.0)),
+            }
+        )
+
+    return words, None
 
 
 def suggest_destination_name(

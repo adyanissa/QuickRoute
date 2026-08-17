@@ -13,6 +13,9 @@ import {
   buildBatchDraftStorageKey,
   serializeBatchDraft,
   deserializeBatchDraft,
+  indexAutoPlacementSuggestions,
+  applyAutoPlacementSuggestions,
+  buildAutoPlacementReviewList,
 } from './batchDestinationPlacement.js';
 
 let passed = 0;
@@ -252,6 +255,159 @@ test('deserializeBatchDraft: a missing/corrupted value is treated as "no draft f
   assert.equal(deserializeBatchDraft(''), null);
   assert.equal(deserializeBatchDraft('{not valid json'), null);
   assert.equal(deserializeBatchDraft('"just a string"'), null);
+});
+
+// ── Seeding the queue from the server's automatic-placement preview ─────
+// The server suggests a position from the map's own printed labels. These
+// tests are mostly about what must NOT happen: no unproven suggestion may
+// become a coordinate, and no admin-supplied coordinate may be overwritten.
+
+function autoPlaced(id, x, y, overrides = {}) {
+  return {
+    semantic_item_id: id,
+    status: 'auto_connectable',
+    suggested_room_point: [x, y],
+    suggested_arrival_point: [x, y],
+    geometry_confidence: 0.9,
+    semantic_match_confidence: 1.0,
+    diagnostics: { matched_label: 'OFFICE 263' },
+    matched_graph_element: { route_point_id: 'c1', name: 'Corridor A' },
+    ...overrides,
+  };
+}
+
+test('indexAutoPlacementSuggestions: only auto_connectable proposals with a real coordinate are usable', () => {
+  const index = indexAutoPlacementSuggestions([
+    autoPlaced('p1', 120, 240),
+    { semantic_item_id: 'p2', status: 'needs_arrival_confirmation', suggested_room_point: null },
+    { semantic_item_id: 'p3', status: 'ambiguous_label' },
+    { semantic_item_id: 'p4', status: 'no_label_match' },
+    // Claims success but carries nothing usable — must still be ignored.
+    { semantic_item_id: 'p5', status: 'auto_connectable', suggested_room_point: [null, 3] },
+  ]);
+
+  assert.deepEqual(Object.keys(index), ['p1']);
+  assert.equal(index.p1.x, 120);
+  assert.equal(index.p1.y, 240);
+  assert.equal(index.p1.matchedLabel, 'OFFICE 263');
+});
+
+test('applyAutoPlacementSuggestions: seeds x/y and marks the proposal as auto placed', () => {
+  const [seeded] = applyAutoPlacementSuggestions(
+    [makeProposal({ semantic_item_id: 'p1' })],
+    indexAutoPlacementSuggestions([autoPlaced('p1', 120, 240)]),
+  );
+
+  assert.equal(seeded.x, 120);
+  assert.equal(seeded.y, 240);
+  assert.equal(seeded.autoPlaced, true);
+  assert.equal(seeded.autoPlacement.geometryConfidence, 0.9);
+  // placement_source is untouched, so the payload builder still refuses
+  // to include it unless x/y are genuinely set.
+  assert.equal(seeded.placement_source, 'needs_manual_placement');
+});
+
+test('applyAutoPlacementSuggestions: never overwrites a location the admin already set', () => {
+  const [kept] = applyAutoPlacementSuggestions(
+    [makeProposal({ semantic_item_id: 'p1', x: 10, y: 20 })],
+    indexAutoPlacementSuggestions([autoPlaced('p1', 999, 999)]),
+  );
+
+  assert.equal(kept.x, 10);
+  assert.equal(kept.y, 20);
+  assert.equal(kept.autoPlaced, undefined);
+});
+
+test('applyAutoPlacementSuggestions: leaves rejected, excluded and already-linked proposals alone', () => {
+  const suggestions = indexAutoPlacementSuggestions([
+    autoPlaced('p1', 1, 1),
+    autoPlaced('p2', 2, 2),
+    autoPlaced('p3', 3, 3),
+  ]);
+
+  const result = applyAutoPlacementSuggestions(
+    [
+      makeProposal({ semantic_item_id: 'p1', localStatus: 'rejected' }),
+      makeProposal({ semantic_item_id: 'p2', localStatus: 'excluded' }),
+      makeProposal({ semantic_item_id: 'p3', placement_source: 'existing_route_point' }),
+    ],
+    suggestions,
+  );
+
+  result.forEach((proposal) => {
+    assert.equal(proposal.x, null);
+    assert.equal(proposal.autoPlaced, undefined);
+  });
+});
+
+test('an auto placed item starts "placed" and a manual one still starts "pending"', () => {
+  const statuses = initialBatchStatuses(['p1', 'p2'], ['p1']);
+
+  assert.equal(statuses.p1, 'placed');
+  assert.equal(statuses.p2, 'pending');
+  // The old single-argument call must keep behaving exactly as before.
+  assert.deepEqual(initialBatchStatuses(['p1', 'p2']), { p1: 'pending', p2: 'pending' });
+});
+
+test('seeding most of a batch leaves exactly the unproven rooms to click', () => {
+  const proposals = [
+    makeProposal({ semantic_item_id: 'p1' }),
+    makeProposal({ semantic_item_id: 'p2' }),
+    makeProposal({ semantic_item_id: 'p3' }),
+  ];
+  const autoPlacement = [
+    autoPlaced('p1', 10, 10),
+    autoPlaced('p2', 20, 20),
+    { semantic_item_id: 'p3', status: 'ambiguous_label', message: 'Two labels match.' },
+  ];
+
+  const seeded = applyAutoPlacementSuggestions(
+    proposals,
+    indexAutoPlacementSuggestions(autoPlacement),
+  );
+  const queue = buildBatchQueueItemIds(seeded);
+  const statuses = initialBatchStatuses(
+    queue,
+    Object.keys(indexAutoPlacementSuggestions(autoPlacement)),
+  );
+
+  assert.deepEqual(queue, ['p1', 'p2', 'p3']);
+  assert.equal(computeBatchProgress(queue, statuses).remaining, 1);
+  assert.equal(isBatchReadyToSave(queue, statuses), false);
+
+  // Only the seeded pair may be sent; the ambiguous one has no coordinate.
+  const payload = buildBatchAcceptedPayload(seeded);
+  assert.deepEqual(
+    payload.map((item) => item.semantic_item_id),
+    ['p1', 'p2'],
+  );
+});
+
+test('buildAutoPlacementReviewList: names the rooms still needing a click, with the reason', () => {
+  const list = buildAutoPlacementReviewList([
+    autoPlaced('p1', 10, 10),
+    {
+      semantic_item_id: 'p2',
+      status: 'no_safe_graph_connection',
+      room_name: 'Storage 12',
+      message: 'No clear line to a corridor point.',
+    },
+    {
+      semantic_item_id: 'p3',
+      status: 'needs_arrival_confirmation',
+      room_name: 'Lobby',
+      message: 'This destination already has a map location — it was left exactly as it is.',
+    },
+  ]);
+
+  assert.deepEqual(list, [
+    {
+      semanticItemId: 'p2',
+      name: 'Storage 12',
+      status: 'no_safe_graph_connection',
+      message: 'No clear line to a corridor point.',
+    },
+  ]);
 });
 
 console.log(`\n${passed} passed`);
