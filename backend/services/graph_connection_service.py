@@ -12,6 +12,16 @@ image exists yet (older maps, or maps created without an upload — e.g. via
 the plain JSON create endpoint used by some tests/integrations), the wall
 check is skipped rather than blocking every connection, and candidate
 selection falls back to distance + exclusion rules alone.
+
+Candidate TYPE filtering (Auto Connect accuracy fix): this module
+historically considered every same-map/same-floor active point as a
+connection candidate, with no point_type filter at all. That is right for
+a corridor point being merged into the walkway graph, but wrong for a
+destination — it is exactly what allowed a newly created Room point to be
+silently wired to whatever Room happened to be nearest, producing a
+Room -> Room walkway edge no admin ever reviewed. `target_policy` below
+fixes that, and only that; its default keeps every existing caller's
+behaviour unchanged.
 """
 
 from __future__ import annotations
@@ -24,6 +34,10 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from constants.route_point_types import (
+    DESTINATION_CAPABLE_POINT_TYPES,
+    TRANSIT_CANDIDATE_POINT_TYPES,
+)
 from models.map_model import Map
 from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
@@ -33,6 +47,85 @@ from services.storage_backend import ensure_generated_file_local
 
 DEFAULT_MAX_CANDIDATES = 3
 DEFAULT_MAX_DISTANCE_PX = 600.0
+
+# Which point types a given call is allowed to connect TO.
+#
+#   "any"          every active same-map/same-floor point, exactly as this
+#                  module has always behaved. The default, so corridor
+#                  merging, vertical-connector stops and every existing
+#                  test keep working unchanged.
+#   "transit_only" hallway/junction only. Used when the point being
+#                  connected is itself a destination (room/store), so a
+#                  destination can never be auto-wired to another
+#                  destination without an admin explicitly approving it.
+TARGET_POLICY_ANY = "any"
+TARGET_POLICY_TRANSIT_ONLY = "transit_only"
+
+
+def resolve_target_policy_for_point(point: RoutePoint) -> str:
+    """
+    The right policy for auto-connecting THIS point, derived from the
+    point's own type rather than from the call site — so every caller that
+    creates a destination gets the safe behaviour without having to
+    remember to ask for it.
+
+    A destination-capable point (room/store) may only be auto-attached to
+    the corridor graph. Everything else — corridor points, entrances,
+    connector stops, and untyped/legacy points — keeps the historical
+    unrestricted behaviour.
+    """
+
+    if point.point_type in DESTINATION_CAPABLE_POINT_TYPES:
+        return TARGET_POLICY_TRANSIT_ONLY
+    return TARGET_POLICY_ANY
+
+
+# Two destination points this close together are two representations of
+# the SAME physical place, not two different rooms — e.g. a "store"
+# RoutePoint that already exists where an admin then places a Room, which
+# point dedup does not merge because the concrete point_types differ.
+#
+# The same 6px figure is already the "same physical location" tolerance in
+# services/point_dedup_service.py (DEFAULT_COORDINATE_TOLERANCE_PX) and in
+# logic/multi_floor_routing.py (_SAME_LOCATION_TOLERANCE_PX, which is what
+# lets the router treat such a pair as one place rather than an unrelated
+# room being used as a bridge). Kept as its own named constant here rather
+# than imported, so the routing layer and this one stay independently
+# changeable, but deliberately the same value.
+SAME_PHYSICAL_LOCATION_TOLERANCE_PX = 6.0
+
+
+def _is_same_physical_location(point: RoutePoint, other: RoutePoint) -> bool:
+    if point.map_id != other.map_id or point.floor != other.floor:
+        return False
+    return (
+        math.hypot(float(other.x) - float(point.x), float(other.y) - float(point.y))
+        <= SAME_PHYSICAL_LOCATION_TOLERANCE_PX
+    )
+
+
+def _target_allowed(
+    point: RoutePoint, other: RoutePoint, target_policy: str
+) -> bool:
+    if target_policy != TARGET_POLICY_TRANSIT_ONLY:
+        return True
+
+    # A vertical-connector stop is never a same-floor walkway target.
+    if other.connector_id is not None:
+        return False
+
+    if other.point_type in TRANSIT_CANDIDATE_POINT_TYPES:
+        return True
+
+    # The one exception. Linking a destination to another destination
+    # sitting at the same coordinates is an identity link between two
+    # records of one physical place, not a route THROUGH an unrelated
+    # room — the router already recognises exactly this pair via its own
+    # coincidence rule. A room even ten pixels away is a different room
+    # and stays excluded.
+    return other.point_type in DESTINATION_CAPABLE_POINT_TYPES and (
+        _is_same_physical_location(point, other)
+    )
 LINE_SAMPLE_STEP_PX = 4.0
 MAX_BLOCKED_SAMPLE_FRACTION = 0.03
 
@@ -264,6 +357,7 @@ async def _points_already_connected(
 async def find_connection_candidates(
     point: RoutePoint,
     max_distance_px: float = DEFAULT_MAX_DISTANCE_PX,
+    target_policy: str = TARGET_POLICY_ANY,
 ) -> List[Tuple[RoutePoint, float]]:
     """
     Same-map, same-floor, active, non-self candidates within
@@ -271,6 +365,11 @@ async def find_connection_candidates(
     points are never returned — this is the "normal walkway" candidate
     set only; stairs/elevator transitions are explicit admin actions, not
     something auto-connect ever infers.
+
+    target_policy defaults to TARGET_POLICY_ANY, which is the unfiltered
+    behaviour this function has always had. TARGET_POLICY_TRANSIT_ONLY
+    restricts the pool to hallway/junction points — see the module
+    docstring for why a destination must never pick its own neighbour.
     """
 
     query = {
@@ -290,6 +389,9 @@ async def find_connection_candidates(
         if str(other.id) == point_id:
             continue
 
+        if not _target_allowed(point, other, target_policy):
+            continue
+
         distance = math.hypot(
             float(other.x) - float(point.x),
             float(other.y) - float(point.y),
@@ -307,6 +409,7 @@ async def auto_connect_point(
     mode: str = "nearest",
     max_candidates: int = DEFAULT_MAX_CANDIDATES,
     max_distance_px: float = DEFAULT_MAX_DISTANCE_PX,
+    target_policy: Optional[str] = None,
 ) -> dict:
     """
     mode: "off" | "nearest" | "all_valid"
@@ -319,6 +422,11 @@ async def auto_connect_point(
         "neighbors_considered": int,
         "rejected": [{"point_id": ..., "reason": ...}, ...],
       }
+
+    target_policy: None (the default) means "decide from the point's own
+    type" via resolve_target_policy_for_point — which is what actually
+    stops a room/store point from being wired to another room/store. Pass
+    an explicit policy only to deliberately override that.
     """
 
     summary = {
@@ -334,7 +442,15 @@ async def auto_connect_point(
     # prevents an ECS restart from silently disabling wall checks.
     await _ensure_map_source_available(point.map_id)
 
-    candidates = await find_connection_candidates(point, max_distance_px)
+    resolved_policy = (
+        target_policy
+        if target_policy is not None
+        else resolve_target_policy_for_point(point)
+    )
+
+    candidates = await find_connection_candidates(
+        point, max_distance_px, target_policy=resolved_policy
+    )
     summary["neighbors_considered"] = len(candidates)
 
     connections_made = 0

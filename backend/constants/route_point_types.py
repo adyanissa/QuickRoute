@@ -89,3 +89,27 @@ def is_transit_candidate_point_type(point_type) -> bool:
     destination RoutePoint may be auto-connected to. None/unknown/legacy
     values are never treated as valid transit candidates."""
     return point_type in TRANSIT_CANDIDATE_POINT_TYPES
+
+
+# Candidate priority for automatic destination attachment, best first.
+# "hallway" and "junction" are both already in TRANSIT_CANDIDATE_POINT_TYPES
+# above and are equally valid targets — this ordering only decides which
+# one wins when two candidates are otherwise comparable, so a real corridor
+# run is preferred over a junction node, and a junction over anything else
+# that might be added to the transit set later.
+#
+# Anything in TRANSIT_CANDIDATE_POINT_TYPES but not listed here sorts last
+# rather than being excluded, so adding a new transit type to that set can
+# never silently make it unusable.
+TRANSIT_CANDIDATE_PRIORITY: tuple[str, ...] = ("hallway", "junction")
+
+
+def transit_candidate_priority_rank(point_type) -> int:
+    """Lower is better. Unlisted-but-valid transit types sort after every
+    listed one; non-transit types sort last of all."""
+    try:
+        return TRANSIT_CANDIDATE_PRIORITY.index(point_type)
+    except ValueError:
+        return len(TRANSIT_CANDIDATE_PRIORITY) + (
+            0 if point_type in TRANSIT_CANDIDATE_POINT_TYPES else 1
+        )

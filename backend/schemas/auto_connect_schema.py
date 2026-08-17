@@ -14,7 +14,21 @@ from pydantic import BaseModel, Field
 
 AutoConnectScope = Literal["map", "map_group"]
 AutoConnectConfidence = Literal["high", "medium", "low", "needs_review"]
-AutoConnectStatus = Literal["proposed", "already_connected", "no_candidate"]
+
+# "needs_review" is a distinct STATUS, not just a confidence tier: it means
+# the data is nearly right and one admin action fixes it (today: a nested
+# child whose approved parent is not usable yet), as opposed to
+# "no_candidate", which means the geometry/graph genuinely offered nothing.
+AutoConnectStatus = Literal[
+    "proposed", "already_connected", "no_candidate", "needs_review"
+]
+
+# What a proposal would actually attach to.
+#   corridor_node    an existing hallway/junction RoutePoint
+#   corridor_edge    a position partway along an existing walkway edge;
+#                    applying it splits that edge with a new junction
+#   nested_parent    an approved pass-through parent Room's own point
+AutoConnectTargetType = Literal["corridor_node", "corridor_edge", "nested_parent"]
 
 
 class AutoConnectPreviewRequest(BaseModel):
@@ -37,16 +51,47 @@ class AutoConnectPreviewRequest(BaseModel):
 
 
 class AutoConnectCandidate(BaseModel):
-    point_id: str
+    # Stable identity for selection in the review UI. Equals point_id for
+    # a corridor node or nested parent, and "edge:<edge_id>" for an
+    # attachment partway along a corridor edge, which has no point yet.
+    candidate_key: str = ""
+
+    # None for a corridor_edge candidate: the junction that will carry the
+    # connection does not exist until the admin applies the proposal.
+    point_id: Optional[str] = None
+
     name: str
     point_type: str
-    # Candidate's own map coordinates (item 8 — always populated for every
-    # candidate this service ever returns).
+
+    target_type: AutoConnectTargetType = "corridor_node"
+
+    # Set only for target_type "corridor_edge" — the existing walkway edge
+    # that would be split.
+    corridor_edge_id: Optional[str] = None
+
+    # Candidate's own map coordinates — for a corridor_edge candidate these
+    # are the projected attachment point on the edge, not an endpoint.
     x: Optional[float] = None
     y: Optional[float] = None
+
+    # The exact coordinates the connection would attach at. Same as x/y;
+    # named separately because apply() consumes these specifically and must
+    # not depend on a display field's meaning staying fixed.
+    attachment_x: Optional[float] = None
+    attachment_y: Optional[float] = None
+
     distance_px: float
     distance_meters: Optional[float] = None
+
     blocked_by_wall: bool = False
+
+    # Geometry/graph diagnostics for this specific candidate.
+    clear_line: bool = True
+    # True when the clear line leaves the destination through its own
+    # doorway — a single wall stroke on the destination's side of the line.
+    # See _attachment_is_clear in the service for the exact rule.
+    doorway_crossing: bool = False
+    graph_connected: bool = True
 
 
 class AutoConnectProposal(BaseModel):
@@ -71,8 +116,11 @@ class AutoConnectProposal(BaseModel):
 
     # The single default/nearest valid candidate's id — matches
     # candidates[0].point_id when candidates is non-empty. None when
-    # status is not "proposed".
+    # status is not "proposed", and also None when the default candidate is
+    # a corridor EDGE attachment, which has no point id yet; use
+    # proposed_candidate_key for selection in every case.
     proposed_candidate_id: Optional[str] = None
+    proposed_candidate_key: Optional[str] = None
 
     candidates: List[AutoConnectCandidate] = Field(default_factory=list)
 
@@ -102,6 +150,34 @@ class AutoConnectProposal(BaseModel):
     # Candidates beyond this distance are never proposed.
     max_hard_distance_px: Optional[float] = None
 
+    # ── Per-room diagnostics ────────────────────────────────────────────
+    # Everything below exists so a failure is diagnosable from the review
+    # UI without reading server logs. All optional/defaulted, so any
+    # existing consumer that ignores them keeps working.
+
+    target_type: Optional[AutoConnectTargetType] = None
+
+    # What the accepted connection would be:
+    #   corridor_node | corridor_edge_split | nested_room_via_parent
+    connection_type: Optional[str] = None
+
+    graph_connected: Optional[bool] = None
+    clear_line: Optional[bool] = None
+    doorway_crossing: Optional[bool] = None
+
+    # How many candidates were found and then discarded, and why. A
+    # non-zero blocked count alongside reason "blocked_by_wall" is the
+    # difference between "there is no corridor near this room" and "there
+    # is one, but a wall is in the way".
+    blocked_candidate_count: int = 0
+    isolated_candidate_count: int = 0
+
+    # Nested-room diagnostics — populated whenever is_nested_access is
+    # True, for the proposed case and both review cases.
+    nested_parent_room_id: Optional[str] = None
+    nested_parent_room_name: Optional[str] = None
+    parent_pass_through: Optional[bool] = None
+
 
 class AutoConnectPreviewSummary(BaseModel):
     scanned: int = 0
@@ -118,7 +194,22 @@ class AutoConnectPreviewResponse(BaseModel):
 
 class AutoConnectAcceptedPair(BaseModel):
     destination_point_id: str = Field(..., min_length=1)
-    corridor_point_id: str = Field(..., min_length=1)
+
+    # Exactly one of corridor_point_id / corridor_edge_id must be set —
+    # enforced in apply_auto_connect_destinations, which revalidates every
+    # pair from fresh database reads and rejects a pair carrying both or
+    # neither. Kept as plain optional fields rather than a discriminated
+    # union so an older client that only ever sends corridor_point_id is
+    # unaffected.
+    corridor_point_id: Optional[str] = Field(default=None, min_length=1)
+
+    # Attach partway along this existing walkway edge. Applying it inserts
+    # a junction RoutePoint at (attachment_x, attachment_y), replaces the
+    # edge with two corridor edges through that junction, and connects the
+    # destination to it.
+    corridor_edge_id: Optional[str] = Field(default=None, min_length=1)
+    attachment_x: Optional[float] = None
+    attachment_y: Optional[float] = None
 
 
 class AutoConnectApplyRequest(BaseModel):
@@ -134,6 +225,12 @@ class AutoConnectApplyResult(BaseModel):
     failed: int = 0
     created_edge_ids: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
+
+    # Corridor edge-split attachments performed by this apply call: one
+    # junction RoutePoint each, plus two replacement corridor edges (the
+    # original edge is deactivated, never deleted).
+    corridor_junctions_created: int = 0
+    created_point_ids: List[str] = Field(default_factory=list)
 
     # "Every accepted navigable room gets its own QR" — filled in by
     # services/room_location_code_service.ensure_room_location_codes, which

@@ -6,7 +6,6 @@ import {
   useState,
 } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
-import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import { useLang } from '../context/LangContext';
 import {
   getMaps,
@@ -115,7 +114,6 @@ import NavigationBuildPreviewPanel from '../components/NavigationBuildPreviewPan
 import MapToolboxPanel, { TOOLBOX_WIDTH } from '../components/MapToolboxPanel';
 import { previewNavigationBuild } from '../api/navigationBuildApi';
 import { useAuth } from '../context/AuthContext';
-import { canDeleteMapResources } from '../utils/dashboardPermissions';
 import '../styles/adminScreens.css';
 
 // Snap target for Draw Walkable Path, in on-screen pixels — this is what
@@ -315,6 +313,24 @@ const UI = {
     autoConnectReasonTransitNotConnected: 'Hallway/junction points exist but are not connected to each other by any walkway connection',
     autoConnectReasonTooFar: 'No hallway/junction point close enough to connect to',
     autoConnectReasonNestedParentNotReady: 'The approved parent room is not ready to receive connections yet',
+    autoConnectReasonBlockedByWall:
+      'A corridor point is close by, but a wall blocks the connection',
+    autoConnectReasonCorridorIsolated:
+      'A corridor point is nearby but is not connected to the walkable graph',
+    autoConnectReasonNestedParentNotPassThrough:
+      'The parent room is not approved for pass-through — approve it to connect this room',
+    autoConnectReasonNestedParentNoPoint: 'The approved parent room has no map location yet',
+    autoConnectTargetCorridorEdge: 'Attaches partway along a corridor (a junction will be added)',
+    autoConnectDiagnosticsClearLine: 'Clear line',
+    autoConnectDiagnosticsGraphConnected: 'On the walkable graph',
+    autoConnectDiagnosticsBlockedCount: 'Candidates rejected by a wall',
+    autoConnectDiagnosticsIsolatedCount: 'Candidates off the walkable graph',
+    autoConnectDiagnosticsParentPassThrough: 'Parent allows pass-through',
+    autoConnectDiagnosticsNearest: 'Nearest corridor found',
+    autoConnectNeedsReviewBadge: 'Needs review',
+    autoConnectTargetTypeLabel: 'Connection type',
+    autoConnectNestedParentLabel: 'Parent room',
+    autoConnectJunctionsCreated: 'Corridor junctions added',
     autoConnectUncalibrated: 'uncalibrated',
     autoConnectConfidenceHigh: 'High confidence',
     autoConnectConfidenceMedium: 'Medium confidence',
@@ -814,6 +830,22 @@ const UI = {
     autoConnectReasonTransitNotConnected: 'توجد نقاط ممر/تقاطع لكنها غير مرتبطة ببعضها بأي رابط مسار',
     autoConnectReasonTooFar: 'لا توجد نقطة ممر/تقاطع قريبة بما يكفي للربط',
     autoConnectReasonNestedParentNotReady: 'الغرفة الأصل المعتمدة غير جاهزة بعد لاستقبال الروابط',
+    autoConnectReasonBlockedByWall: 'توجد نقطة ممر قريبة لكن يوجد جدار يمنع الربط',
+    autoConnectReasonCorridorIsolated: 'توجد نقطة ممر قريبة لكنها غير متصلة بشبكة المسارات',
+    autoConnectReasonNestedParentNotPassThrough:
+      'الغرفة الأصل غير معتمدة للمرور من خلالها — اعتمدها لربط هذه الغرفة',
+    autoConnectReasonNestedParentNoPoint: 'الغرفة الأصل المعتمدة ليس لها موقع على الخريطة بعد',
+    autoConnectTargetCorridorEdge: 'يرتبط بمنتصف الممر (ستتم إضافة تقاطع)',
+    autoConnectDiagnosticsClearLine: 'خط واضح',
+    autoConnectDiagnosticsGraphConnected: 'ضمن شبكة المسارات',
+    autoConnectDiagnosticsBlockedCount: 'مرشحون مرفوضون بسبب جدار',
+    autoConnectDiagnosticsIsolatedCount: 'مرشحون خارج شبكة المسارات',
+    autoConnectDiagnosticsParentPassThrough: 'الغرفة الأصل تسمح بالمرور',
+    autoConnectDiagnosticsNearest: 'أقرب ممر تم العثور عليه',
+    autoConnectNeedsReviewBadge: 'يحتاج مراجعة',
+    autoConnectTargetTypeLabel: 'نوع الربط',
+    autoConnectNestedParentLabel: 'الغرفة الأصل',
+    autoConnectJunctionsCreated: 'تقاطعات ممر تمت إضافتها',
     autoConnectUncalibrated: 'غير معايَر',
     autoConnectConfidenceHigh: 'ثقة عالية',
     autoConnectConfidenceMedium: 'ثقة متوسطة',
@@ -1301,6 +1333,21 @@ const UI = {
     autoConnectReasonTransitNotConnected: 'קיימות נקודות מסדרון/צומת אך הן אינן מחוברות זו לזו בשום חיבור מסלול',
     autoConnectReasonTooFar: 'אין נקודת מסדרון/צומת קרובה מספיק לחיבור',
     autoConnectReasonNestedParentNotReady: 'חדר האב המאושר עדיין אינו מוכן לקבל חיבורים',
+    autoConnectReasonBlockedByWall: 'קיימת נקודת מסדרון קרובה אך קיר חוסם את החיבור',
+    autoConnectReasonCorridorIsolated: 'קיימת נקודת מסדרון קרובה אך היא אינה מחוברת לגרף ההליכה',
+    autoConnectReasonNestedParentNotPassThrough: 'חדר האב אינו מאושר למעבר — אשרו אותו כדי לחבר חדר זה',
+    autoConnectReasonNestedParentNoPoint: 'לחדר האב המאושר אין עדיין מיקום במפה',
+    autoConnectTargetCorridorEdge: 'מתחבר באמצע המסדרון (תתווסף צומת)',
+    autoConnectDiagnosticsClearLine: 'קו פנוי',
+    autoConnectDiagnosticsGraphConnected: 'על גרף ההליכה',
+    autoConnectDiagnosticsBlockedCount: 'מועמדים שנדחו בגלל קיר',
+    autoConnectDiagnosticsIsolatedCount: 'מועמדים מחוץ לגרף ההליכה',
+    autoConnectDiagnosticsParentPassThrough: 'חדר האב מאפשר מעבר',
+    autoConnectDiagnosticsNearest: 'המסדרון הקרוב ביותר שנמצא',
+    autoConnectNeedsReviewBadge: 'דורש בדיקה',
+    autoConnectTargetTypeLabel: 'סוג החיבור',
+    autoConnectNestedParentLabel: 'חדר האב',
+    autoConnectJunctionsCreated: 'צמתי מסדרון שנוספו',
     autoConnectUncalibrated: 'לא מכויל',
     autoConnectConfidenceHigh: 'ביטחון גבוה',
     autoConnectConfidenceMedium: 'ביטחון בינוני',
@@ -1762,7 +1809,7 @@ function readStoredToolboxState() {
 }
 
 const AdminMapScreen = () => {
-  const { lang } = useLang();
+  const { lang, setLang } = useLang();
   const { user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1799,12 +1846,6 @@ const AdminMapScreen = () => {
   // creates a point from a plain click (see the mode==='edit-points'
   // branch in the canvas click handler), it only selects/edits/moves an
   // EXISTING one, so it must never share state with the create-flow.
-  // Permanent structural deletion (map / map group / floor) is
-  // super_admin + global_manager only, mirroring the backend's own gate.
-  // A building_manager simply never sees these controls — no disabled
-  // button, no locked state — and the API refuses the request anyway.
-  const canDeleteStructures = canDeleteMapResources(user);
-
   const [searchParams] = useSearchParams();
   const [editPointTarget, setEditPointTarget] = useState(null); // the RoutePoint currently open in the edit panel
   const [editPointMoving, setEditPointMoving] = useState(false); // true while the next map click repositions editPointTarget
@@ -2024,7 +2065,7 @@ const AdminMapScreen = () => {
   const [autoConnectScope, setAutoConnectScope] = useState('map'); // 'map' | 'map_group'
   const [autoConnectSummary, setAutoConnectSummary] = useState(null);
   // Each entry is the preview proposal plus purely local/frontend review
-  // state (localStatus, selectedCandidateId) — the backend is never asked
+  // state (localStatus, selectedCandidateKey) — the backend is never asked
   // to remember review state between preview and apply.
   const [autoConnectProposals, setAutoConnectProposals] = useState([]);
   const [autoConnectError, setAutoConnectError] = useState('');
@@ -4820,11 +4861,101 @@ const AdminMapScreen = () => {
         return t.autoConnectReasonTransitNotConnected;
       case 'no_transit_point_within_range':
         return t.autoConnectReasonTooFar;
+      case 'blocked_by_wall':
+        return t.autoConnectReasonBlockedByWall;
+      case 'corridor_candidate_isolated':
+        return t.autoConnectReasonCorridorIsolated;
+      case 'nested_parent_not_pass_through':
+        return t.autoConnectReasonNestedParentNotPassThrough;
+      case 'nested_parent_no_point':
+        return t.autoConnectReasonNestedParentNoPoint;
+      // Kept for proposals produced by an older backend build.
       case 'nested_parent_not_ready':
         return t.autoConnectReasonNestedParentNotReady;
       default:
         return t.autoConnectNoCorridorPointFound;
     }
+  };
+
+  // A candidate's stable identity. Corridor NODES are identified by their
+  // RoutePoint id; a corridor EDGE attachment has no point yet (applying
+  // it is what creates the junction), so the backend supplies
+  // "edge:<edge_id>" instead. Falls back to point_id so a response from an
+  // older backend, which had no candidate_key at all, still selects.
+  const autoConnectCandidateKey = (candidate) =>
+    candidate?.candidate_key || candidate?.point_id || null;
+
+  // Per-room diagnostics for the review panel: exactly what happened to
+  // this destination, so a failure is diagnosable without reading server
+  // logs. Only rows the backend actually reported are rendered — an older
+  // backend that sends none of these simply shows nothing extra.
+  const renderAutoConnectDiagnostics = (proposal) => {
+    const rows = [];
+
+    if (proposal.target_type) {
+      rows.push([t.autoConnectTargetTypeLabel, proposal.connection_type || proposal.target_type]);
+    }
+    if (proposal.clear_line != null) {
+      rows.push([t.autoConnectDiagnosticsClearLine, proposal.clear_line ? '\u2713' : '\u2717']);
+    }
+    if (proposal.graph_connected != null) {
+      rows.push([
+        t.autoConnectDiagnosticsGraphConnected,
+        proposal.graph_connected ? '\u2713' : '\u2717',
+      ]);
+    }
+    if (proposal.nearest_distance_px != null) {
+      rows.push([t.autoConnectDiagnosticsNearest, `${proposal.nearest_distance_px}px`]);
+    }
+    if (proposal.blocked_candidate_count) {
+      rows.push([
+        t.autoConnectDiagnosticsBlockedCount,
+        String(proposal.blocked_candidate_count),
+      ]);
+    }
+    if (proposal.isolated_candidate_count) {
+      rows.push([
+        t.autoConnectDiagnosticsIsolatedCount,
+        String(proposal.isolated_candidate_count),
+      ]);
+    }
+    if (proposal.is_nested_access) {
+      if (proposal.nested_parent_room_name) {
+        rows.push([t.autoConnectNestedParentLabel, proposal.nested_parent_room_name]);
+      }
+      if (proposal.parent_pass_through != null) {
+        rows.push([
+          t.autoConnectDiagnosticsParentPassThrough,
+          proposal.parent_pass_through ? '\u2713' : '\u2717',
+        ]);
+      }
+    }
+
+    if (rows.length === 0) return null;
+
+    return (
+      <div
+        style={{
+          marginTop: 6,
+          padding: '6px 8px',
+          borderRadius: 8,
+          background: '#f4f7fc',
+          fontSize: 10.5,
+          color: '#4a6a8f',
+          lineHeight: 1.7,
+        }}
+      >
+        {rows.map(([label, value]) => (
+          <div
+            key={label}
+            style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}
+          >
+            <span>{label}</span>
+            <strong style={{ color: '#173b70' }}>{value}</strong>
+          </div>
+        ))}
+      </div>
+    );
   };
 
   const runAutoConnectPreview = async (scopeOverride) => {
@@ -4849,7 +4980,8 @@ const AdminMapScreen = () => {
         // requires an explicit admin action (single Accept, or "Accept
         // all high-confidence proposals").
         localStatus: proposal.status === 'proposed' ? 'pending' : 'skipped',
-        selectedCandidateId: proposal.proposed_candidate_id || null,
+        selectedCandidateKey:
+          proposal.proposed_candidate_key || proposal.proposed_candidate_id || null,
       }));
 
       setAutoConnectSummary(response.summary || null);
@@ -4894,11 +5026,11 @@ const AdminMapScreen = () => {
     );
   };
 
-  const handleSelectAlternativeCandidate = (destinationId, candidateId) => {
+  const handleSelectAlternativeCandidate = (destinationId, candidateKey) => {
     setAutoConnectProposals((previous) =>
       previous.map((proposal) =>
         proposal.destination_point_id === destinationId
-          ? { ...proposal, selectedCandidateId: candidateId }
+          ? { ...proposal, selectedCandidateKey: candidateKey }
           : proposal,
       ),
     );
@@ -4955,7 +5087,9 @@ const AdminMapScreen = () => {
         proposal.destination_point_id === autoConnectManualPickTargetId
           ? {
               ...proposal,
-              selectedCandidateId: pointId,
+              // A manually picked corridor point is always an existing
+              // RoutePoint, so its id doubles as its candidate key.
+              selectedCandidateKey: pointId,
               manualCandidateName: point.name,
               localStatus: 'accepted',
             }
@@ -4990,11 +5124,37 @@ const AdminMapScreen = () => {
   // fresh database read (never trusts this preview state as-is).
   const handleConfirmAutoConnectApply = async () => {
     const accepted = autoConnectProposals
-      .filter((proposal) => proposal.localStatus === 'accepted' && proposal.selectedCandidateId)
-      .map((proposal) => ({
-        destination_point_id: proposal.destination_point_id,
-        corridor_point_id: proposal.selectedCandidateId,
-      }));
+      .filter(
+        (proposal) =>
+          proposal.localStatus === 'accepted' && proposal.selectedCandidateKey,
+      )
+      .map((proposal) => {
+        const candidate = (proposal.candidates || []).find(
+          (entry) => autoConnectCandidateKey(entry) === proposal.selectedCandidateKey,
+        );
+
+        // Attaching partway along a corridor edge: the backend creates the
+        // junction at these coordinates, splits the edge through it, and
+        // connects the destination to it. Everything else — including a
+        // manually picked corridor point, which is never in `candidates` —
+        // is an ordinary existing-point pair.
+        if (candidate?.target_type === 'corridor_edge' && candidate.corridor_edge_id) {
+          return {
+            destination_point_id: proposal.destination_point_id,
+            corridor_edge_id: candidate.corridor_edge_id,
+            attachment_x: candidate.attachment_x,
+            attachment_y: candidate.attachment_y,
+          };
+        }
+
+        return {
+          destination_point_id: proposal.destination_point_id,
+          corridor_point_id: candidate?.point_id || proposal.selectedCandidateKey,
+        };
+      })
+      .filter(
+        (pair) => Boolean(pair.corridor_point_id) || Boolean(pair.corridor_edge_id),
+      );
 
     if (accepted.length === 0) {
       setAutoConnectError(t.autoConnectNoAccepted);
@@ -6113,15 +6273,62 @@ const AdminMapScreen = () => {
   ]);
 
   return (
-    <div className="qrd-page">
+    <div className="layout-wrapper">
       <div
-        className="qrd-pagebody"
+        className="layout-shell adm-shell"
         dir={isRTL ? 'rtl' : 'ltr'}
       >
-        <div className="qrd-headwrap">
-          <AdminScreenHeader
-            pageKey="mapManagement"
-          />
+        <div className="adm-inner-header">
+          <div className="adm-topbar">
+            <button
+              className={`adm-back-btn${
+                isRTL
+                  ? ' adm-back-btn-rtl'
+                  : ''
+              }`}
+              onClick={() =>
+                navigate('/screen/05')
+              }
+            >
+              <BackArrow flip={isRTL} />
+              {t.back}
+            </button>
+
+            <div
+              className="adm-lang-pill"
+              role="group"
+            >
+              {LANGUAGES.map(
+                (language) => (
+                  <button
+                    key={language.code}
+                    className={`adm-lang-btn${
+                      lang === language.code
+                        ? ' active'
+                        : ''
+                    }`}
+                    onClick={() =>
+                      setLang(
+                        language.code,
+                      )
+                    }
+                  >
+                    {language.label}
+                  </button>
+                ),
+              )}
+            </div>
+          </div>
+
+          <div className="adm-inner-heading">
+            <div className="adm-inner-icon">
+              <MapIcon />
+            </div>
+
+            <h1 className="adm-inner-title">
+              {t.title}
+            </h1>
+          </div>
 
           {/* Part 4 — arrived from the Add/Edit Room screen's "Add /
               Upload New Map" action. The Room draft is already saved
@@ -6228,16 +6435,14 @@ const AdminMapScreen = () => {
                                   >
                                     {t.editDetails}
                                   </button>
-                                  {canDeleteStructures && (
-                                    <button
-                                      type="button"
-                                      className="adm-btn adm-btn-cancel"
-                                      style={{ padding: '4px 10px', fontSize: 11.5 }}
-                                      onClick={() => handleDeleteMapGroupFloor(group, floorMap)}
-                                    >
-                                      {t.deleteMap}
-                                    </button>
-                                  )}
+                                  <button
+                                    type="button"
+                                    className="adm-btn adm-btn-cancel"
+                                    style={{ padding: '4px 10px', fontSize: 11.5 }}
+                                    onClick={() => handleDeleteMapGroupFloor(group, floorMap)}
+                                  >
+                                    {t.deleteMap}
+                                  </button>
                                 </div>
                               </div>
                             ))}
@@ -6251,16 +6456,14 @@ const AdminMapScreen = () => {
                               >
                                 {t.addFloor}
                               </button>
-                              {canDeleteStructures && (
-                                <button
-                                  type="button"
-                                  className="adm-btn adm-btn-cancel"
-                                  style={{ padding: '5px 12px', fontSize: 12 }}
-                                  onClick={() => handleDeleteMapGroup(group)}
-                                >
-                                  {t.deleteGroup}
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                className="adm-btn adm-btn-cancel"
+                                style={{ padding: '5px 12px', fontSize: 12 }}
+                                onClick={() => handleDeleteMapGroup(group)}
+                              >
+                                {t.deleteGroup}
+                              </button>
                             </div>
 
                             {addFloorGroupId === group.id && (
@@ -6787,20 +6990,18 @@ const AdminMapScreen = () => {
                   {t.editDetails}
                 </button>
 
-                {canDeleteStructures && (
-                  <button
-                    className="adm-btn adm-btn-danger"
-                    onClick={() =>
-                      setView(
-                        'confirm-delete',
-                      )
-                    }
-                    disabled={!activeMap?.id}
-                  >
-                    <DeleteIcon />
-                    {t.deleteMap}
-                  </button>
-                )}
+                <button
+                  className="adm-btn adm-btn-danger"
+                  onClick={() =>
+                    setView(
+                      'confirm-delete',
+                    )
+                  }
+                  disabled={!activeMap?.id}
+                >
+                  <DeleteIcon />
+                  {t.deleteMap}
+                </button>
               </div>
 
               {/* Automatic semantic map analysis (real backend — see
@@ -8677,9 +8878,27 @@ const AdminMapScreen = () => {
                               const fromPoint = pointsById.get(
                                 proposal.destination_point_id,
                               );
-                              const toPoint = pointsById.get(
-                                proposal.selectedCandidateId,
+
+                              // The selected candidate is either an
+                              // existing corridor point or a projected
+                              // attachment partway along a corridor edge —
+                              // the latter has no RoutePoint to look up
+                              // until the proposal is applied, so the line
+                              // is drawn to its projected coordinates.
+                              const selected = (proposal.candidates || []).find(
+                                (candidate) =>
+                                  autoConnectCandidateKey(candidate) ===
+                                  proposal.selectedCandidateKey,
                               );
+
+                              const toPoint =
+                                pointsById.get(
+                                  selected?.point_id || proposal.selectedCandidateKey,
+                                ) ||
+                                (selected?.attachment_x != null &&
+                                selected?.attachment_y != null
+                                  ? { x: selected.attachment_x, y: selected.attachment_y }
+                                  : null);
 
                               if (!fromPoint || !toPoint) {
                                 return null;
@@ -10019,7 +10238,9 @@ const AdminMapScreen = () => {
 
                       {autoConnectProposals.map((proposal) => {
                         const selectedCandidate = proposal.candidates?.find(
-                          (candidate) => candidate.point_id === proposal.selectedCandidateId,
+                          (candidate) =>
+                            autoConnectCandidateKey(candidate) ===
+                            proposal.selectedCandidateKey,
                         );
 
                         return (
@@ -10054,10 +10275,26 @@ const AdminMapScreen = () => {
                               </div>
                             )}
 
-                            {proposal.status === 'no_candidate' && (
-                              <div style={{ fontSize: 12, color: '#c0392b', marginTop: 4 }}>
-                                {getAutoConnectReasonLabel(proposal.reason)}
-                              </div>
+                            {(proposal.status === 'no_candidate' ||
+                              proposal.status === 'needs_review') && (
+                              <>
+                                <div
+                                  style={{
+                                    fontSize: 12,
+                                    marginTop: 4,
+                                    color:
+                                      proposal.status === 'needs_review'
+                                        ? '#b9770e'
+                                        : '#c0392b',
+                                  }}
+                                >
+                                  {proposal.status === 'needs_review' && (
+                                    <strong>{t.autoConnectNeedsReviewBadge}: </strong>
+                                  )}
+                                  {getAutoConnectReasonLabel(proposal.reason)}
+                                </div>
+                                {renderAutoConnectDiagnostics(proposal)}
+                              </>
                             )}
 
                             {proposal.status === 'proposed' && (
@@ -10102,37 +10339,52 @@ const AdminMapScreen = () => {
                                   </div>
                                 )}
 
+                                {selectedCandidate?.target_type === 'corridor_edge' && (
+                                  <div style={{ fontSize: 11, color: '#6b4bb3', marginTop: 4 }}>
+                                    {t.autoConnectTargetCorridorEdge}
+                                  </div>
+                                )}
+
+                                {renderAutoConnectDiagnostics(proposal)}
+
                                 {proposal.candidates.length > 1 && (
                                   <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
-                                    {proposal.candidates.map((candidate) => (
-                                      <button
-                                        key={candidate.point_id}
-                                        type="button"
-                                        onClick={() =>
-                                          handleSelectAlternativeCandidate(
-                                            proposal.destination_point_id,
-                                            candidate.point_id,
-                                          )
-                                        }
-                                        style={{
-                                          border: '1px solid #a9c3e3',
-                                          borderRadius: 999,
-                                          padding: '3px 8px',
-                                          fontSize: 10.5,
-                                          cursor: 'pointer',
-                                          background:
-                                            proposal.selectedCandidateId === candidate.point_id
-                                              ? '#173b70'
-                                              : 'white',
-                                          color:
-                                            proposal.selectedCandidateId === candidate.point_id
-                                              ? 'white'
-                                              : '#173b70',
-                                        }}
-                                      >
-                                        {candidate.name}
-                                      </button>
-                                    ))}
+                                    {proposal.candidates.map((candidate) => {
+                                      const key = autoConnectCandidateKey(candidate);
+                                      const isSelected =
+                                        proposal.selectedCandidateKey === key;
+
+                                      return (
+                                        <button
+                                          key={key}
+                                          type="button"
+                                          onClick={() =>
+                                            handleSelectAlternativeCandidate(
+                                              proposal.destination_point_id,
+                                              key,
+                                            )
+                                          }
+                                          title={
+                                            candidate.target_type === 'corridor_edge'
+                                              ? t.autoConnectTargetCorridorEdge
+                                              : candidate.name
+                                          }
+                                          style={{
+                                            border: '1px solid #a9c3e3',
+                                            borderRadius: 999,
+                                            padding: '3px 8px',
+                                            fontSize: 10.5,
+                                            cursor: 'pointer',
+                                            background: isSelected ? '#173b70' : 'white',
+                                            color: isSelected ? 'white' : '#173b70',
+                                          }}
+                                        >
+                                          {candidate.target_type === 'corridor_edge'
+                                            ? `\u2295 ${candidate.name}`
+                                            : candidate.name}
+                                        </button>
+                                      );
+                                    })}
                                   </div>
                                 )}
 
