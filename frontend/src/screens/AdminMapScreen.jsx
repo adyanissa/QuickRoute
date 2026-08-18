@@ -339,6 +339,18 @@ const UI = {
     autoConnectDiagnosticsGraphConnected: 'On the walkable graph',
     autoConnectDiagnosticsBlockedCount: 'Candidates rejected by a wall',
     autoConnectDiagnosticsIsolatedCount: 'Candidates off the walkable graph',
+    autoConnectReasonDoorwayNotResolved:
+      'A wall is in the way, and it is not a doorway — check the marker is on the room door',
+    autoConnectReasonBlockedAfterDoorway:
+      'The doorway is fine, but a wall stands between it and the corridor',
+    autoConnectDiagnosticsDoorway: 'Resolved through the doorway',
+    autoConnectDiagnosticsDoorwaySnap: 'Doorway exit offset',
+    autoConnectDiagnosticsWallStroke: 'Crossing / wall stroke',
+    autoConnectDiagnosticsCrossingsAfter: 'Walls past the doorway',
+    autoConnectDiagnosticsStrayComponent: 'Points in the stray corridor',
+    autoConnectDiagnosticsGapToMain: 'Gap to the main corridor',
+    autoConnectDiagnosticsCorridorNetworks: 'Separate corridor networks',
+    autoConnectDiagnosticsCoincidentMerges: 'Corridor ends treated as one',
     autoConnectDiagnosticsParentPassThrough: 'Parent allows pass-through',
     autoConnectDiagnosticsNearest: 'Nearest corridor found',
     autoConnectNeedsReviewBadge: 'Needs review',
@@ -882,6 +894,18 @@ const UI = {
     autoConnectDiagnosticsGraphConnected: 'ضمن شبكة المسارات',
     autoConnectDiagnosticsBlockedCount: 'مرشحون مرفوضون بسبب جدار',
     autoConnectDiagnosticsIsolatedCount: 'مرشحون خارج شبكة المسارات',
+    autoConnectReasonDoorwayNotResolved:
+      'يوجد جدار يمنع الربط وليس بابًا — تأكد من وضع العلامة على باب الغرفة',
+    autoConnectReasonBlockedAfterDoorway:
+      'الباب سليم لكن يوجد جدار بينه وبين الممر',
+    autoConnectDiagnosticsDoorway: 'تم الحل عبر الباب',
+    autoConnectDiagnosticsDoorwaySnap: 'إزاحة مخرج الباب',
+    autoConnectDiagnosticsWallStroke: 'سماكة العبور / الجدار',
+    autoConnectDiagnosticsCrossingsAfter: 'جدران بعد الباب',
+    autoConnectDiagnosticsStrayComponent: 'نقاط في الممر المنفصل',
+    autoConnectDiagnosticsGapToMain: 'المسافة إلى الممر الرئيسي',
+    autoConnectDiagnosticsCorridorNetworks: 'شبكات ممرات منفصلة',
+    autoConnectDiagnosticsCoincidentMerges: 'أطراف ممرات اعتُبرت واحدة',
     autoConnectDiagnosticsParentPassThrough: 'الغرفة الأصل تسمح بالمرور',
     autoConnectDiagnosticsNearest: 'أقرب ممر تم العثور عليه',
     autoConnectNeedsReviewBadge: 'يحتاج مراجعة',
@@ -1411,6 +1435,18 @@ const UI = {
     autoConnectDiagnosticsGraphConnected: 'על גרף ההליכה',
     autoConnectDiagnosticsBlockedCount: 'מועמדים שנדחו בגלל קיר',
     autoConnectDiagnosticsIsolatedCount: 'מועמדים מחוץ לגרף ההליכה',
+    autoConnectReasonDoorwayNotResolved:
+      'קיר חוסם את החיבור והוא אינו פתח דלת — ודאו שהסמן ממוקם על דלת החדר',
+    autoConnectReasonBlockedAfterDoorway:
+      'הדלת תקינה, אך קיר עומד בינה לבין המסדרון',
+    autoConnectDiagnosticsDoorway: 'נפתר דרך פתח הדלת',
+    autoConnectDiagnosticsDoorwaySnap: 'היסט יציאת הדלת',
+    autoConnectDiagnosticsWallStroke: 'עובי החצייה / הקיר',
+    autoConnectDiagnosticsCrossingsAfter: 'קירות אחרי הדלת',
+    autoConnectDiagnosticsStrayComponent: 'נקודות במסדרון המנותק',
+    autoConnectDiagnosticsGapToMain: 'מרחק מהמסדרון הראשי',
+    autoConnectDiagnosticsCorridorNetworks: 'רשתות מסדרון נפרדות',
+    autoConnectDiagnosticsCoincidentMerges: 'קצות מסדרון שאוחדו',
     autoConnectDiagnosticsParentPassThrough: 'חדר האב מאפשר מעבר',
     autoConnectDiagnosticsNearest: 'המסדרון הקרוב ביותר שנמצא',
     autoConnectNeedsReviewBadge: 'דורש בדיקה',
@@ -5021,15 +5057,32 @@ const AdminMapScreen = () => {
         return t.autoConnectReasonNoTransitPoints;
       case 'transit_points_not_connected_by_edges':
         return t.autoConnectReasonTransitNotConnected;
+      // Two spellings of the same outcome. The backend now sends
+      // `final_reason` alongside `reason`; `reason` keeps its original
+      // vocabulary so nothing matching on it breaks, and both are handled
+      // here so this panel works against either build.
       case 'no_transit_point_within_range':
+      case 'no_corridor_candidate':
         return t.autoConnectReasonTooFar;
       case 'blocked_by_wall':
         return t.autoConnectReasonBlockedByWall;
+      // A wall the door-aware stage examined and could NOT show to be a
+      // doorway. Deliberately a different message from the generic wall
+      // one: the fix here is usually to move the marker onto the door,
+      // not to draw more corridor.
+      case 'doorway_not_resolved':
+        return t.autoConnectReasonDoorwayNotResolved;
+      // The door was fine; something real stands between it and the
+      // corridor.
+      case 'blocked_after_doorway':
+        return t.autoConnectReasonBlockedAfterDoorway;
       case 'corridor_candidate_isolated':
+      case 'corridor_component_isolated':
         return t.autoConnectReasonCorridorIsolated;
       case 'nested_parent_not_pass_through':
         return t.autoConnectReasonNestedParentNotPassThrough;
       case 'nested_parent_no_point':
+      case 'nested_parent_required':
         return t.autoConnectReasonNestedParentNoPoint;
       // Kept for proposals produced by an older backend build.
       case 'nested_parent_not_ready':
@@ -5079,6 +5132,63 @@ const AdminMapScreen = () => {
       rows.push([
         t.autoConnectDiagnosticsIsolatedCount,
         String(proposal.isolated_candidate_count),
+      ]);
+    }
+
+    // ── Door-aware validation ──────────────────────────────────────────
+    // Shown only once the backend has actually looked: a build without the
+    // door-aware stage sends none of these and this block renders nothing.
+    if (proposal.doorway_resolved) {
+      rows.push([t.autoConnectDiagnosticsDoorway, '✓']);
+      if (proposal.doorway_snap_px != null) {
+        rows.push([
+          t.autoConnectDiagnosticsDoorwaySnap,
+          `${proposal.doorway_snap_px}px`,
+        ]);
+      }
+      if (
+        proposal.doorway_crossing_thickness_px != null &&
+        proposal.wall_stroke_thickness_px != null
+      ) {
+        rows.push([
+          t.autoConnectDiagnosticsWallStroke,
+          `${proposal.doorway_crossing_thickness_px} / ${proposal.wall_stroke_thickness_px}px`,
+        ]);
+      }
+      if (proposal.wall_crossings_after_doorway != null) {
+        rows.push([
+          t.autoConnectDiagnosticsCrossingsAfter,
+          String(proposal.wall_crossings_after_doorway),
+        ]);
+      }
+    }
+
+    // ── Corridor graph shape ───────────────────────────────────────────
+    // "the corridor beside this room is its own island" is only actionable
+    // once you know whether that island is one stray dot or a whole wing,
+    // and how far it sits from the rest of the network.
+    if (proposal.isolated_candidate_component_size != null) {
+      rows.push([
+        t.autoConnectDiagnosticsStrayComponent,
+        String(proposal.isolated_candidate_component_size),
+      ]);
+    }
+    if (proposal.isolated_candidate_gap_to_main_px != null) {
+      rows.push([
+        t.autoConnectDiagnosticsGapToMain,
+        `${proposal.isolated_candidate_gap_to_main_px}px`,
+      ]);
+    }
+    if ((proposal.corridor_component_count || 0) > 1) {
+      rows.push([
+        t.autoConnectDiagnosticsCorridorNetworks,
+        String(proposal.corridor_component_count),
+      ]);
+    }
+    if (proposal.corridor_coincident_merges) {
+      rows.push([
+        t.autoConnectDiagnosticsCoincidentMerges,
+        String(proposal.corridor_coincident_merges),
       ]);
     }
     if (proposal.is_nested_access) {
@@ -10555,7 +10665,15 @@ const AdminMapScreen = () => {
                                   {proposal.status === 'needs_review' && (
                                     <strong>{t.autoConnectNeedsReviewBadge}: </strong>
                                   )}
-                                  {getAutoConnectReasonLabel(proposal.reason)}
+                                  {/* final_reason is the more specific of
+                                      the two — it distinguishes "not a
+                                      doorway" from "blocked past the
+                                      doorway" where `reason` says only
+                                      "blocked_by_wall". Falls back to
+                                      `reason` for an older backend. */}
+                                  {getAutoConnectReasonLabel(
+                                    proposal.final_reason || proposal.reason,
+                                  )}
                                 </div>
                                 {renderAutoConnectDiagnostics(proposal)}
                               </>

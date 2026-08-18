@@ -66,9 +66,17 @@ from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
 from services.graph_connection_service import (
     LINE_SAMPLE_STEP_PX,
+    SAME_PHYSICAL_LOCATION_TOLERANCE_PX,
     _ensure_map_source_available,
     _get_wall_mask,
     has_clear_line,
+)
+from services.strict_geometry_service import (
+    StrictWallMetrics,
+    _is_wall_pixel_on_mask,
+    get_strict_wall_metrics,
+    strict_has_clear_line,
+    strict_segment_profile,
 )
 
 
@@ -325,24 +333,97 @@ class _UnionFind:
             self._parent[root_b] = root_a
 
 
+class TransitComponents:
+    """Connected components of one floor's corridor graph."""
+
+    __slots__ = (
+        "root_by_id",
+        "members_by_root",
+        "main_root",
+        "has_any_internal_edge",
+        "coincident_merges",
+    )
+
+    def __init__(
+        self,
+        root_by_id: Dict[str, str],
+        members_by_root: Dict[str, List[str]],
+        main_root: Optional[str],
+        has_any_internal_edge: bool,
+        coincident_merges: int,
+    ) -> None:
+        self.root_by_id = root_by_id
+        self.members_by_root = members_by_root
+        self.main_root = main_root
+        self.has_any_internal_edge = has_any_internal_edge
+        # How many pairs of corridor endpoints were joined because they sit
+        # on the same physical spot. Reported, never silent.
+        self.coincident_merges = coincident_merges
+
+    @property
+    def component_count(self) -> int:
+        return len(self.members_by_root)
+
+    @property
+    def main_component_size(self) -> int:
+        if self.main_root is None:
+            return 0
+        return len(self.members_by_root.get(self.main_root, ()))
+
+    def size_of(self, point_id: str) -> int:
+        root = self.root_by_id.get(point_id)
+        if root is None:
+            return 0
+        return len(self.members_by_root.get(root, ()))
+
+
 def _transit_components(
-    transit_ids: set, edges: List[RouteEdge]
-) -> Tuple[Dict[str, str], Optional[str], bool]:
+    transit_points: List[RoutePoint],
+    edges: List[RouteEdge],
+    *,
+    map_floor: Optional[int] = None,
+) -> TransitComponents:
     """
-    Connected components of the CORRIDOR graph — active walkway edges whose
-    BOTH endpoints are transit points.
+    Connected components of the CORRIDOR graph.
 
-    Returns (component_root_by_point_id, main_component_root,
-    has_any_internal_edge).
+    Two points end up in the same component when either is true:
 
-    main_component_root is the root of the largest component that actually
-    contains more than one point, and None when no transit point is wired
-    to any other. That distinction is deliberate: on a map whose entire
-    corridor network is one hand-placed hallway point there is no
-    multi-point component, so nothing is "isolated" and that point stays a
-    perfectly good candidate — exactly the behaviour
-    test_no_candidate_outside_configured_threshold depends on.
+      1. an active walkway edge joins them and BOTH endpoints are transit
+         points — the original rule, unchanged; or
+
+      2. they sit within SAME_PHYSICAL_LOCATION_TOLERANCE_PX of each other
+         on a compatible floor.
+
+    Rule 2 fixes a real defect. Union used to happen only through explicit
+    RouteEdges, so two corridor runs whose endpoints occupy the SAME
+    physical spot but are two RoutePoint documents stayed two components
+    forever, and every candidate in the smaller one was reported "off the
+    walkable graph". That is reachable from ordinary use: point dedup only
+    merges inside 6 px, and the draw panel's "Automatic graph merging: off"
+    sets force_create and bypasses dedup entirely, so ending one draw
+    session and starting the next a few pixels away splits the corridor.
+
+    This is deliberately NOT a bridge across open space. The tolerance is
+    the same 6 px coincidence rule graph_connection_service and
+    logic/multi_floor_routing already use to decide that two records
+    describe one place; it says "these are the same point", not "these are
+    close enough to walk between". Two genuinely separate corridors a
+    visible gap apart stay separate, and are reported as such.
+
+    main_root is the largest component that actually contains more than one
+    point, and None when no transit point is wired to any other. That
+    distinction is deliberate: on a map whose entire corridor network is
+    one hand-placed hallway point there is no multi-point component, so
+    nothing is "isolated" and that point stays a perfectly good candidate.
+
+    Ties are broken by the component's smallest member id, NOT by whichever
+    root the union order happened to produce. The old code used
+    `size > best_size`, so two equal-sized wings resolved by dict order and
+    half the corridor was silently stranded — and which half was not stable
+    between runs.
     """
+
+    transit_ids = {str(p.id) for p in transit_points}
 
     union_find = _UnionFind()
     for point_id in transit_ids:
@@ -357,21 +438,68 @@ def _transit_components(
             union_find.union(edge.from_point_id, edge.to_point_id)
             has_any_internal_edge = True
 
-    roots: Dict[str, str] = {
+    # Coincident endpoints. Bucketed on a grid of the tolerance itself, so
+    # this stays linear instead of comparing every pair.
+    tolerance = SAME_PHYSICAL_LOCATION_TOLERANCE_PX
+    buckets: Dict[Tuple[int, int], List[RoutePoint]] = defaultdict(list)
+    for point in transit_points:
+        buckets[
+            (int(float(point.x) // tolerance), int(float(point.y) // tolerance))
+        ].append(point)
+
+    coincident_merges = 0
+    for point in transit_points:
+        point_id = str(point.id)
+        px, py = float(point.x), float(point.y)
+        cell_x, cell_y = int(px // tolerance), int(py // tolerance)
+
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for other in buckets.get((cell_x + dx, cell_y + dy), ()):
+                    other_id = str(other.id)
+                    if other_id <= point_id:
+                        continue
+                    if not _floors_are_compatible(
+                        point.floor, other.floor, map_floor
+                    ):
+                        continue
+                    if (
+                        math.hypot(float(other.x) - px, float(other.y) - py)
+                        > tolerance
+                    ):
+                        continue
+                    if union_find.find(point_id) == union_find.find(other_id):
+                        continue
+                    union_find.union(point_id, other_id)
+                    coincident_merges += 1
+
+    root_by_id: Dict[str, str] = {
         point_id: union_find.find(point_id) for point_id in transit_ids
     }
 
-    sizes: Dict[str, int] = defaultdict(int)
-    for root in roots.values():
-        sizes[root] += 1
+    members_by_root: Dict[str, List[str]] = defaultdict(list)
+    for point_id, root in root_by_id.items():
+        members_by_root[root].append(point_id)
 
-    main_root: Optional[str] = None
-    best_size = 1
-    for root, size in sizes.items():
-        if size > best_size:
-            best_size, main_root = size, root
+    # Largest first; ties broken by the smallest member id, which does not
+    # depend on the order the unions happened to run in.
+    ranked = sorted(
+        (
+            (len(members), min(members), root)
+            for root, members in members_by_root.items()
+            if len(members) >= 2
+        ),
+        key=lambda entry: (-entry[0], entry[1]),
+    )
+    main_root: Optional[str] = ranked[0][2] if ranked else None
 
-    return roots, main_root, has_any_internal_edge
+    return TransitComponents(
+        root_by_id=root_by_id,
+        members_by_root=dict(members_by_root),
+        main_root=main_root,
+        has_any_internal_edge=has_any_internal_edge,
+        coincident_merges=coincident_merges,
+    )
 
 
 def _blocked_runs_on_line(
@@ -475,6 +603,605 @@ def _attachment_is_clear(
         return False, False
 
     return True, bool(runs)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# DOOR-AWARE ATTACHMENT
+#
+# THE PROBLEM, precisely. A destination marker placed at a real doorway
+# was being rejected as wall-blocked with a corridor 47-83 px away. Two
+# stacked causes, both measured:
+#
+#   1. RESOLUTION. The legacy validator builds its mask from a copy
+#      downscaled to 900 px on the longest side, samples every 4 mask px,
+#      and passes when blocked/(samples+1) <= 0.03. On a 75 px line at a
+#      typical downscale that is SIX samples, so the 3% budget floors to
+#      ZERO tolerated blocked samples. The first blocked sample only
+#      becomes affordable somewhere past 235-616 source px depending on
+#      image size — longer than any attachment worth making. One mask
+#      pixel anywhere on the line, including the destination endpoint
+#      itself, therefore rejects the candidate.
+#
+#   2. INDISTINGUISHABILITY AT THAT RESOLUTION. Measured on synthetic
+#      plans at 3000x2000 with an 8 px wall stroke: on the 900 px mask a
+#      2 px threshold line, a 4 px closed door leaf and the 8 px
+#      structural wall ALL collapse to a blocked run of 1-2 samples. They
+#      are genuinely not separable there. That is exactly why a generic
+#      "forgive one wall crossing" rule is unsafe, and why this module
+#      does not have one.
+#
+# WHAT THIS DOES INSTEAD. It re-measures the SAME line on the strict,
+# full-resolution mask (services/strict_geometry_service, cap 4000 px,
+# 2 px sampling) and compares each obstruction against the wall stroke
+# thickness measured from that same drawing. On the same synthetic plans:
+#
+#     2 px threshold line     4.0 mask px      0.42 x stroke
+#     4 px closed door leaf   6.0 mask px      0.63 x stroke
+#     genuine wall           10.0 mask px      1.05 x stroke
+#     room partition         10.0 mask px      1.05 x stroke
+#     (measured stroke thickness: 9.55 mask px)
+#
+# The gap is real, deterministic and scale-free, and it exists ONLY at
+# strict resolution. Thickness comes from the distance transform, so it is
+# the structure's true caliper in every direction at once — an obliquely
+# crossed wall cannot masquerade as a thin line.
+#
+# WHAT THIS IS NOT
+#   * It does not weaken has_clear_line, strict_has_clear_line,
+#     MAX_BLOCKED_SAMPLE_FRACTION, STRICT_BLOCKED_SAMPLE_FRACTION or
+#     MAX_WALL_CROSSINGS. All are untouched, and the legacy gate still
+#     runs FIRST on every candidate.
+#   * It does not ignore the first blocked sample. Every obstruction must
+#     individually prove it is sub-stroke, and any obstruction that is not
+#     within the bounded radius of the destination disqualifies the
+#     candidate outright.
+#   * It does not move the stored point. `doorway_exit_point` is a
+#     validation waypoint that exists for the duration of one check; the
+#     RouteEdge that gets written still runs from the admin's own
+#     coordinates, and Dijkstra sees exactly what it sees today.
+#   * It never runs at all on a map with no readable source image, so
+#     every existing test and every un-imaged map behaves as before.
+# ─────────────────────────────────────────────────────────────────────
+
+# An obstruction may be treated as a rasterised doorway artefact only when
+# its caliper is at most this fraction of the caliper of THE WALL IT
+# PIERCES, measured by probing parallel lines a little to either side.
+#
+# The reference is deliberately the LOCAL wall and not
+# measure_wall_stroke_thickness's map-wide 80th percentile. Measured on a
+# synthetic plan with an 8 px wall and three differently-drawn doors:
+#
+#                       caliper   vs local wall (9.55)   vs global (7.64)
+#   2 px threshold        3.82           0.40                 0.50
+#   4 px closed leaf      5.73           0.60                 0.75
+#   the wall itself       9.55           1.00                 1.25
+#
+# The global percentile is dragged DOWN by every thin line on the drawing,
+# which compresses the margin, and — much worse — it is biased toward the
+# thickest walls, so a genuinely thin interior partition would measure well
+# under it and be forgiven. Against its own local wall that same partition
+# measures 1.00 and is refused. The local reference is both the wider
+# margin and the safer one.
+DOORWAY_MAX_THICKNESS_FRACTION_OF_LOCAL_WALL = 0.70
+
+# Where to look for that local wall: parallel probes at these multiples of
+# the map-wide stroke, to either side of the segment, far enough to clear a
+# door opening but not so far as to wander into unrelated structure.
+DOORWAY_WALL_PROBE_OFFSET_STROKES = (2.0, 4.0, 6.0, 9.0, 12.0, 16.0)
+DOORWAY_WALL_PROBE_MAX_OFFSET_PX = 200.0
+# A probe's obstruction only counts as "the same wall" when it sits at
+# roughly the same depth along the segment as the crossing does.
+DOORWAY_WALL_PROBE_DEPTH_TOLERANCE_STROKES = 3.0
+
+# At most this many obstructions may be forgiven, and all of them must lie
+# within the bounded exit radius of the destination. One threshold line is
+# a doorway; entering and leaving something is not.
+DOORWAY_MAX_LOCAL_RUNS = 1
+
+# HARD SAFETY BOUNDS on how far the exit point may sit from the admin's own
+# coordinates. Derived from the measured stroke thickness rather than a
+# guessed pixel constant, because almost every map here is uncalibrated
+# (Map.scale defaults to 1.0) and a fixed constant behaves completely
+# differently at 150 and at 400 DPI. Stroke thickness scales with the
+# render; a multiple of it does not. Every additional clamp below can only
+# make the bound smaller.
+DOORWAY_EXIT_STROKE_FACTOR = 3.0
+DOORWAY_EXIT_MIN_PX = 6.0
+DOORWAY_EXIT_MAX_PX = 60.0
+DOORWAY_EXIT_MAX_FRACTION_OF_DIAGONAL = 0.012
+# On a calibrated map the bound is additionally a real-world distance: a
+# doorway is a doorway, not a room.
+DOORWAY_EXIT_MAX_METERS = 1.0
+# ...and never more than part of the way to the corridor, so resolving a
+# doorway can never quietly become "walk most of the way there".
+DOORWAY_EXIT_MAX_FRACTION_OF_CANDIDATE_DISTANCE = 0.5
+# Clearance past the far edge of the artefact, as a fraction of the stroke.
+DOORWAY_EXIT_CLEARANCE_FACTOR = 0.5
+
+# ── RASTERISATION NOISE ───────────────────────────────────────────────
+# A single sample of antialiasing where a line grazes a stroke at a shallow
+# angle. Tolerated so that a long, genuinely clear connection is not
+# rejected by one fringe pixel — but bounded BY CALIPER against this
+# drawing's own wall stroke, so a real wall can never qualify however
+# briefly the line clips it. At a measured stroke of 9.55 mask px this
+# admits nothing thicker than 2.4 px: a 2 px door threshold measures 3.82
+# and is NOT noise (it goes through full doorway resolution), and an 8 px
+# wall measures 9.55.
+#
+# This REPLACES the fractional budgets rather than adding to them, and it
+# does not grow with the length of the line.
+NOISE_MAX_THICKNESS_FRACTION_OF_STROKE = 0.25
+NOISE_MAX_RUN_FRACTION_OF_STROKE = 0.30
+NOISE_MAX_RUNS = 2
+
+
+def _significant_runs(runs, stroke_px: float):
+    """Split a segment's obstructions into the ones that matter and a
+    bounded count of rasterisation noise.
+
+    An out-of-bounds run is never noise: leaving the image has no
+    measurable thickness, and a path off the drawing is not a path.
+    """
+
+    thickness_limit = stroke_px * NOISE_MAX_THICKNESS_FRACTION_OF_STROKE
+    length_limit = stroke_px * NOISE_MAX_RUN_FRACTION_OF_STROKE
+
+    significant = []
+    noise_count = 0
+
+    for run in runs:
+        is_noise = (
+            not run.out_of_bounds
+            and 0.0 < run.max_thickness_px <= thickness_limit
+            and run.length_px <= length_limit
+            and noise_count < NOISE_MAX_RUNS
+        )
+        if is_noise:
+            noise_count += 1
+        else:
+            significant.append(run)
+
+    return significant, noise_count
+
+
+# Outcomes.
+DOORWAY_MODE_NOT_NEEDED = "strict_clear"
+DOORWAY_MODE_RESOLVED = "doorway_resolved"
+DOORWAY_MODE_UNAVAILABLE = "strict_mask_unavailable"
+DOORWAY_MODE_REFUSED = "refused"
+DOORWAY_REASON_NOT_RESOLVED = "doorway_not_resolved"
+DOORWAY_REASON_BLOCKED_AFTER = "blocked_after_doorway"
+
+
+class DoorwayResolution:
+    """The outcome of one door-aware re-check of one rejected candidate."""
+
+    __slots__ = (
+        "mode",
+        "accepted",
+        "reason",
+        "exit_x",
+        "exit_y",
+        "snap_px",
+        "crossing_thickness_px",
+        "stroke_thickness_px",
+        "clear_line_after",
+        "wall_crossings_after",
+        "noise_runs",
+    )
+
+    def __init__(
+        self,
+        *,
+        mode: str,
+        accepted: bool,
+        reason: Optional[str] = None,
+        exit_x: Optional[float] = None,
+        exit_y: Optional[float] = None,
+        snap_px: Optional[float] = None,
+        crossing_thickness_px: Optional[float] = None,
+        stroke_thickness_px: Optional[float] = None,
+        clear_line_after: Optional[bool] = None,
+        wall_crossings_after: Optional[int] = None,
+        noise_runs: int = 0,
+    ) -> None:
+        self.mode = mode
+        self.accepted = accepted
+        self.reason = reason
+        self.exit_x = exit_x
+        self.exit_y = exit_y
+        self.snap_px = snap_px
+        self.crossing_thickness_px = crossing_thickness_px
+        self.stroke_thickness_px = stroke_thickness_px
+        self.clear_line_after = clear_line_after
+        self.wall_crossings_after = wall_crossings_after
+        # Grazing antialiasing samples tolerated on this line. Reported so
+        # the allowance is never silent.
+        self.noise_runs = noise_runs
+
+
+def _doorway_exit_bound_px(
+    *,
+    metrics: StrictWallMetrics,
+    canonical_diagonal_px: Optional[float],
+    is_calibrated: bool,
+    scale: float,
+    candidate_distance_px: float,
+) -> float:
+    """The hard ceiling on how far a doorway exit point may sit from the
+    admin's own coordinates, in full-resolution source pixels."""
+
+    stroke_source_px = metrics.stroke_thickness_px / max(metrics.downscale, 1e-9)
+
+    bound = DOORWAY_EXIT_STROKE_FACTOR * stroke_source_px
+    bound = max(DOORWAY_EXIT_MIN_PX, min(DOORWAY_EXIT_MAX_PX, bound))
+
+    if canonical_diagonal_px:
+        bound = min(
+            bound, canonical_diagonal_px * DOORWAY_EXIT_MAX_FRACTION_OF_DIAGONAL
+        )
+
+    if is_calibrated and scale > 0:
+        bound = min(bound, DOORWAY_EXIT_MAX_METERS / scale)
+
+    bound = min(
+        bound,
+        candidate_distance_px * DOORWAY_EXIT_MAX_FRACTION_OF_CANDIDATE_DISTANCE,
+    )
+
+    return max(0.0, bound)
+
+
+def _local_wall_caliper_px(
+    metrics: StrictWallMetrics,
+    origin_x: float,
+    origin_y: float,
+    target_x: float,
+    target_y: float,
+    crossing_start_px: float,
+    max_depth_mask_px: float,
+) -> Optional[float]:
+    """
+    The caliper of the wall the segment is crossing, measured just to
+    either side of the crossing, in mask pixels.
+
+    Returns None when no probe finds any obstruction at a comparable depth
+    — which means the segment is not crossing a wall at all, and nothing
+    here may be called a doorway.
+    """
+
+    stroke_px = metrics.stroke_thickness_px
+    downscale = max(metrics.downscale, 1e-9)
+
+    dx = target_x - origin_x
+    dy = target_y - origin_y
+    length = math.hypot(dx, dy)
+    if length <= 0:
+        return None
+
+    # Unit perpendicular, in full-resolution source pixels.
+    perp_x, perp_y = -dy / length, dx / length
+    depth_tolerance = DOORWAY_WALL_PROBE_DEPTH_TOLERANCE_STROKES * stroke_px
+
+    # Probe only as deep as the crossing itself, never the whole segment.
+    # The wall being characterised lies beside the crossing; on a 600 px
+    # attachment, twelve full-length probes would cost thousands of sample
+    # lookups per candidate for information that is all in the first few
+    # dozen pixels.
+    probe_depth_source_px = (
+        max_depth_mask_px + depth_tolerance + stroke_px
+    ) / downscale
+    probe_ratio = min(1.0, probe_depth_source_px / length)
+    probe_end_x = origin_x + dx * probe_ratio
+    probe_end_y = origin_y + dy * probe_ratio
+
+    best: Optional[float] = None
+
+    for multiple in DOORWAY_WALL_PROBE_OFFSET_STROKES:
+        offset_mask_px = min(
+            multiple * stroke_px, DOORWAY_WALL_PROBE_MAX_OFFSET_PX
+        )
+        offset_source_px = offset_mask_px / downscale
+
+        for sign in (1.0, -1.0):
+            shift_x = perp_x * offset_source_px * sign
+            shift_y = perp_y * offset_source_px * sign
+
+            probe = strict_segment_profile(
+                metrics,
+                origin_x + shift_x,
+                origin_y + shift_y,
+                probe_end_x + shift_x,
+                probe_end_y + shift_y,
+            )
+
+            for run in probe.runs:
+                if run.out_of_bounds:
+                    continue
+                if run.start_px > max_depth_mask_px:
+                    break
+                if abs(run.start_px - crossing_start_px) > depth_tolerance:
+                    continue
+                if best is None or run.max_thickness_px > best:
+                    best = run.max_thickness_px
+                break
+
+    return best
+
+
+def resolve_doorway_exit_point(
+    *,
+    map_id: str,
+    metrics: Optional[StrictWallMetrics],
+    origin_x: float,
+    origin_y: float,
+    target_x: float,
+    target_y: float,
+    canonical_diagonal_px: Optional[float],
+    is_calibrated: bool,
+    scale: float,
+) -> DoorwayResolution:
+    """
+    THE safety decision for one destination -> corridor line.
+
+    Accepts ONLY when one of two things is provably true on the strict,
+    full-resolution mask:
+
+      * the line crosses nothing of substance there; or
+      * the ONLY thing it crosses is a single sub-stroke obstruction
+        sitting within the bounded exit radius of the destination — a
+        rasterised threshold, door leaf or swing arc at the door the admin
+        placed the marker on — AND the whole remaining segment beyond it is
+        clear.
+
+    Anything else is refused with a reason. Nothing is ever fabricated:
+    when the geometry does not prove a doorway, the answer is
+    `doorway_not_resolved`, not a guess.
+
+    LENGTH-INDEPENDENT BY CONSTRUCTION. Every verdict below is made from
+    RUNS — discrete obstructions and their calipers — never from a fraction
+    of the sampled length. That is deliberate, and it is what closes the
+    long-line bypass:
+
+        legacy has_clear_line   3% of samples      625 px line, 8 px wall:
+                                                   5 blocked / 157 = 3.2%... and
+                                                   on the 900 px mask ~1/47 = 2.1%
+                                                   -> ACCEPTED THROUGH A WALL
+        strict_has_clear_line   3% of samples      same line at 2 px sampling:
+                                                   5 blocked / 313 = 1.6%
+                                                   -> ALSO ACCEPTED
+        this function           one wall = one     -> REJECTED, at any length
+                                run of ~one
+                                stroke's caliper
+
+    Both fractional rules get more permissive the longer the line is, which
+    is exactly backwards for safety. Neither is consulted here.
+    """
+
+    if metrics is None:
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_UNAVAILABLE,
+            accepted=False,
+            reason=DOORWAY_MODE_UNAVAILABLE,
+        )
+
+    stroke_px = metrics.stroke_thickness_px
+    profile = strict_segment_profile(
+        metrics, origin_x, origin_y, target_x, target_y
+    )
+
+    significant, noise_count = _significant_runs(profile.runs, stroke_px)
+
+    # ── The line crosses nothing of substance ─────────────────────────
+    # Nothing to resolve. A legacy rejection here was resolution, not a
+    # wall: a 2 px mask dilation at downscale 0.3 is ~7 source px of
+    # phantom thickness, and the legacy budget on a short line is zero
+    # samples.
+    if not significant:
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_NOT_NEEDED,
+            accepted=True,
+            exit_x=origin_x,
+            exit_y=origin_y,
+            snap_px=0.0,
+            crossing_thickness_px=0.0,
+            stroke_thickness_px=stroke_px,
+            clear_line_after=True,
+            wall_crossings_after=0,
+            noise_runs=noise_count,
+        )
+
+    candidate_distance_px = math.hypot(target_x - origin_x, target_y - origin_y)
+    if candidate_distance_px <= 0:
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_NOT_RESOLVED,
+            stroke_thickness_px=stroke_px,
+        )
+
+    max_exit_px = _doorway_exit_bound_px(
+        metrics=metrics,
+        canonical_diagonal_px=canonical_diagonal_px,
+        is_calibrated=is_calibrated,
+        scale=scale,
+        candidate_distance_px=candidate_distance_px,
+    )
+    # The radius in MASK pixels, since run positions are measured there.
+    max_exit_mask_px = max_exit_px * metrics.downscale
+
+    # ── Every obstruction must be endpoint-local ──────────────────────
+    # An obstruction that starts beyond the exit radius is a wall between
+    # the door and the corridor, not the door. Refuse outright rather than
+    # forgiving the near one and hoping.
+    if any(run.start_px > max_exit_mask_px for run in significant):
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_BLOCKED_AFTER,
+            stroke_thickness_px=stroke_px,
+            wall_crossings_after=len(significant),
+            noise_runs=noise_count,
+        )
+
+    if len(significant) > DOORWAY_MAX_LOCAL_RUNS:
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_NOT_RESOLVED,
+            stroke_thickness_px=stroke_px,
+            wall_crossings_after=len(significant),
+            noise_runs=noise_count,
+        )
+
+    crossing = significant[0]
+
+    # An out-of-bounds run has no measurable thickness and is never thin.
+    if crossing.out_of_bounds or crossing.max_thickness_px <= 0.0:
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_NOT_RESOLVED,
+            stroke_thickness_px=stroke_px,
+            wall_crossings_after=len(significant),
+            noise_runs=noise_count,
+        )
+
+    # ── THE DISCRIMINATOR ─────────────────────────────────────────────
+    # How thick is this obstruction compared with the wall it pierces?
+    #
+    # The caliper comes from the distance transform, so it is the true
+    # thickness of the structure in EVERY direction — a wall crossed at a
+    # shallow angle produces a long run along the segment but its caliper
+    # is still one wall stroke, and it is refused. `length_px` is checked
+    # too, so an obliquely crossed thin line cannot be forgiven either.
+    local_wall_px = _local_wall_caliper_px(
+        metrics,
+        origin_x,
+        origin_y,
+        target_x,
+        target_y,
+        crossing.start_px,
+        max_exit_mask_px + stroke_px,
+    )
+
+    if local_wall_px is None:
+        # Nothing wall-like beside the crossing at a comparable depth.
+        # Then this is not a hole in a wall, and there is nothing here to
+        # call a doorway.
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_NOT_RESOLVED,
+            crossing_thickness_px=round(crossing.max_thickness_px, 2),
+            stroke_thickness_px=stroke_px,
+            wall_crossings_after=len(significant),
+            noise_runs=noise_count,
+        )
+
+    thickness_limit_px = (
+        local_wall_px * DOORWAY_MAX_THICKNESS_FRACTION_OF_LOCAL_WALL
+    )
+
+    if (
+        crossing.max_thickness_px > thickness_limit_px
+        or crossing.length_px > thickness_limit_px
+    ):
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_NOT_RESOLVED,
+            crossing_thickness_px=round(crossing.max_thickness_px, 2),
+            stroke_thickness_px=stroke_px,
+            wall_crossings_after=len(significant),
+            noise_runs=noise_count,
+        )
+
+    # ── The exit point ────────────────────────────────────────────────
+    # Just past the far edge of the artefact, plus a clearance margin.
+    exit_along_mask_px = crossing.end_px + DOORWAY_EXIT_CLEARANCE_FACTOR * stroke_px
+    if exit_along_mask_px > max_exit_mask_px or exit_along_mask_px >= profile.length_px:
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_NOT_RESOLVED,
+            crossing_thickness_px=round(crossing.max_thickness_px, 2),
+            stroke_thickness_px=stroke_px,
+        )
+
+    ratio = exit_along_mask_px / profile.length_px
+    exit_x = origin_x + (target_x - origin_x) * ratio
+    exit_y = origin_y + (target_y - origin_y) * ratio
+    snap_px = math.hypot(exit_x - origin_x, exit_y - origin_y)
+
+    if snap_px > max_exit_px:
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_NOT_RESOLVED,
+            crossing_thickness_px=round(crossing.max_thickness_px, 2),
+            stroke_thickness_px=stroke_px,
+        )
+
+    # The exit must land in free space, not in an antialiasing notch
+    # inside the artefact.
+    if _is_wall_pixel_on_mask(
+        metrics.wall_mask, metrics.downscale, exit_x, exit_y, 0.0
+    ):
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_NOT_RESOLVED,
+            crossing_thickness_px=round(crossing.max_thickness_px, 2),
+            stroke_thickness_px=stroke_px,
+        )
+
+    # ── FINAL VALIDATION of the remaining segment ─────────────────────
+    # Forgiveness stops at the doorway. From the exit point to the corridor
+    # there must be NOTHING of substance at strict resolution — no second
+    # thin line, and certainly no wall — however long that remaining run
+    # is. Only rasterisation noise, bounded by caliper against this
+    # drawing's own wall stroke, is tolerated.
+    #
+    # NEITHER fractional validator is consulted. The legacy one is the
+    # instrument this stage exists to work around (on the 900 px mask the
+    # exit still sits inside the ~7 source px dilation halo of the very
+    # stroke just proven to be a door, so it would reject every doorway by
+    # construction), and strict_has_clear_line's own 3% budget grows with
+    # length in exactly the way that let a long line through a wall.
+    remaining = strict_segment_profile(metrics, exit_x, exit_y, target_x, target_y)
+    remaining_significant, remaining_noise = _significant_runs(
+        remaining.runs, stroke_px
+    )
+    crossings_after = len(remaining_significant)
+
+    if crossings_after > 0:
+        return DoorwayResolution(
+            mode=DOORWAY_MODE_REFUSED,
+            accepted=False,
+            reason=DOORWAY_REASON_BLOCKED_AFTER,
+            exit_x=round(exit_x, 2),
+            exit_y=round(exit_y, 2),
+            snap_px=round(snap_px, 2),
+            crossing_thickness_px=round(crossing.max_thickness_px, 2),
+            stroke_thickness_px=stroke_px,
+            clear_line_after=False,
+            wall_crossings_after=crossings_after,
+            noise_runs=noise_count + remaining_noise,
+        )
+
+    return DoorwayResolution(
+        mode=DOORWAY_MODE_RESOLVED,
+        accepted=True,
+        exit_x=round(exit_x, 2),
+        exit_y=round(exit_y, 2),
+        snap_px=round(snap_px, 2),
+        crossing_thickness_px=round(crossing.max_thickness_px, 2),
+        stroke_thickness_px=stroke_px,
+        clear_line_after=True,
+        wall_crossings_after=0,
+        noise_runs=noise_count + remaining_noise,
+    )
 
 
 # Provenance stamped on the junction point and the two replacement
@@ -626,11 +1353,16 @@ class CorridorFloorContext:
         }
         self.rooms_by_id: Dict[str, Room] = {str(r.id): r for r in rooms}
 
-        (
-            self.component_root_by_id,
-            self.main_component_root,
-            self.transit_network_has_internal_edges,
-        ) = _transit_components(self.transit_ids, edges)
+        self.components = _transit_components(
+            self.transit_points, edges, map_floor=map_item.floor
+        )
+        # Kept as attributes under their original names: callers and tests
+        # outside this module read them.
+        self.component_root_by_id = self.components.root_by_id
+        self.main_component_root = self.components.main_root
+        self.transit_network_has_internal_edges = (
+            self.components.has_any_internal_edge
+        )
 
         # Corridor EDGES, so a point beside the MIDDLE of a long corridor
         # run can attach even when neither endpoint node is near it.
@@ -665,6 +1397,14 @@ class CorridorFloorContext:
         self.scale = _get_scale_for_floor(
             map_item, floor if floor is not None else map_item.floor
         )
+        self.canonical_diagonal_px = _canonical_diagonal_px(map_item)
+
+        # Strict, full-resolution geometry. Loaded on FIRST USE only: it is
+        # needed exclusively to re-examine a candidate the legacy validator
+        # already rejected, so a floor whose attachments all pass never
+        # builds the expensive mask at all.
+        self._strict_metrics: Optional[StrictWallMetrics] = None
+        self._strict_metrics_loaded = False
 
         # Any active edge at all touching a point — a warning signal only,
         # never evidence of connectivity (a stale Room-to-Room edge sets
@@ -673,6 +1413,15 @@ class CorridorFloorContext:
         for edge in edges:
             self.has_any_edge[edge.from_point_id] = True
             self.has_any_edge[edge.to_point_id] = True
+
+    @property
+    def strict_metrics(self) -> Optional[StrictWallMetrics]:
+        """The strict mask and its measurements, or None when this map has
+        no readable source image. Built at most once per context."""
+        if not self._strict_metrics_loaded:
+            self._strict_metrics = get_strict_wall_metrics(self.map_id)
+            self._strict_metrics_loaded = True
+        return self._strict_metrics
 
     def is_graph_connected(self, point_id: str) -> bool:
         """Whether this corridor point belongs to the main walkable
@@ -683,6 +1432,52 @@ class CorridorFloorContext:
         if self.main_component_root is None:
             return True
         return self.component_root_by_id.get(point_id) == self.main_component_root
+
+    def component_diagnostics(self) -> dict:
+        """What the corridor graph actually looks like, for the preview.
+
+        "corridor_component_isolated" on its own tells an admin nothing
+        actionable; the size of the stray component and how far it sits
+        from the main one is what tells them whether a point needs deleting
+        or a corridor needs joining.
+        """
+        components = self.components
+        stray_sizes = sorted(
+            (
+                len(members)
+                for root, members in components.members_by_root.items()
+                if root != components.main_root
+            ),
+            reverse=True,
+        )
+        return {
+            "corridor_component_count": components.component_count,
+            "corridor_main_component_size": components.main_component_size,
+            "corridor_isolated_component_sizes": stray_sizes[:5],
+            "corridor_coincident_merges": components.coincident_merges,
+        }
+
+    def distance_to_main_component_px(self, point_id: str) -> Optional[float]:
+        """How far the nearest main-component corridor point is from this
+        one. Reporting only — nothing bridges the gap."""
+        components = self.components
+        if components.main_root is None:
+            return None
+        point = self.transit_by_id.get(point_id)
+        if point is None:
+            return None
+
+        best: Optional[float] = None
+        for member_id in components.members_by_root.get(components.main_root, ()):
+            other = self.transit_by_id.get(member_id)
+            if other is None:
+                continue
+            distance = math.hypot(
+                float(other.x) - float(point.x), float(other.y) - float(point.y)
+            )
+            if best is None or distance < best:
+                best = distance
+        return round(best, 2) if best is not None else None
 
 
 async def load_corridor_floor_context(
@@ -746,6 +1541,31 @@ REASON_TOO_FAR = "no_transit_point_within_range"
 REASON_BLOCKED_BY_WALL = "blocked_by_wall"
 REASON_ISOLATED = "corridor_candidate_isolated"
 
+# CANONICAL DIAGNOSTIC VOCABULARY.
+#
+# `reason` keeps the exact strings it has always emitted — the preview UI,
+# the bulk retry and a dozen existing tests match on them, and renaming
+# them would be a breaking API change for no functional gain.
+# `final_reason` is the additional, canonical name for the same outcome,
+# plus the two new door-aware outcomes that had no previous equivalent.
+FINAL_REASON_BY_REASON = {
+    REASON_NO_TRANSIT_POINTS: "no_corridor_candidate",
+    REASON_TRANSIT_NOT_CONNECTED: "corridor_component_isolated",
+    REASON_TOO_FAR: "no_corridor_candidate",
+    REASON_BLOCKED_BY_WALL: "blocked_by_wall",
+    REASON_ISOLATED: "corridor_component_isolated",
+    DOORWAY_REASON_NOT_RESOLVED: "doorway_not_resolved",
+    DOORWAY_REASON_BLOCKED_AFTER: "blocked_after_doorway",
+    "nested_parent_no_point": "nested_parent_required",
+    "nested_parent_not_pass_through": "nested_parent_not_pass_through",
+}
+
+
+def canonical_final_reason(reason: Optional[str]) -> Optional[str]:
+    if reason is None:
+        return None
+    return FINAL_REASON_BY_REASON.get(reason, reason)
+
 
 def _floors_are_compatible(
     a: Optional[int], b: Optional[int], map_floor: Optional[int]
@@ -781,16 +1601,22 @@ class AttachmentSearch:
         isolated_count: int,
         nearest_found_px: Optional[float],
         reason: Optional[str],
+        diagnostics: Optional[dict] = None,
     ) -> None:
         self.candidates = candidates
         self.blocked_count = blocked_count
         self.isolated_count = isolated_count
         self.nearest_found_px = nearest_found_px
         self.reason = reason
+        self.diagnostics = diagnostics or {}
 
     @property
     def best(self) -> Optional[dict]:
         return self.candidates[0] if self.candidates else None
+
+    @property
+    def final_reason(self) -> Optional[str]:
+        return canonical_final_reason(self.reason)
 
 
 def find_attachment_candidates(
@@ -962,28 +1788,101 @@ def find_attachment_candidates(
     valid: List[dict] = []
     blocked_count = 0
     isolated_count = 0
+    doorway_attempts = 0
+    doorway_resolutions = 0
+    strict_rescues = 0
+    legacy_bypass_rejections = 0
+    # The most informative door-aware failure seen, used only when nothing
+    # valid was found. "blocked after the doorway" is more specific than
+    # "no doorway here", so it wins.
+    doorway_failure: Optional[str] = None
+    nearest_isolated_id: Optional[str] = None
 
     for candidate in within_safety:
         if not candidate["graph_connected"]:
             # A corridor point stranded off the walkable network is not a
             # successful attachment.
             isolated_count += 1
+            if nearest_isolated_id is None and candidate["point_id"]:
+                nearest_isolated_id = candidate["point_id"]
             continue
 
         doorway_crossing = False
+        doorway: Optional[DoorwayResolution] = None
+
         if context.wall_mask_available:
-            is_clear, doorway_crossing = _attachment_is_clear(
+            legacy_clear, doorway_crossing = _attachment_is_clear(
                 context.map_id,
                 px,
                 py,
                 candidate["attachment_x"],
                 candidate["attachment_y"],
             )
-            if not is_clear:
-                # Reject and try the next valid candidate — never connect
-                # through a wall because it happens to be closer.
-                blocked_count += 1
-                continue
+
+            metrics = context.strict_metrics
+
+            if metrics is None:
+                # No strict mask for this map. Behave exactly as before any
+                # of this existed: nothing to measure means nothing to
+                # forgive AND nothing to tighten.
+                if not legacy_clear:
+                    blocked_count += 1
+                    continue
+            else:
+                # STRICT IS THE AUTHORITY — for every candidate, at every
+                # length. The legacy verdict above is now diagnostics only.
+                #
+                # It used to be a shortcut: a candidate the legacy gate
+                # ACCEPTED was attached with no further check. That is the
+                # long-line bypass, and it was a real QuickRoute failure —
+                # Auto Connect wired rooms straight through walls with it.
+                # has_clear_line passes when under 3% of its samples are
+                # blocked, and on the 900 px mask a 625 px line takes ~47
+                # samples, so a genuine 8 px wall (one or two samples)
+                # comes in under budget. The identical arithmetic defeats
+                # strict_has_clear_line once a line is long enough.
+                #
+                # Both rules get MORE permissive as the line gets longer,
+                # which is exactly backwards for safety.
+                # resolve_doorway_exit_point decides from discrete
+                # obstructions and their calipers instead, so its verdict
+                # does not depend on length at all: one wall is one wall at
+                # 60 px and at 600 px.
+                doorway_attempts += 1
+                doorway = resolve_doorway_exit_point(
+                    map_id=context.map_id,
+                    metrics=metrics,
+                    origin_x=px,
+                    origin_y=py,
+                    target_x=candidate["attachment_x"],
+                    target_y=candidate["attachment_y"],
+                    canonical_diagonal_px=context.canonical_diagonal_px,
+                    is_calibrated=context.is_calibrated,
+                    scale=context.scale,
+                )
+
+                if not doorway.accepted:
+                    blocked_count += 1
+                    if legacy_clear:
+                        # The bypass, caught. Counted separately because it
+                        # is the difference between "Auto Connect found
+                        # nothing here" and "Auto Connect would have routed
+                        # this room through a wall".
+                        legacy_bypass_rejections += 1
+                    if doorway.reason == DOORWAY_REASON_BLOCKED_AFTER:
+                        doorway_failure = DOORWAY_REASON_BLOCKED_AFTER
+                    elif (
+                        doorway_failure is None
+                        and doorway.reason == DOORWAY_REASON_NOT_RESOLVED
+                    ):
+                        doorway_failure = DOORWAY_REASON_NOT_RESOLVED
+                    continue
+
+                if doorway.mode == DOORWAY_MODE_RESOLVED:
+                    doorway_resolutions += 1
+                    doorway_crossing = True
+                elif not legacy_clear:
+                    strict_rescues += 1
 
         distance_meters = (
             round(candidate["distance_px"] * context.scale, 2)
@@ -997,6 +1896,29 @@ def find_attachment_candidates(
                 "blocked_by_wall": False,
                 "clear_line": True,
                 "doorway_crossing": doorway_crossing,
+                # The doorway exit is a VALIDATION WAYPOINT, never a new
+                # position: the edge written from this candidate still runs
+                # from the admin's own coordinates.
+                "doorway_resolved": bool(
+                    doorway and doorway.mode == DOORWAY_MODE_RESOLVED
+                ),
+                "doorway_exit_x": doorway.exit_x if doorway else None,
+                "doorway_exit_y": doorway.exit_y if doorway else None,
+                "doorway_snap_px": doorway.snap_px if doorway else None,
+                "doorway_crossing_thickness_px": (
+                    doorway.crossing_thickness_px if doorway else None
+                ),
+                "wall_stroke_thickness_px": (
+                    round(doorway.stroke_thickness_px, 2)
+                    if doorway and doorway.stroke_thickness_px is not None
+                    else None
+                ),
+                "clear_line_after_doorway": (
+                    doorway.clear_line_after if doorway else None
+                ),
+                "wall_crossings_after_doorway": (
+                    doorway.wall_crossings_after if doorway else None
+                ),
             }
         )
         if len(valid) >= limit:
@@ -1021,12 +1943,77 @@ def find_attachment_candidates(
         else:
             reason = REASON_TOO_FAR
 
+    diagnostics = {
+        "origin_x": round(px, 2),
+        "origin_y": round(py, 2),
+        "nearest_corridor_distance_px": nearest_found_px,
+        "rejected_by_wall_count": blocked_count,
+        "rejected_off_graph_count": isolated_count,
+        "doorway_attempted_count": doorway_attempts,
+        "doorway_resolved_count": doorway_resolutions,
+        "strict_resolution_rescue_count": strict_rescues,
+        # Candidates the legacy 3%-of-samples rule would have ACCEPTED and
+        # the strict run-based rule refused. Non-zero means this map had
+        # the long-line bypass in it.
+        "legacy_bypass_rejected_count": legacy_bypass_rejections,
+        # Only asked when the door-aware stage actually ran, so a floor
+        # with no rejections never pays for building the strict mask.
+        "strict_mask_available": (
+            context.strict_metrics is not None if doorway_attempts else None
+        ),
+        **context.component_diagnostics(),
+    }
+    if nearest_isolated_id is not None:
+        diagnostics["isolated_candidate_component_size"] = (
+            context.components.size_of(nearest_isolated_id)
+        )
+        diagnostics["isolated_candidate_gap_to_main_px"] = (
+            context.distance_to_main_component_px(nearest_isolated_id)
+        )
+
+    best_candidate = valid[0] if valid else None
+    if best_candidate is not None:
+        diagnostics.update(
+            {
+                "doorway_resolved": best_candidate["doorway_resolved"],
+                "doorway_exit_x": best_candidate["doorway_exit_x"],
+                "doorway_exit_y": best_candidate["doorway_exit_y"],
+                "doorway_snap_px": best_candidate["doorway_snap_px"],
+                "wall_stroke_thickness_px": best_candidate[
+                    "wall_stroke_thickness_px"
+                ],
+                "doorway_crossing_thickness_px": best_candidate[
+                    "doorway_crossing_thickness_px"
+                ],
+                "clear_line_after_doorway": best_candidate[
+                    "clear_line_after_doorway"
+                ],
+                "wall_crossings_after_doorway": best_candidate[
+                    "wall_crossings_after_doorway"
+                ],
+            }
+        )
+    else:
+        diagnostics["doorway_resolved"] = False
+
+    # `reason` deliberately keeps its long-standing coarse value —
+    # "blocked_by_wall" — because the preview UI, the bulk retry and a dozen
+    # existing tests match on it. `final_reason` is where the door-aware
+    # stage says WHICH wall it was: the one at the door the marker sits on,
+    # or one between that door and the corridor.
+    diagnostics["final_reason"] = canonical_final_reason(
+        doorway_failure
+        if (reason == REASON_BLOCKED_BY_WALL and doorway_failure)
+        else reason
+    )
+
     return AttachmentSearch(
         candidates=valid,
         blocked_count=blocked_count,
         isolated_count=isolated_count,
         nearest_found_px=nearest_found_px,
         reason=reason,
+        diagnostics=diagnostics,
     )
 
 

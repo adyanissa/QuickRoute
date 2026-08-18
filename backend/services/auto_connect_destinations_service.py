@@ -78,8 +78,10 @@ from services.destination_attachment_service import (  # noqa: F401
     _get_scale_for_floor,
     MAX_CANDIDATES_PER_PROPOSAL,
     _split_corridor_edge_for_attachment,
+    canonical_final_reason,
     find_attachment_candidates,
     load_corridor_floor_context,
+    resolve_doorway_exit_point,
 )
 
 
@@ -157,6 +159,11 @@ def _no_candidate_proposal(
         "status": status,
         "confidence": None,
         "reason": reason,
+        # The canonical name for the same outcome. `reason` keeps the exact
+        # strings it has always emitted so nothing matching on them breaks;
+        # `final_reason` is the single vocabulary the review UI reads, and
+        # is the only place the two new door-aware outcomes appear.
+        "final_reason": canonical_final_reason(reason),
         "has_existing_invalid_edges": has_existing_invalid_edges,
         "is_calibrated": is_calibrated,
         "proposed_candidate_id": None,
@@ -361,7 +368,10 @@ async def _scan_one_map(
                     has_existing_invalid_edges=has_existing_invalid_edges,
                     hard_safety_max_px=hard_safety_max_px,
                     status="needs_review",
-                    diagnostics=nested_diagnostics,
+                    diagnostics={
+                        **nested_diagnostics,
+                        "final_reason": canonical_final_reason(nested_reason),
+                    },
                 )
             )
             continue
@@ -433,6 +443,22 @@ async def _scan_one_map(
                 "clear_line": True,
                 "doorway_crossing": candidate["doorway_crossing"],
                 "graph_connected": True,
+                # Door-aware validation detail. `doorway_exit_*` is the
+                # temporary waypoint the geometry was proven through — the
+                # destination's own stored x/y are unchanged and are what
+                # the edge is actually written from.
+                "doorway_resolved": candidate["doorway_resolved"],
+                "doorway_exit_x": candidate["doorway_exit_x"],
+                "doorway_exit_y": candidate["doorway_exit_y"],
+                "doorway_snap_px": candidate["doorway_snap_px"],
+                "doorway_crossing_thickness_px": candidate[
+                    "doorway_crossing_thickness_px"
+                ],
+                "wall_stroke_thickness_px": candidate["wall_stroke_thickness_px"],
+                "clear_line_after_doorway": candidate["clear_line_after_doorway"],
+                "wall_crossings_after_doorway": candidate[
+                    "wall_crossings_after_doorway"
+                ],
             }
             for candidate in search.candidates
         ]
@@ -458,6 +484,11 @@ async def _scan_one_map(
                     diagnostics={
                         "blocked_candidate_count": blocked_count,
                         "isolated_candidate_count": isolated_count,
+                        # Everything the door-aware stage measured, so an
+                        # admin can tell "a wall is genuinely in the way"
+                        # from "the marker is a few pixels inside the room"
+                        # from "this corridor is a separate island".
+                        **search.diagnostics,
                     },
                 )
             )
@@ -510,6 +541,7 @@ async def _scan_one_map(
                 ),
                 "blocked_candidate_count": blocked_count,
                 "isolated_candidate_count": isolated_count,
+                **search.diagnostics,
             }
         )
 

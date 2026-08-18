@@ -93,6 +93,29 @@ class AutoConnectCandidate(BaseModel):
     doorway_crossing: bool = False
     graph_connected: bool = True
 
+    # ── Door-aware validation ───────────────────────────────────────────
+    # True when the legacy 900 px validator rejected this line and the
+    # strict full-resolution stage proved the only thing it crosses is a
+    # rasterised doorway artefact at the destination's own door.
+    doorway_resolved: bool = False
+
+    # The temporary waypoint that proof was carried out through. NOT a new
+    # position: the destination's stored x/y are unchanged, and that is
+    # where the edge is written from. Set only when doorway_resolved.
+    doorway_exit_x: Optional[float] = None
+    doorway_exit_y: Optional[float] = None
+    doorway_snap_px: Optional[float] = None
+
+    # The measurements behind the decision, so it is auditable from the UI:
+    # the caliper of what was crossed, and this drawing's wall stroke.
+    doorway_crossing_thickness_px: Optional[float] = None
+    wall_stroke_thickness_px: Optional[float] = None
+
+    # From the exit point to the corridor there must be NOTHING at strict
+    # resolution — forgiveness stops at the doorway.
+    clear_line_after_doorway: Optional[bool] = None
+    wall_crossings_after_doorway: Optional[int] = None
+
 
 class AutoConnectProposal(BaseModel):
     map_id: str
@@ -171,6 +194,67 @@ class AutoConnectProposal(BaseModel):
     # is one, but a wall is in the way".
     blocked_candidate_count: int = 0
     isolated_candidate_count: int = 0
+
+    # ── Door-aware diagnostics ──────────────────────────────────────────
+    # `reason` above keeps the exact vocabulary it has always emitted, so
+    # nothing matching on it breaks. `final_reason` is the canonical name
+    # for the same outcome and is the ONLY place the two new door-aware
+    # outcomes appear:
+    #
+    #   blocked_by_wall               a wall, and it is not at a doorway
+    #   doorway_not_resolved          the obstruction is not provably a door
+    #   blocked_after_doorway         past the door, something real is in the way
+    #   corridor_component_isolated   the nearby corridor is its own island
+    #   no_corridor_candidate         nothing within reach on this floor
+    #   nested_parent_required        an approved parent exists but has no point
+    #   nested_parent_not_pass_through
+    final_reason: Optional[str] = None
+
+    # The destination's own stored coordinates as the search saw them.
+    # Echoed back so a diagnosis never depends on the UI's copy.
+    origin_x: Optional[float] = None
+    origin_y: Optional[float] = None
+
+    nearest_corridor_distance_px: Optional[float] = None
+    rejected_by_wall_count: int = 0
+    rejected_off_graph_count: int = 0
+
+    # How often the door-aware stage ran, and what it concluded.
+    doorway_attempted_count: int = 0
+    doorway_resolved_count: int = 0
+    # Candidates the legacy 900 px mask rejected purely as a resolution
+    # artefact — the strict mask found the line simply clear, no doorway
+    # forgiveness involved.
+    strict_resolution_rescue_count: int = 0
+    # Candidates the legacy 3%-of-samples rule would have ACCEPTED and the
+    # strict run-based rule refused — i.e. connections that would have been
+    # created straight through a wall. Non-zero means this map was affected
+    # by the long-line bypass.
+    legacy_bypass_rejected_count: int = 0
+    strict_mask_available: Optional[bool] = None
+
+    doorway_resolved: bool = False
+    doorway_exit_x: Optional[float] = None
+    doorway_exit_y: Optional[float] = None
+    doorway_snap_px: Optional[float] = None
+    doorway_crossing_thickness_px: Optional[float] = None
+    wall_stroke_thickness_px: Optional[float] = None
+    clear_line_after_doorway: Optional[bool] = None
+    wall_crossings_after_doorway: Optional[int] = None
+
+    # ── Corridor graph shape ────────────────────────────────────────────
+    # "corridor_component_isolated" on its own is not actionable. These say
+    # whether the stray candidate is one orphan dot or a whole second wing,
+    # and how far it sits from the main network — which is the difference
+    # between deleting a point and joining two corridors.
+    corridor_component_count: Optional[int] = None
+    corridor_main_component_size: Optional[int] = None
+    corridor_isolated_component_sizes: List[int] = Field(default_factory=list)
+    # How many pairs of corridor endpoints were treated as one because they
+    # sit on the same physical spot. Reported, never silent.
+    corridor_coincident_merges: int = 0
+    isolated_candidate_component_size: Optional[int] = None
+    isolated_candidate_gap_to_main_px: Optional[float] = None
 
     # Nested-room diagnostics — populated whenever is_nested_access is
     # True, for the proposed case and both review cases.
