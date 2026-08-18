@@ -35,7 +35,8 @@ from constants.destination_types import (
 )
 from constants.route_point_types import DESTINATION_CAPABLE_POINT_TYPES
 from services.point_dedup_service import find_or_create_route_point
-from services.graph_connection_service import auto_connect_point
+from services.destination_attachment_service import attach_point_safely
+from services.graph_connectivity_service import room_connection_state
 from services.room_sync_service import sync_room_for_route_point
 from schemas.localization_schema import localized_text_to_dict, merge_localized_text
 
@@ -74,59 +75,28 @@ async def compute_room_navigability(room: Room) -> Tuple[bool, Optional[str]]:
     The single, live source of truth for whether a normal user can
     navigate to this destination right now.
 
-    The reason returned should preserve the original cause:
+    The rule itself now lives in services/graph_connectivity_service so
+    that this endpoint, the QR issuer and Auto Connect cannot disagree —
+    they previously did, on real data: Auto Connect reported a room as
+    already connected while this function reported the same room as
+    disconnected. See that module's docstring for the three definitions
+    that had drifted apart and what replaced them.
+
+    Reasons are unchanged for every case that could occur before:
       1. missing_route_point
       2. route_point_not_found
       3. inactive_route_point
       4. inactive_destination
       5. disconnected_from_graph
 
-    A RoutePoint deactivation may also synchronize Room.is_active=False.
-    When the linked RoutePoint still exists and is inactive, the more
-    specific reason is therefore inactive_route_point. If the point was
-    deleted and the Room was soft-deactivated, the reason remains
-    inactive_destination.
+    One reason is NEW: only_invalid_edges, for a room whose arrival point
+    has edges but none of them reaches the walkable graph legitimately —
+    in practice a stale Room-to-Room edge from before the Auto Connect
+    correction. That case used to be reported as fully navigable, which is
+    exactly the bug: the room looked routable and was not.
     """
 
-    if not room.route_point_id:
-        if not room.is_active:
-            return False, "inactive_destination"
-
-        return False, "missing_route_point"
-
-    point = None
-
-    try:
-        point = await RoutePoint.get(
-            PydanticObjectId(room.route_point_id)
-        )
-    except Exception:
-        point = None
-
-    if point is not None and not point.is_active:
-        return False, "inactive_route_point"
-
-    if not room.is_active:
-        return False, "inactive_destination"
-
-    if point is None:
-        return False, "route_point_not_found"
-
-    # Any active edge referencing this point, from either end, counts.
-    connected_edge = await RouteEdge.find_one(
-        {
-            "is_active": True,
-            "$or": [
-                {"from_point_id": str(point.id)},
-                {"to_point_id": str(point.id)},
-            ],
-        }
-    )
-
-    if not connected_edge:
-        return False, "disconnected_from_graph"
-
-    return True, None
+    return await room_connection_state(room)
 
 
 async def room_to_response(
@@ -217,13 +187,21 @@ async def _place_room_on_map(
     # the point would be created with the OLD floor number while living
     # on the NEW floor's map, and Room.floor would silently disagree with
     # Room.map_id forever after.
+    # The TARGET map's floor wins (PHASE 16/17 — see above). But when the
+    # Map itself carries no floor, RoutePoint.floor is the only source of
+    # truth on that map (see calculate_edge_distance's own note on the two
+    # floor models), so falling back to None would stamp the arrival point
+    # with no floor while the corridor points around it have real ones —
+    # and the edge layer would then correctly refuse to connect them.
+    resolved_point_floor = map_item.floor if map_item.floor is not None else room.floor
+
     point, was_reused = await find_or_create_route_point(
         map_id=map_id,
         name=room.name_en,
         point_type="room",
         x=x,
         y=y,
-        floor=map_item.floor,
+        floor=resolved_point_floor,
         building_id=building_id,
         room_id=str(room.id),
         is_accessible=True,
@@ -262,14 +240,33 @@ async def _place_room_on_map(
         )
         connected = existing_edge is not None
     else:
-        connection_summary = await auto_connect_point(point, mode="nearest")
-        connected = len(connection_summary["edges_created"]) > 0
+        # ATTACH-ON-SAVE. One shared algorithm
+        # (services/destination_attachment_service): corridor nodes AND
+        # projection onto a drawn corridor edge, splitting that edge with a
+        # junction when the perpendicular foot is the best target, all
+        # validated against strict clear-line geometry.
+        #
+        # This used to call graph_connection_service.auto_connect_point,
+        # which only ever looked at corridor NODES — so a room saved beside
+        # the MIDDLE of a long corridor stayed unconnected and the admin
+        # had to go back and press Auto Connect by hand.
+        #
+        # Never fails the room creation: a room with no reachable corridor
+        # is saved unconnected (pending) and picked up by the bulk retry
+        # once the corridor exists.
+        attachment = await attach_point_safely(point)
+        connected = attachment["status"] in ("attached", "already_connected")
 
     room.map_id = map_id
     room.x = point.x
     room.y = point.y
     room.route_point_id = str(point.id)
-    room.floor = map_item.floor
+    # Keep Room.floor and its arrival point's floor in agreement. They
+    # used to be able to disagree on a Map with no floor of its own (the
+    # point got None while the Room kept its requested number), which is
+    # exactly the drift that makes an otherwise-valid walkway edge look
+    # cross-floor to the edge layer.
+    room.floor = resolved_point_floor
 
     return was_reused, connected
 
@@ -492,6 +489,14 @@ async def sync_rooms_from_route_points(
 )
 async def get_all_rooms(
     building_id: Optional[str] = Query(default=None),
+    # FLOOR ISOLATION. In this project one Map IS one floor, so map_id is
+    # the only exact floor scope: `floor` alone is ambiguous whenever a
+    # building holds two maps for the same floor number (a superseded
+    # upload with is_current_for_floor=False, or two wings). Without this
+    # filter the admin Rooms list and every count derived from it showed
+    # every floor's rooms at once, which is what made one floor's data
+    # look like it had replaced another's.
+    map_id: Optional[str] = Query(default=None),
     floor: Optional[int] = Query(default=None),
     room_type: Optional[str] = Query(default=None),
     admin: User = Depends(get_current_user_optional),
@@ -513,6 +518,9 @@ async def get_all_rooms(
 
     if building_id:
         query["building_id"] = building_id
+
+    if map_id:
+        query["map_id"] = map_id
 
     if floor is not None:
         query["floor"] = floor

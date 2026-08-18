@@ -56,7 +56,7 @@ test('the five already-draggable panels are NOT registered here', () => {
   ['addPoint', 'draw', 'test', 'connector', 'semanticBatch', 'toolbox'].forEach(
     (id) => assert.ok(!registered.includes(id), `${id} must not be registered`),
   );
-  assert.equal(registered.length, 5);
+  assert.equal(registered.length, 6);
 });
 
 // Rectangles overlap unless one is entirely to the side of, or entirely

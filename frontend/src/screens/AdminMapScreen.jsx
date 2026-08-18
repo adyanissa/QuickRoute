@@ -112,7 +112,13 @@ import {
 import FloatingToolPanel from '../components/FloatingToolPanel';
 import NavigationBuildPreviewPanel from '../components/NavigationBuildPreviewPanel';
 import MapToolboxPanel, { TOOLBOX_WIDTH } from '../components/MapToolboxPanel';
+import LegacyConnectionsPanel from '../components/LegacyConnectionsPanel';
 import { previewNavigationBuild } from '../api/navigationBuildApi';
+import {
+  applyLegacyConnections,
+  previewLegacyConnections,
+  retryPendingAttachments,
+} from '../api/routeEdgesApi';
 import { useAuth } from '../context/AuthContext';
 import '../styles/adminScreens.css';
 
@@ -192,6 +198,14 @@ const UI = {
     drawCancel: 'Cancel',
     drawSave: 'Save Path',
     drawSaving: 'Saving...',
+    drawSavePath: 'Save This Path',
+    drawDiscardCurrent: 'Discard This Path',
+    drawDone: 'Done',
+    drawSessionSaved: (n) =>
+      `${n} path${n !== 1 ? 's' : ''} saved in this session \u2014 draw another, or press Done`,
+    deleteConnectionDone: 'Done',
+    deleteSessionRemoved: (n) =>
+      `${n} connection${n !== 1 ? 's' : ''} removed in this session`,
     drawNeedTwo: 'Add at least 2 points before saving',
     drawInvalidNames: 'Enter a valid name for every new point before saving',
     drawPointListTitle: 'Draft points',
@@ -331,6 +345,28 @@ const UI = {
     autoConnectTargetTypeLabel: 'Connection type',
     autoConnectNestedParentLabel: 'Parent room',
     autoConnectJunctionsCreated: 'Corridor junctions added',
+    legacyRepairMode: 'Repair Connections',
+    legacyRepairModeShort: 'Repair Links',
+    legacyRepairTitle: 'Legacy Connections',
+    legacyRepairIntro:
+      'Finds old connections that route through ordinary rooms. Approved nested rooms and same-location duplicates are never touched.',
+    legacyRepairScan: 'Scan This Floor',
+    legacyRepairScanning: 'Scanning...',
+    legacyRepairRepair: 'Repair Invalid',
+    legacyRepairRepairing: 'Repairing...',
+    legacyRepairScanned: 'Connections scanned',
+    legacyRepairScannedDestinations: 'Destinations scanned',
+    legacyRepairInvalid: 'Invalid legacy connections',
+    legacyRepairNeedsReview: 'Needs your review',
+    legacyRepairRepaired: 'Repaired',
+    legacyRepairReconnected: 'Reconnected to corridor',
+    legacyRepairStillNeedsReview: 'Still needs review',
+    legacyRepairInvalidList: 'Will be repaired',
+    legacyRepairReviewList: 'Needs a human decision',
+    legacyRepairNothingFound: 'No invalid legacy connections on this floor.',
+    legacyRepairFailed: 'Could not scan legacy connections.',
+    retryPendingResult: (attached, pending) =>
+      `${attached} destination${attached !== 1 ? 's' : ''} connected to the corridor, ${pending} still pending`,
     autoConnectUncalibrated: 'uncalibrated',
     autoConnectConfidenceHigh: 'High confidence',
     autoConnectConfidenceMedium: 'Medium confidence',
@@ -721,6 +757,12 @@ const UI = {
     drawCancel: 'إلغاء',
     drawSave: 'حفظ المسار',
     drawSaving: 'جاري الحفظ...',
+    drawSavePath: 'حفظ هذا المسار',
+    drawDiscardCurrent: 'تجاهل هذا المسار',
+    drawDone: 'إنهاء',
+    drawSessionSaved: (n) => `تم حفظ ${n} مسار في هذه الجلسة \u2014 ارسم مساراً آخر أو اضغط إنهاء`,
+    deleteConnectionDone: 'إنهاء',
+    deleteSessionRemoved: (n) => `تمت إزالة ${n} رابط في هذه الجلسة`,
     drawNeedTwo: 'أضيفي نقطتين على الأقل قبل الحفظ',
     drawInvalidNames: 'أدخلي اسمًا صالحًا لكل نقطة جديدة قبل الحفظ',
     drawPointListTitle: 'نقاط المسودة',
@@ -846,6 +888,27 @@ const UI = {
     autoConnectTargetTypeLabel: 'نوع الربط',
     autoConnectNestedParentLabel: 'الغرفة الأصل',
     autoConnectJunctionsCreated: 'تقاطعات ممر تمت إضافتها',
+    legacyRepairMode: 'إصلاح الروابط',
+    legacyRepairModeShort: 'إصلاح الروابط',
+    legacyRepairTitle: 'الروابط القديمة',
+    legacyRepairIntro:
+      'يبحث عن روابط قديمة تمر عبر غرف عادية. الغرف المتداخلة المعتمدة والتكرارات في نفس الموقع لا يتم المساس بها.',
+    legacyRepairScan: 'فحص هذا الطابق',
+    legacyRepairScanning: 'جاري الفحص...',
+    legacyRepairRepair: 'إصلاح غير الصالح',
+    legacyRepairRepairing: 'جاري الإصلاح...',
+    legacyRepairScanned: 'روابط تم فحصها',
+    legacyRepairScannedDestinations: 'وجهات تم فحصها',
+    legacyRepairInvalid: 'روابط قديمة غير صالحة',
+    legacyRepairNeedsReview: 'يحتاج مراجعتك',
+    legacyRepairRepaired: 'تم الإصلاح',
+    legacyRepairReconnected: 'أعيد ربطها بالممر',
+    legacyRepairStillNeedsReview: 'ما زال يحتاج مراجعة',
+    legacyRepairInvalidList: 'سيتم إصلاحها',
+    legacyRepairReviewList: 'يحتاج قراراً بشرياً',
+    legacyRepairNothingFound: 'لا توجد روابط قديمة غير صالحة في هذا الطابق.',
+    legacyRepairFailed: 'تعذر فحص الروابط القديمة.',
+    retryPendingResult: (attached, pending) => `تم ربط ${attached} وجهة بالممر، وما زال ${pending} معلقاً`,
     autoConnectUncalibrated: 'غير معايَر',
     autoConnectConfidenceHigh: 'ثقة عالية',
     autoConnectConfidenceMedium: 'ثقة متوسطة',
@@ -1224,6 +1287,12 @@ const UI = {
     drawCancel: 'ביטול',
     drawSave: 'שמור מסלול',
     drawSaving: 'שומר...',
+    drawSavePath: 'שמור מסלול זה',
+    drawDiscardCurrent: 'בטל מסלול זה',
+    drawDone: 'סיום',
+    drawSessionSaved: (n) => `${n} מסלולים נשמרו בפעילות זו \u2014 שרטטו עוד או לחצו סיום`,
+    deleteConnectionDone: 'סיום',
+    deleteSessionRemoved: (n) => `${n} חיבורים הוסרו בפעילות זו`,
     drawNeedTwo: 'הוסף לפחות 2 נקודות לפני השמירה',
     drawInvalidNames: 'הזן שם תקין לכל נקודה חדשה לפני השמירה',
     drawPointListTitle: 'נקודות הטיוטה',
@@ -1348,6 +1417,27 @@ const UI = {
     autoConnectTargetTypeLabel: 'סוג החיבור',
     autoConnectNestedParentLabel: 'חדר האב',
     autoConnectJunctionsCreated: 'צמתי מסדרון שנוספו',
+    legacyRepairMode: 'תיקון חיבורים',
+    legacyRepairModeShort: 'תיקון חיבורים',
+    legacyRepairTitle: 'חיבורים ישנים',
+    legacyRepairIntro:
+      'מאתר חיבורים ישנים שעוברים דרך חדרים רגילים. חדרים מקוננים מאושרים וכפילויות באותו מיקום אינם נוגעים.',
+    legacyRepairScan: 'סרוק קומה זו',
+    legacyRepairScanning: 'סורק...',
+    legacyRepairRepair: 'תקן לא תקינים',
+    legacyRepairRepairing: 'מתקן...',
+    legacyRepairScanned: 'חיבורים שנסרקו',
+    legacyRepairScannedDestinations: 'יעדים שנסרקו',
+    legacyRepairInvalid: 'חיבורים ישנים לא תקינים',
+    legacyRepairNeedsReview: 'דורש את בדיקתך',
+    legacyRepairRepaired: 'תוקנו',
+    legacyRepairReconnected: 'חוברו מחדש למסדרון',
+    legacyRepairStillNeedsReview: 'עדיין דורש בדיקה',
+    legacyRepairInvalidList: 'יתוקנו',
+    legacyRepairReviewList: 'דורש החלטה אנושית',
+    legacyRepairNothingFound: 'אין חיבורים ישנים לא תקינים בקומה זו.',
+    legacyRepairFailed: 'לא ניתן לסרוק חיבורים ישנים.',
+    retryPendingResult: (attached, pending) => `${attached} יעדים חוברו למסדרון, ${pending} עדיין ממתינים`,
     autoConnectUncalibrated: 'לא מכויל',
     autoConnectConfidenceHigh: 'ביטחון גבוה',
     autoConnectConfidenceMedium: 'ביטחון בינוני',
@@ -1993,6 +2083,15 @@ const AdminMapScreen = () => {
   const [draftPoints, setDraftPoints] = useState([]);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [draftError, setDraftError] = useState('');
+  // One Draw Walkable Path session can now contain several paths. Each is
+  // still saved to the backend as it is finished (see handleSaveDraft) —
+  // these are a record of what THIS session has already committed, so the
+  // panel can show progress without the admin having to leave and re-enter
+  // the tool between paths. Reset on entering/leaving draw mode.
+  const [drawSessionSummaries, setDrawSessionSummaries] = useState([]);
+  const [drawSessionFeedback, setDrawSessionFeedback] = useState('');
+  // Same idea for Delete Connection: how many edges this session removed.
+  const [deleteSessionCount, setDeleteSessionCount] = useState(0);
   // Draw Walkable Path's "Automatic graph merging" option:
   //   'off'        — bypass server-side dedup entirely (force_create) for
   //                  every new point; only explicitly-selected existing
@@ -2103,6 +2202,16 @@ const AdminMapScreen = () => {
   const [navBuildLoading, setNavBuildLoading] = useState(false);
   const [navBuildError, setNavBuildError] = useState('');
   const [navBuildOpen, setNavBuildOpen] = useState(false);
+
+  // Legacy invalid-connection repair. Preview is read-only; the apply
+  // deactivates only the edges the backend classified as repairable on
+  // THIS map and then reconnects the affected destinations.
+  const [legacyRepairOpen, setLegacyRepairOpen] = useState(false);
+  const [legacyRepairPreview, setLegacyRepairPreview] = useState(null);
+  const [legacyRepairResult, setLegacyRepairResult] = useState(null);
+  const [legacyRepairLoading, setLegacyRepairLoading] = useState(false);
+  const [legacyRepairApplying, setLegacyRepairApplying] = useState(false);
+  const [legacyRepairError, setLegacyRepairError] = useState('');
   const [navBuildLayers, setNavBuildLayers] = useState({
     region: true,
     rejected: false,
@@ -4146,10 +4255,35 @@ const AdminMapScreen = () => {
     setDraftPoints([]);
   };
 
-  const handleCancelDraw = () => {
+  // "Done" for the whole draw session. Paths already saved stay saved —
+  // this only discards the path currently being drawn, if any, and leaves
+  // the tool.
+  const handleCancelDraw = async () => {
+    const savedPathCount = drawSessionSummaries.length;
+
     setMode('point');
     setDraftPoints([]);
     setDraftError('');
+    setDrawSessionSummaries([]);
+    setDrawSessionFeedback('');
+
+    // BULK RETRY at the natural end of corridor editing. Only when this
+    // session actually saved a path — finishing a session in which nothing
+    // was drawn changes no graph and needs no retry.
+    if (savedPathCount > 0) {
+      const retry = await runPendingAttachmentRetry();
+      if (retry && (retry.attached > 0 || retry.still_pending > 0)) {
+        alert(t.retryPendingResult(retry.attached, retry.still_pending));
+      }
+    }
+  };
+
+  // Discards ONLY the in-progress path and stays in draw mode, so a
+  // mis-clicked path can be abandoned without ending the session.
+  const handleDiscardCurrentPath = () => {
+    setDraftPoints([]);
+    setDraftError('');
+    setDrawSessionFeedback('');
   };
 
   const handleSaveDraft = async () => {
@@ -4301,16 +4435,34 @@ const AdminMapScreen = () => {
         mergedNearbyEdgeCount,
       );
 
-      // The draw toolbar unmounts the instant we switch back to 'point'
-      // mode, so an inline success message would never actually be seen —
-      // use the same alert() pattern the rest of this screen already uses
-      // for save confirmations.
-      setMode('point');
+      // MULTI-PATH DRAW SESSION.
+      //
+      // This used to call setMode('point'), which ended the whole editing
+      // session after a single path — so drawing four corridors meant
+      // reopening the tool four times. The mode now stays 'draw': only the
+      // in-progress path is cleared, leaving the admin ready to click the
+      // first point of the next one immediately.
+      //
+      // Each path is still persisted the moment it is saved (unchanged),
+      // so nothing is held in memory waiting on a final commit and a
+      // browser refresh mid-session can never lose completed work.
       setDraftPoints([]);
+      setDraftError('');
+      setDrawSessionSummaries((previous) => [
+        ...previous,
+        {
+          points: createdPointIds.length,
+          reused: reusedPointCount,
+          edges: createdEdgeIds.length - mergedNearbyEdgeCount,
+        },
+      ]);
 
       await refreshRouteGraph(activeMap.id);
 
-      alert(summary);
+      // Inline feedback rather than alert(): an alert per path would be
+      // four interruptions in a four-path session, and the panel now
+      // stays mounted to show it.
+      setDrawSessionFeedback(summary);
     } catch (error) {
       console.error('Failed to save walkable path, rolling back:', error);
 
@@ -4790,11 +4942,14 @@ const AdminMapScreen = () => {
   // normal map interaction (Add Point, marker clicks, etc.) with no
   // separate "restore" step needed, since every other mode's own toolbar
   // handler already resets its own state when (re)entering it.
+  // "Done" for the whole delete session. Every edge removed during it is
+  // already persisted; this just leaves the tool.
   const handleCancelDeleteConnectionMode = () => {
     setMode('point');
     setSelectedEdgeForDeletion(null);
     setDeleteConnectionVerticalNotice(false);
     setDeleteConnectionError('');
+    setDeleteSessionCount(0);
   };
 
   // On confirmation: calls the existing, already-admin-protected RouteEdge
@@ -4822,16 +4977,23 @@ const AdminMapScreen = () => {
     try {
       await deleteRouteEdge(edgeId);
 
+      // MULTI-DELETE SESSION. This used to call setMode('point'), ending
+      // the session after one edge — so cleaning up four bad connections
+      // meant reopening the tool four times. Only the selection is
+      // cleared now; the mode stays 'delete-connection' until the admin
+      // explicitly presses Done.
+      //
+      // Persistence is deliberately unchanged: each edge is still deleted
+      // on the backend immediately, so there is no batch to lose and no
+      // new failure mode.
       setSelectedEdgeForDeletion(null);
       setDeleteConnectionVerticalNotice(false);
-      setMode('point');
+      setDeleteSessionCount((previous) => previous + 1);
 
       // Refresh from the backend rather than locally filtering routeEdges —
       // this is the same "never optimistically mutate, always reload the
       // real graph" pattern Draw Walkable Path's own save already uses.
       await refreshRouteGraph(activeMap?.id);
-
-      alert(t.deleteConnectionSuccess);
     } catch (error) {
       console.error('Failed to delete route edge:', error);
       // error.message is always either the backend's own safe HTTPException
@@ -5451,6 +5613,9 @@ const AdminMapScreen = () => {
     if (navBuildOpen) {
       ids.push(MAP_PANEL_IDS.navBuild);
     }
+    if (legacyRepairOpen) {
+      ids.push(MAP_PANEL_IDS.legacyRepair);
+    }
     if (mode === 'edit-points' && editPointTarget) {
       ids.push(MAP_PANEL_IDS.editPoint);
     }
@@ -5463,6 +5628,7 @@ const AdminMapScreen = () => {
     semanticBatchActive,
     semanticBatchReviewOpen,
     navBuildOpen,
+    legacyRepairOpen,
     editPointTarget,
   ]);
 
@@ -5633,6 +5799,80 @@ const AdminMapScreen = () => {
     setNavBuildError('');
   };
 
+  // ── Legacy invalid-connection repair ──────────────────────────────────
+
+  const runLegacyRepairScan = async () => {
+    if (!activeMap?.id) return;
+
+    setLegacyRepairLoading(true);
+    setLegacyRepairError('');
+    setLegacyRepairResult(null);
+
+    try {
+      const result = await previewLegacyConnections({ map_id: activeMap.id });
+      setLegacyRepairPreview(result);
+    } catch (error) {
+      console.error('Legacy connection scan failed:', error);
+      setLegacyRepairError(error.message || t.legacyRepairFailed);
+    } finally {
+      setLegacyRepairLoading(false);
+    }
+  };
+
+  const handleOpenLegacyRepair = () => {
+    setLegacyRepairOpen(true);
+    setLegacyRepairError('');
+    runLegacyRepairScan();
+  };
+
+  const handleCloseLegacyRepair = () => {
+    setLegacyRepairOpen(false);
+    setLegacyRepairPreview(null);
+    setLegacyRepairResult(null);
+    setLegacyRepairError('');
+  };
+
+  // Repairs every finding the backend marked repairable on THIS map. The
+  // findings it deliberately does NOT mark repairable (a room the corridor
+  // may rely on, a destination whose every edge is invalid) are never
+  // included — those need the admin to look at the drawing.
+  const handleApplyLegacyRepair = async () => {
+    if (!activeMap?.id) return;
+
+    setLegacyRepairApplying(true);
+    setLegacyRepairError('');
+
+    try {
+      const result = await applyLegacyConnections({ map_id: activeMap.id });
+      setLegacyRepairResult(result);
+      await refreshRouteGraph(activeMap.id);
+      await runLegacyRepairScan();
+    } catch (error) {
+      console.error('Legacy connection repair failed:', error);
+      setLegacyRepairError(error.message || t.legacyRepairFailed);
+    } finally {
+      setLegacyRepairApplying(false);
+    }
+  };
+
+  // Runs ONCE for the whole map at the natural end of a draw session —
+  // see handleCancelDraw. This is what makes "place sixty room door
+  // points, draw the corridor afterwards" work without reopening any of
+  // them. Safe to call repeatedly: a point that already reaches the graph
+  // is skipped and no duplicate edge or junction is ever created.
+  const runPendingAttachmentRetry = async () => {
+    if (!activeMap?.id) return null;
+
+    try {
+      const result = await retryPendingAttachments({ map_id: activeMap.id });
+      await refreshRouteGraph(activeMap.id);
+      return result;
+    } catch (error) {
+      console.error('Pending attachment retry failed:', error);
+      return null;
+    }
+  };
+
   const handleCloseNavBuild = () => {
     setNavBuildOpen(false);
     setNavBuildResult(null);
@@ -5682,6 +5922,10 @@ const AdminMapScreen = () => {
               setMode('draw');
               setClickedPoint(null);
               setPointName('');
+              // A fresh multi-path session — never inherit the previous
+              // session's saved-path tally.
+              setDrawSessionSummaries([]);
+              setDrawSessionFeedback('');
             }
           },
         },
@@ -5791,6 +6035,7 @@ const AdminMapScreen = () => {
               setSelectedEdgeForDeletion(null);
               setDeleteConnectionVerticalNotice(false);
               setDeleteConnectionError('');
+              setDeleteSessionCount(0);
             }
           },
         },
@@ -5822,6 +6067,14 @@ const AdminMapScreen = () => {
           tooltip: t.navBuildMode,
           active: navBuildOpen,
           onClick: handleOpenNavBuild,
+        },
+        {
+          id: 'legacy-repair',
+          icon: 'deleteEdge',
+          label: t.legacyRepairModeShort || t.legacyRepairMode,
+          tooltip: t.legacyRepairMode,
+          active: legacyRepairOpen,
+          onClick: handleOpenLegacyRepair,
         },
       ],
     },
@@ -9734,6 +9987,15 @@ const AdminMapScreen = () => {
                         : t.deleteConnectionInstructions}
                     </div>
 
+                    {/* The session stays open across deletions now, so
+                        show what it has removed so far — otherwise there
+                        is no feedback at all between edges. */}
+                    {deleteSessionCount > 0 && (
+                      <div style={{ pointerEvents: 'none', fontWeight: 600, opacity: 0.9 }}>
+                        {t.deleteSessionRemoved(deleteSessionCount)}
+                      </div>
+                    )}
+
                     <button
                       type="button"
                       onClick={handleCancelDeleteConnectionMode}
@@ -9748,7 +10010,9 @@ const AdminMapScreen = () => {
                         color: '#173b70',
                       }}
                     >
-                      {t.deleteConnectionCancelMode}
+                      {deleteSessionCount > 0
+                        ? t.deleteConnectionDone
+                        : t.deleteConnectionCancelMode}
                     </button>
                   </div>
                 )}
@@ -11434,6 +11698,22 @@ const AdminMapScreen = () => {
                     })()
                   )}
 
+                {legacyRepairOpen &&
+                  mapPanels[MAP_PANEL_IDS.legacyRepair]?.position && (
+                  <LegacyConnectionsPanel
+                    preview={legacyRepairPreview}
+                    applyResult={legacyRepairResult}
+                    loading={legacyRepairLoading}
+                    applying={legacyRepairApplying}
+                    error={legacyRepairError}
+                    onScan={runLegacyRepairScan}
+                    onRepair={handleApplyLegacyRepair}
+                    onClose={handleCloseLegacyRepair}
+                    strings={t}
+                    panelProps={buildMapPanelProps(MAP_PANEL_IDS.legacyRepair)}
+                  />
+                )}
+
                 {navBuildOpen && mapPanels[MAP_PANEL_IDS.navBuild]?.position && (
                   <NavigationBuildPreviewPanel
                     result={navBuildResult}
@@ -11735,13 +12015,16 @@ const AdminMapScreen = () => {
                           {t.drawClear}
                         </button>
 
+                        {/* Discards ONLY the path being drawn and stays
+                            in the session, so a mis-clicked path does not
+                            cost the whole editing session. */}
                         <button
                           type="button"
                           className="adm-btn adm-btn-cancel"
-                          disabled={isSavingDraft}
-                          onClick={handleCancelDraw}
+                          disabled={isSavingDraft || draftPoints.length === 0}
+                          onClick={handleDiscardCurrentPath}
                         >
-                          {t.drawCancel}
+                          {t.drawDiscardCurrent}
                         </button>
 
                         <button
@@ -11754,7 +12037,18 @@ const AdminMapScreen = () => {
                           }
                           onClick={handleSaveDraft}
                         >
-                          {isSavingDraft ? t.drawSaving : t.drawSave}
+                          {isSavingDraft ? t.drawSaving : t.drawSavePath}
+                        </button>
+
+                        {/* Ends the whole session. Every path already
+                            saved stays saved. */}
+                        <button
+                          type="button"
+                          className="adm-btn adm-btn-secondary"
+                          disabled={isSavingDraft}
+                          onClick={handleCancelDraw}
+                        >
+                          {t.drawDone}
                         </button>
                       </div>
                     }
@@ -11768,6 +12062,40 @@ const AdminMapScreen = () => {
                     >
                       {t.drawHint}
                     </div>
+
+                    {/* Multi-path session state. Paths are persisted as
+                        they are finished, so this is a record of committed
+                        work, not a pending batch. */}
+                    {drawSessionSummaries.length > 0 && (
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          padding: '8px 10px',
+                          borderRadius: 10,
+                          background: '#eaf6ee',
+                          color: '#1a6b3a',
+                          fontSize: 12,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {t.drawSessionSaved(drawSessionSummaries.length)}
+                      </div>
+                    )}
+
+                    {drawSessionFeedback && (
+                      <div
+                        style={{
+                          marginBottom: 10,
+                          padding: '8px 10px',
+                          borderRadius: 10,
+                          background: '#f2f7ff',
+                          color: '#2a5298',
+                          fontSize: 12,
+                        }}
+                      >
+                        {drawSessionFeedback}
+                      </div>
+                    )}
 
                     {renderFloorSelect(t.drawFloor, 'draw')}
 

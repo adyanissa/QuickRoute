@@ -66,15 +66,26 @@ def resolve_target_policy_for_point(point: RoutePoint) -> str:
     """
     The right policy for auto-connecting THIS point, derived from the
     point's own type rather than from the call site — so every caller that
-    creates a destination gets the safe behaviour without having to
-    remember to ask for it.
+    creates one gets the safe behaviour without having to remember to ask
+    for it.
 
-    A destination-capable point (room/store) may only be auto-attached to
-    the corridor graph. Everything else — corridor points, entrances,
-    connector stops, and untyped/legacy points — keeps the historical
-    unrestricted behaviour.
+    Restricted to the corridor graph for:
+
+      * destination-capable points (room/store) — a destination must never
+        wire itself to another destination;
+      * vertical-connector stops (RoutePoint.connector_id set) — a stair or
+        elevator stop belongs to its floor's corridor graph. Letting it
+        grab the nearest anything would attach the whole vertical
+        connection to a room, making that room a transit bridge for every
+        cross-floor route through it.
+
+    Everything else — corridor points, entrances, and untyped/legacy points
+    — keeps the historical unrestricted behaviour, which is what corridor
+    merging and Draw Walkable Path rely on.
     """
 
+    if point.connector_id is not None:
+        return TARGET_POLICY_TRANSIT_ONLY
     if point.point_type in DESTINATION_CAPABLE_POINT_TYPES:
         return TARGET_POLICY_TRANSIT_ONLY
     return TARGET_POLICY_ANY
@@ -123,6 +134,14 @@ def _target_allowed(
     # room — the router already recognises exactly this pair via its own
     # coincidence rule. A room even ten pixels away is a different room
     # and stays excluded.
+    #
+    # BOTH sides must be destination-capable: "two records of one place"
+    # is only meaningful between two destinations. A connector stop that
+    # happens to sit on a room's coordinates is not the same thing, and
+    # must still reach the corridor graph on its own.
+    if point.point_type not in DESTINATION_CAPABLE_POINT_TYPES:
+        return False
+
     return other.point_type in DESTINATION_CAPABLE_POINT_TYPES and (
         _is_same_physical_location(point, other)
     )

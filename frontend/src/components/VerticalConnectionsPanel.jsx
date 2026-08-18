@@ -305,10 +305,30 @@ const VerticalConnectionsPanel = ({
       )}
 
       {!mapGroupId && (
-        <div style={{ padding: 8, fontSize: 12.5, color: '#b42318', fontWeight: 600 }}>
-          This floor map does not belong to a Map Group. Vertical connectors
-          (elevators/stairs/escalators/ramps) only make sense between floors
-          of the same multi-floor Map Group.
+        <div
+          style={{
+            padding: 10,
+            borderRadius: 8,
+            background: '#fff6e6',
+            fontSize: 12.5,
+            color: '#7a5200',
+            lineHeight: 1.6,
+          }}
+        >
+          <strong style={{ display: 'block', marginBottom: 4, color: '#b42318' }}>
+            This floor map is not part of a Map Group yet.
+          </strong>
+          One elevator or staircase is ONE connector with one stop per
+          floor, and the floors it joins have to belong to the same
+          multi-floor Map Group — that grouping is what keeps
+          &ldquo;Elevator A&rdquo; a single identity instead of a separate
+          elevator per floor.
+          <div style={{ marginTop: 6 }}>
+            Add every floor of this building to one Map Group (Maps &rarr;
+            Map Groups), then reopen this panel: the existing connectors
+            will be listed here and you can add this floor&rsquo;s stop to
+            the one you already created.
+          </div>
         </div>
       )}
 

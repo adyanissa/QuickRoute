@@ -53,18 +53,30 @@ const source = readScreen(ADMIN_MAP_SCREEN);
 
 // ── 1. Delete Connection button appears in AdminMapScreen ──────────────────
 
-test('AdminMapScreen.jsx: a Delete Connection toolbar button exists, rendering t.deleteConnectionMode', () => {
-  // Tightly bounded to the mode toolbar itself (between the Calibrate
-  // Scale button and the Sync Rooms action button, its immediate
-  // neighbors) so this can't accidentally match some unrelated <button>
-  // elsewhere in this 260KB+ file.
-  const toolbarSlice = source.slice(
-    source.indexOf('{t.calibrateMode}'),
-    source.indexOf('{t.syncRoomsAction}'),
+// The mode controls moved out of the old fixed horizontal toolbar into
+// the draggable "Navigation Tools" toolbox, which is data-driven: each
+// control is an entry in the `mapToolGroups` array rather than an inline
+// <button>. The invariant is unchanged — a Delete Connection control
+// exists, it is labelled t.deleteConnectionMode, and it enters
+// delete-connection mode — so this still slices a tightly bounded region
+// (the toolbox config only) rather than matching the whole 500KB file.
+function toolboxConfigSlice(src) {
+  const start = src.indexOf('const mapToolGroups = [');
+  assert.notEqual(start, -1, 'expected the mapToolGroups toolbox config');
+  const end = src.indexOf('\n  ];', start);
+  assert.notEqual(end, -1, 'expected the mapToolGroups config to terminate');
+  return src.slice(start, end);
+}
+
+test('AdminMapScreen.jsx: a Delete Connection toolbox entry exists, rendering t.deleteConnectionMode', () => {
+  const toolbox = toolboxConfigSlice(source);
+
+  assert.match(toolbox, /setMode\('delete-connection'\)/);
+  assert.match(toolbox, /label:\s*t\.deleteConnectionMode/);
+  assert.match(
+    toolbox,
+    /id:\s*'delete-connection'[\s\S]*?label:\s*t\.deleteConnectionMode[\s\S]*?setMode\('delete-connection'\)/,
   );
-  assert.match(toolbarSlice, /setMode\('delete-connection'\)/);
-  assert.match(toolbarSlice, /\{t\.deleteConnectionMode\}/);
-  assert.match(toolbarSlice, /<button[\s\S]*?setMode\('delete-connection'\)[\s\S]*?\{t\.deleteConnectionMode\}[\s\S]*?<\/button>/);
 });
 
 // ── 2. Activating it enters a dedicated delete mode ─────────────────────────
@@ -81,13 +93,15 @@ test("AdminMapScreen.jsx: clicking the button sets mode to 'delete-connection', 
 });
 
 test('AdminMapScreen.jsx: entering delete-connection mode resets any in-progress point selection and prior edge selection', () => {
-  const toolbarButtonMatch = source.match(
-    /onClick=\{\(\) => \{\s*if \(mode !== 'delete-connection'\) \{([\s\S]*?)\}\s*\}\}/,
+  // Toolbox entries declare their handler as an object property
+  // (`onClick: () => {`), not a JSX attribute (`onClick={() => {`).
+  const toolButtonMatch = source.match(
+    /onClick:\s*\(\) => \{\s*if \(mode !== 'delete-connection'\) \{([\s\S]*?)\}\s*\}/,
   );
-  assert.ok(toolbarButtonMatch, 'expected the delete-connection toolbar onClick body');
-  assert.match(toolbarButtonMatch[1], /setMode\('delete-connection'\)/);
-  assert.match(toolbarButtonMatch[1], /setSelectedEdgeForDeletion\(null\)/);
-  assert.match(toolbarButtonMatch[1], /setDeleteConnectionVerticalNotice\(false\)/);
+  assert.ok(toolButtonMatch, 'expected the delete-connection tool onClick body');
+  assert.match(toolButtonMatch[1], /setMode\('delete-connection'\)/);
+  assert.match(toolButtonMatch[1], /setSelectedEdgeForDeletion\(null\)/);
+  assert.match(toolButtonMatch[1], /setDeleteConnectionVerticalNotice\(false\)/);
 });
 
 // ── 3. Clicking an existing edge selects its real RouteEdge ID ─────────────

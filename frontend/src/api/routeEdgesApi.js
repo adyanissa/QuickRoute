@@ -56,3 +56,36 @@ export function applyAutoConnectDestinations(applyOptions) {
     body: JSON.stringify(applyOptions),
   });
 }
+
+// Legacy invalid-connection repair — preview/apply pair, always scoped to
+// ONE map. The preview is completely read-only; the apply deactivates
+// (never deletes) only the edges it is given, then reconnects the affected
+// destinations through the shared attachment service.
+// previewOptions: { map_id }
+export function previewLegacyConnections(previewOptions) {
+  return apiRequest("/api/route-edges/legacy-connections/preview", {
+    method: "POST",
+    body: JSON.stringify(previewOptions),
+  });
+}
+
+// applyOptions: { map_id, edge_ids? } — omit edge_ids to repair every
+// auto-repairable finding this map's own preview reports.
+export function applyLegacyConnections(applyOptions) {
+  return apiRequest("/api/route-edges/legacy-connections/apply", {
+    method: "POST",
+    body: JSON.stringify(applyOptions),
+  });
+}
+
+// Attach every still-unconnected destination and stair/elevator stop on
+// one map/floor, using the same algorithm a single save uses. Safe to run
+// repeatedly — it never creates a duplicate edge or a second junction.
+// retryOptions: { map_id, floor? }
+export function retryPendingAttachments(retryOptions) {
+  return apiRequest("/api/route-edges/pending-attachments/retry", {
+    method: "POST",
+    body: JSON.stringify(retryOptions),
+  });
+}
+

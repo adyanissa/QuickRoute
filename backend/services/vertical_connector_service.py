@@ -18,7 +18,7 @@ from models.map_model import Map
 from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
 from models.vertical_connector_model import VerticalConnector
-from services.graph_connection_service import auto_connect_point
+from services.destination_attachment_service import attach_point_safely
 from services.point_dedup_service import find_or_create_route_point
 
 
@@ -303,9 +303,23 @@ async def add_connector_stop(
 
     if was_reused:
         connected = await is_stop_connected_to_floor_graph(point)
+    elif auto_connect == "off":
+        connected = False
     else:
-        summary = await auto_connect_point(point, mode=auto_connect)
-        connected = len(summary["edges_created"]) > 0
+        # A stair/elevator stop attaches to its own floor's corridor
+        # through the SAME shared service a room door point uses — corridor
+        # nodes, projection onto a drawn corridor edge, junction split,
+        # strict clear-line geometry, and never onto a Room. A stop
+        # floating off the horizontal graph makes the whole vertical
+        # connection unusable, and previously it could also bind itself to
+        # the nearest Room, turning that room into a transit bridge for
+        # every cross-floor route through it.
+        #
+        # No corridor yet means the stop stays PENDING (saved, unconnected)
+        # and is picked up by the same bulk retry the rooms use. This never
+        # fails stop placement.
+        attachment = await attach_point_safely(point)
+        connected = attachment["status"] in ("attached", "already_connected")
 
     await regenerate_transition_edges(connector)
 

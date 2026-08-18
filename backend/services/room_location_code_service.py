@@ -57,8 +57,8 @@ from beanie import PydanticObjectId
 
 from models.location_code_model import LocationCode
 from models.room_model import Room
-from models.route_edge_model import RouteEdge
 from models.route_point_model import RoutePoint
+from services.graph_connectivity_service import load_floor_graph_index
 
 
 # 8 unambiguous uppercase alphanumeric characters (no 0/O/1/I) — short
@@ -83,27 +83,22 @@ def generate_location_code_candidate() -> str:
 
 async def route_point_is_connected_to_graph(point: RoutePoint) -> bool:
     """
-    True when this RoutePoint has at least one ACTIVE RouteEdge on its own
-    map touching it — the same "is this destination actually reachable"
-    test routes/room_routes.py:_place_room_on_map already applies right
-    after placing a room.
+    True when this RoutePoint genuinely reaches its own floor's walkable
+    graph.
 
-    Deliberately does NOT count a cross-floor transition edge whose map_id
-    belongs to the other floor: a destination must be joined to its OWN
-    floor's corridor graph to be walkable to.
+    Delegates to services/graph_connectivity_service, which is now the one
+    place that decides this for the whole application. It used to be "has
+    any active edge on the same map", which a stale Room-to-Room edge
+    satisfied — so a room that was attached only to another room was
+    issued a QR and advertised as navigable, and then produced no route.
+
+    Kept as a function (rather than inlined at the call site) because
+    external callers import it.
     """
 
-    edge = await RouteEdge.find_one(
-        {
-            "map_id": point.map_id,
-            "is_active": True,
-            "$or": [
-                {"from_point_id": str(point.id)},
-                {"to_point_id": str(point.id)},
-            ],
-        }
-    )
-    return edge is not None
+    index = await load_floor_graph_index(point.map_id)
+    connected, _reason = index.connection_state(str(point.id))
+    return connected
 
 
 async def find_active_location_code_for_point(
@@ -174,6 +169,11 @@ async def ensure_room_location_codes(map_id: str) -> Dict[str, Any]:
     rooms = await Room.find({"map_id": map_id, "is_active": True}).to_list()
     summary["rooms_scanned"] = len(rooms)
 
+    # Read the floor's graph once; connectivity for every room below is
+    # then answered in memory. Previously this ran one RouteEdge query per
+    # room, which on a 30-room floor was 30 round trips per apply.
+    index = await load_floor_graph_index(map_id)
+
     for room in rooms:
         room_label = room.name_en or str(room.id)
 
@@ -205,7 +205,10 @@ async def ensure_room_location_codes(map_id: str) -> Dict[str, Any]:
                 )
                 continue
 
-            if not await route_point_is_connected_to_graph(point):
+            point_connected, _connection_reason = index.connection_state(
+                str(point.id)
+            )
+            if not point_connected:
                 summary["rooms_unconnected"] += 1
                 summary["rooms_needing_review"].append(
                     {

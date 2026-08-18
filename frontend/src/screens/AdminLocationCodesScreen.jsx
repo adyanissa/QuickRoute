@@ -51,6 +51,12 @@ const UI = {
     emptyHint: 'Add or generate one to let users start navigation from a scanned code',
     loading: 'Loading location codes...',
     count: (n) => `${n} code${n !== 1 ? 's' : ''}`,
+    scopeLabel: 'Showing',
+    scopeAllBuildings: 'All buildings',
+    scopeAllFloors: 'All floors in this building',
+    scopeHint:
+      'Codes belong to one specific floor map. Pick a building and floor to see only that floor\u2019s codes.',
+    scopeEmptyForFloor: 'No codes on this floor yet',
     fields: {
       building: 'Building', map: 'Map', point: 'Start Point (entrance)',
       code: 'Code (leave blank to auto-generate)', label: 'Label', active: 'Active',
@@ -82,6 +88,12 @@ const UI = {
     emptyHint: 'أضف أو ولّد رمزًا للسماح للمستخدمين ببدء التنقل من رمز ممسوح',
     loading: 'جاري تحميل رموز المواقع...',
     count: (n) => `${n} رمز`,
+    scopeLabel: 'عرض',
+    scopeAllBuildings: 'كل المباني',
+    scopeAllFloors: 'كل الطوابق في هذا المبنى',
+    scopeHint:
+      'كل رمز يخص خريطة طابق واحدة. اختر المبنى والطابق لعرض رموز ذلك الطابق فقط.',
+    scopeEmptyForFloor: 'لا توجد رموز في هذا الطابق بعد',
     fields: {
       building: 'المبنى', map: 'الخريطة', point: 'نقطة البداية (مدخل)',
       code: 'الرمز (اتركه فارغًا للتوليد التلقائي)', label: 'التسمية', active: 'نشط',
@@ -113,6 +125,12 @@ const UI = {
     emptyHint: 'הוסף או צור קוד כדי לאפשר למשתמשים להתחיל ניווט מקוד סרוק',
     loading: 'טוען קודי מיקום...',
     count: (n) => `${n} קודים`,
+    scopeLabel: 'מציג',
+    scopeAllBuildings: 'כל הבניינים',
+    scopeAllFloors: 'כל הקומות בבניין זה',
+    scopeHint:
+      'כל קוד שייך למפת קומה אחת. בחרו בניין וקומה כדי לראות רק את הקודים של אותה קומה.',
+    scopeEmptyForFloor: 'אין עדיין קודים בקומה זו',
     fields: {
       building: 'מבנה', map: 'מפה', point: 'נקודת התחלה (כניסה)',
       code: 'קוד (השאר ריק ליצירה אוטומטית)', label: 'תווית', active: 'פעיל',
@@ -223,11 +241,34 @@ const AdminLocationCodesScreen = () => {
   // Save is pressed.
   const [editForm, setEditForm] = useState(null);
 
-  const loadCodes = async () => {
+  // FLOOR ISOLATION. A LocationCode belongs to exactly one floor map
+  // (LocationCode.map_id), but this page used to call getLocationCodes()
+  // with no filter at all — so an admin working on the Ground Floor saw
+  // every code in the system interleaved, and a floor with many more
+  // codes visually swamped the one they were looking at. It reads as
+  // "another floor replaced my codes"; nothing was ever replaced.
+  //
+  // The scope is applied SERVER-side (map_id/building_id query params the
+  // endpoint already supports) rather than by filtering a full list in
+  // the browser, so the page can never render a code from another floor
+  // even for one frame.
+  const [scopeBuildingId, setScopeBuildingId] = useState('');
+  const [scopeMapId, setScopeMapId] = useState('');
+
+  const loadCodes = async (scope) => {
     setLoading(true);
     setError('');
     try {
-      const data = await getLocationCodes();
+      const filters = {};
+      const buildingId = scope ? scope.buildingId : scopeBuildingId;
+      const mapId = scope ? scope.mapId : scopeMapId;
+
+      // A map_id already implies its building, so the narrower filter
+      // wins and the two can never contradict each other.
+      if (mapId) filters.map_id = mapId;
+      else if (buildingId) filters.building_id = buildingId;
+
+      const data = await getLocationCodes(filters);
       setCodes(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Failed to load location codes:', err);
@@ -235,6 +276,17 @@ const AdminLocationCodesScreen = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleScopeBuildingChange = (buildingId) => {
+    setScopeBuildingId(buildingId);
+    setScopeMapId('');
+    loadCodes({ buildingId, mapId: '' });
+  };
+
+  const handleScopeMapChange = (mapId) => {
+    setScopeMapId(mapId);
+    loadCodes({ buildingId: scopeBuildingId, mapId });
   };
 
   useEffect(() => {
@@ -267,6 +319,19 @@ const AdminLocationCodesScreen = () => {
   );
 
   const buildingOptions = useMemo(() => buildBuildingOptions(buildings), [buildings]);
+
+  // Floor maps available to the scope filter, for the building it is
+  // currently narrowed to. Reuses the same helpers the Add/Edit forms use
+  // so the two selectors can never disagree about which maps belong to a
+  // building.
+  const scopeMapsForBuilding = useMemo(
+    () => filterMapsForBuilding(maps, scopeBuildingId),
+    [maps, scopeBuildingId]
+  );
+  const scopeMapOptions = useMemo(
+    () => buildMapOptions(scopeMapsForBuilding),
+    [scopeMapsForBuilding]
+  );
 
   const mapsForSelectedBuilding = useMemo(
     () => filterMapsForBuilding(maps, form.buildingId),
@@ -451,6 +516,53 @@ const AdminLocationCodesScreen = () => {
                 </button>
               </div>
 
+              {/* Floor scope. Defaults to everything so nothing an admin
+                  could previously see disappears without them choosing —
+                  but the moment a building/floor is picked, the list is
+                  re-fetched narrowed to that exact map, which is what
+                  makes "Ground Floor shows Ground Floor codes" true. */}
+              <div
+                className="adm-form-row"
+                style={{ gap: 10, marginBottom: 12, flexWrap: 'wrap' }}
+              >
+                <div className="adm-form-group" style={{ minWidth: 200, flex: 1 }}>
+                  <label className="adm-form-label">{t.scopeLabel}</label>
+                  <select
+                    className="adm-form-select"
+                    value={scopeBuildingId}
+                    onChange={(event) => handleScopeBuildingChange(event.target.value)}
+                  >
+                    <option value="">{t.scopeAllBuildings}</option>
+                    {buildingOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="adm-form-group" style={{ minWidth: 200, flex: 1 }}>
+                  <label className="adm-form-label">{t.fields.floor}</label>
+                  <select
+                    className="adm-form-select"
+                    value={scopeMapId}
+                    disabled={!scopeBuildingId}
+                    onChange={(event) => handleScopeMapChange(event.target.value)}
+                  >
+                    <option value="">{t.scopeAllFloors}</option>
+                    {scopeMapOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 12, color: '#5a7a9f', marginBottom: 12 }}>
+                {t.scopeHint}
+              </div>
+
               <div className="adm-section-row">
                 <span className="adm-section-lbl">{t.section}</span>
                 <span className="adm-section-count">{t.count(codes.length)}</span>
@@ -461,7 +573,9 @@ const AdminLocationCodesScreen = () => {
               ) : codes.length === 0 ? (
                 <div className="adm-empty">
                   <div className="adm-empty-icon"><CodeIcon /></div>
-                  <div className="adm-empty-txt">{t.empty}</div>
+                  <div className="adm-empty-txt">
+                    {scopeMapId ? t.scopeEmptyForFloor : t.empty}
+                  </div>
                   <div className="adm-empty-hint">{t.emptyHint}</div>
                 </div>
               ) : (

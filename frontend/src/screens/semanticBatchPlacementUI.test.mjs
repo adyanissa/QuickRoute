@@ -78,12 +78,25 @@ test('AdminMapScreen.jsx: a "Place All Destinations" action exists, rendering t.
 
 // ── 1. Starting batch mode selects the first unresolved destination ─────
 
-test('AdminMapScreen.jsx: handleBeginFreshSemanticBatch builds the queue from buildBatchQueueItemIds and starts at index 0', () => {
+test('AdminMapScreen.jsx: handleBeginFreshSemanticBatch builds the queue from buildBatchQueueItemIds and starts on the first item that still needs a click', () => {
   const body = extractFunction('handleBeginFreshSemanticBatch');
   assert.match(body, /buildBatchQueueItemIds\(semanticDestProposals\)/);
   assert.match(body, /setSemanticBatchQueue\(queueItemIds\)/);
-  assert.match(body, /setSemanticBatchStatuses\(initialBatchStatuses\(queueItemIds\)\)/);
-  assert.match(body, /setSemanticBatchIndex\(0\)/);
+
+  // Statuses are seeded from the queue AND the set of rooms
+  // auto-placement already resolved from the map's own labels — those
+  // start as "placed" rather than "pending".
+  assert.match(body, /initialBatchStatuses\(/);
+  assert.match(body, /queueItemIds\.filter\(\(id\) => autoPlacementSuggestions\[id\]\)/);
+  assert.match(body, /setSemanticBatchStatuses\(statuses\)/);
+
+  // The starting index is the first UNRESOLVED item, not blindly 0 —
+  // item 0 may already be placed from its label. It still falls back to 0
+  // when nothing is left to resolve, so a queue with no auto-placements
+  // behaves exactly as it did before.
+  assert.match(body, /findNextActiveIndex\(queueItemIds, statuses, -1\)/);
+  assert.match(body, /setSemanticBatchIndex\(firstUnresolved === -1 \? 0 : firstUnresolved\)/);
+
   assert.match(body, /setSemanticBatchActive\(true\)/);
 });
 
@@ -124,8 +137,12 @@ test('AdminMapScreen.jsx: a batch placement click never calls the per-card handl
 
 test('AdminMapScreen.jsx: the batch panel footer never renders a per-item Accept/OK button — only Previous/Skip/Reject/Undo/Change location/Exit', () => {
   const start = source.indexOf('title={t.semanticBatchPanelTitle}');
-  const end = source.indexOf("mode === 'semantic-destinations' && semanticBatchActive && semanticBatchReviewOpen");
-  assert.ok(start > -1 && end > start, 'expected the batch placement panel block');
+  assert.ok(start > -1, 'expected the batch placement panel block');
+  // The sequential placement panel ends at its own closing tag. Anchoring
+  // on the review panel's render condition stopped working when that
+  // condition became multi-line.
+  const end = source.indexOf('</FloatingToolPanel>', start);
+  assert.ok(end > start, 'expected the batch placement panel to close');
   const body = source.slice(start, end);
 
   assert.match(body, /\{t\.semanticBatchPrevious\}/);
@@ -367,10 +384,13 @@ test('AdminMapScreen.jsx: the pre-existing per-card semantic-destinations flow (
 });
 
 test('AdminMapScreen.jsx: Auto Connect, Delete Connection, Draw Walkable Path, and Sync Rooms remain fully intact', () => {
-  assert.match(source, /\{t\.autoConnectMode\}/);
-  assert.match(source, /\{t\.deleteConnectionMode\}/);
-  assert.match(source, /\{t\.drawMode\}/);
-  assert.match(source, /\{t\.syncRoomsAction\}/);
+  // These are toolbox entries (`label: t.x`) rather than JSX children
+  // since the fixed toolbar became the draggable Navigation Tools
+  // toolbox; every tool is still present.
+  assert.match(source, /label:\s*t\.autoConnectMode(Short)?/);
+  assert.match(source, /label:\s*t\.deleteConnectionMode/);
+  assert.match(source, /label:\s*t\.drawMode/);
+  assert.match(source, /label:\s*t\.syncRoomsAction(Short)?/);
 });
 
 // ── Translations: every new key exists in en/ar/he ──────────────────────

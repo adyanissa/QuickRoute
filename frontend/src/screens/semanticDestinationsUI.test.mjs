@@ -69,16 +69,26 @@ const source = readScreen(ADMIN_MAP_SCREEN);
 
 // ── 32. Toolbar button exists ───────────────────────────────────────────────
 
-test('AdminMapScreen.jsx: a "Create Destinations from Approved Analysis" toolbar button exists, rendering t.semanticDestMode', () => {
-  const toolbarSlice = source.slice(
-    source.indexOf('{t.autoConnectMode}'),
-    source.indexOf('{t.syncRoomsAction}'),
-  );
-  assert.match(toolbarSlice, /handleStartSemanticDestinations\(\)/);
-  assert.match(toolbarSlice, /\{t\.semanticDestMode\}/);
+// The mode controls are entries in the draggable toolbox's data-driven
+// `mapToolGroups` array now, not inline buttons in a fixed toolbar.
+function toolboxConfigSlice(src) {
+  const start = src.indexOf('const mapToolGroups = [');
+  assert.notEqual(start, -1, 'expected the mapToolGroups toolbox config');
+  const end = src.indexOf('\n  ];', start);
+  assert.notEqual(end, -1, 'expected the mapToolGroups config to terminate');
+  return src.slice(start, end);
+}
+
+test('AdminMapScreen.jsx: a "Create Destinations from Approved Analysis" toolbox entry exists, rendering t.semanticDestMode', () => {
+  const toolbox = toolboxConfigSlice(source);
+
+  assert.match(toolbox, /handleStartSemanticDestinations\(\)/);
+  // A short label is preferred where one exists, falling back to the full
+  // string, so both spellings are acceptable.
+  assert.match(toolbox, /label:\s*t\.semanticDestMode(Short)?/);
   assert.match(
-    toolbarSlice,
-    /<button[\s\S]*?handleStartSemanticDestinations\(\)[\s\S]*?\{t\.semanticDestMode\}[\s\S]*?<\/button>/,
+    toolbox,
+    /id:\s*'semantic-destinations'[\s\S]*?handleStartSemanticDestinations\(\)/,
   );
 });
 
@@ -186,7 +196,10 @@ test('AdminMapScreen.jsx: proposed destination locations are drawn as a temporar
 
 test('AdminMapScreen.jsx: the preview panel shows a distinct message for placement_source === "needs_manual_placement" vs an existing linked point, and only offers manual on-map picking for the former', () => {
   const start = source.indexOf('{semanticDestProposals.map((proposal) => (');
-  const end = source.indexOf('{t.autoConnectReviewComplete}', start);
+  // The panel's primary actions live in its FloatingToolPanel `footer`
+  // prop, declared before the children — so the rows end at the panel's
+  // closing tag, not at the Review-complete button.
+  const end = source.indexOf('</FloatingToolPanel>', start);
   assert.ok(start > -1 && end > start, 'expected the semantic destination proposal row block');
   const body = source.slice(start, end);
 
@@ -201,7 +214,10 @@ test('AdminMapScreen.jsx: the preview panel shows a distinct message for placeme
 
 test('AdminMapScreen.jsx: each proposal shows its Arabic/Hebrew names alongside the primary name, never only English', () => {
   const start = source.indexOf('{semanticDestProposals.map((proposal) => (');
-  const end = source.indexOf('{t.autoConnectReviewComplete}', start);
+  // The panel's primary actions live in its FloatingToolPanel `footer`
+  // prop, declared before the children — so the rows end at the panel's
+  // closing tag, not at the Review-complete button.
+  const end = source.indexOf('</FloatingToolPanel>', start);
   const body = source.slice(start, end);
 
   assert.match(body, /proposal\.name_en \|\| proposal\.name_original \|\| proposal\.semantic_item_id/);
@@ -212,7 +228,10 @@ test('AdminMapScreen.jsx: each proposal shows its Arabic/Hebrew names alongside 
 
 test('AdminMapScreen.jsx: a proposal with a nested_parent_candidate renders the "Possible nested destination" section naming the candidate parent', () => {
   const start = source.indexOf('{semanticDestProposals.map((proposal) => (');
-  const end = source.indexOf('{t.autoConnectReviewComplete}', start);
+  // The panel's primary actions live in its FloatingToolPanel `footer`
+  // prop, declared before the children — so the rows end at the panel's
+  // closing tag, not at the Review-complete button.
+  const end = source.indexOf('</FloatingToolPanel>', start);
   const body = source.slice(start, end);
 
   assert.match(body, /proposal\.nested_parent_candidate &&/);
@@ -238,7 +257,10 @@ test('AdminMapScreen.jsx: confirmNested always starts false on a fresh preview, 
   );
 
   const start = source.indexOf('{semanticDestProposals.map((proposal) => (');
-  const end = source.indexOf('{t.autoConnectReviewComplete}', start);
+  // The panel's primary actions live in its FloatingToolPanel `footer`
+  // prop, declared before the children — so the rows end at the panel's
+  // closing tag, not at the Review-complete button.
+  const end = source.indexOf('</FloatingToolPanel>', start);
   const body = source.slice(start, end);
   assert.match(body, /checked=\{Boolean\(proposal\.confirmNested\)\}/);
   assert.match(
@@ -398,7 +420,7 @@ test('AdminMapScreen.jsx: on a successful apply, the result phase is entered, th
 
 test('AdminMapScreen.jsx: an Auto Connect proposal with is_nested_access renders a distinguishing badge in its own proposal row', () => {
   const start = source.indexOf('{autoConnectProposals.map((proposal) => {');
-  const end = source.indexOf('{t.autoConnectReviewComplete}');
+  const end = source.indexOf('</FloatingToolPanel>', start);
   assert.ok(start > -1 && end > start, 'expected the auto-connect proposal row block');
   const body = source.slice(start, end);
 
@@ -462,10 +484,12 @@ test('AdminMapScreen.jsx: the exact required nested pass-through confirmation te
 // ── 47. Existing modes remain functional ────────────────────────────────────
 
 test('AdminMapScreen.jsx: Semantic Analysis review link, Sync Rooms, Auto Connect Destinations, Delete Connection and Draw Walkable Path are all fully intact after adding Create Destinations from Approved Analysis', () => {
-  assert.match(source, /\{t\.syncRoomsAction\}/);
-  assert.match(source, /\{t\.autoConnectMode\}/);
-  assert.match(source, /\{t\.deleteConnectionMode\}/);
-  assert.match(source, /\{t\.drawMode\}/);
+  // Tool labels are toolbox entries (`label: t.x`) rather than JSX
+  // children now; the tools themselves are all still present.
+  assert.match(source, /label:\s*t\.syncRoomsAction(Short)?/);
+  assert.match(source, /label:\s*t\.autoConnectMode(Short)?/);
+  assert.match(source, /label:\s*t\.deleteConnectionMode/);
+  assert.match(source, /label:\s*t\.drawMode/);
   assert.match(source, /const handleStartAutoConnect = \(\) => \{/);
   assert.match(source, /const handleEdgeClickForDeletion = \(/);
 });

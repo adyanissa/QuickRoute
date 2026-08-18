@@ -23,6 +23,14 @@ from schemas.route_edge_schema import (
     RouteEdgeUpdate,
     RouteEdgeResponse,
 )
+from schemas.legacy_repair_schema import (
+    LegacyRepairApplyRequest,
+    LegacyRepairApplyResult,
+    LegacyRepairPreviewRequest,
+    LegacyRepairPreviewResponse,
+    PendingAttachmentRetryRequest,
+    PendingAttachmentRetryResult,
+)
 from schemas.auto_connect_schema import (
     AutoConnectPreviewRequest,
     AutoConnectPreviewResponse,
@@ -32,6 +40,11 @@ from schemas.auto_connect_schema import (
 from services.auto_connect_destinations_service import (
     preview_auto_connect_destinations,
     apply_auto_connect_destinations,
+)
+from services.destination_attachment_service import retry_pending_attachments
+from services.legacy_edge_repair_service import (
+    apply_legacy_edge_repair,
+    preview_legacy_edge_repair,
 )
 
 
@@ -821,3 +834,93 @@ async def apply_auto_connect_destinations_route(
     )
 
     return AutoConnectApplyResult(**result)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Legacy invalid-connection repair, and the bulk pending-attachment retry
+# ─────────────────────────────────────────────────────────────────────
+
+
+async def _map_for_admin(map_id: str, admin: User) -> Map:
+    """Same map-scope check the Auto Connect endpoints above apply."""
+    map_item = await Map.get(PydanticObjectId(map_id))
+    if not map_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Map not found",
+        )
+    if admin.role != "super_admin" and not user_can_access_map(admin, map_item):
+        raise HTTPException(**FORBIDDEN_MAP_SCOPE)
+    return map_item
+
+
+@router.post(
+    "/legacy-connections/preview",
+    response_model=LegacyRepairPreviewResponse,
+)
+async def preview_legacy_connections_route(
+    request: LegacyRepairPreviewRequest,
+    admin: User = Depends(require_any_admin),
+):
+    """
+    Entirely read-only. Finds walkway edges created before the Auto Connect
+    correction that route through ordinary destination rooms, and reports
+    what is wrong with each one.
+
+    Deliberately preserves approved nested access, same-physical-location
+    twins and every ordinary Room -> corridor attachment — see
+    services/legacy_edge_repair_service.py for the exact rules.
+    """
+
+    await _map_for_admin(request.map_id, admin)
+
+    result = await preview_legacy_edge_repair(request.map_id)
+    return LegacyRepairPreviewResponse(**result)
+
+
+@router.post(
+    "/legacy-connections/apply",
+    response_model=LegacyRepairApplyResult,
+)
+async def apply_legacy_connections_route(
+    request: LegacyRepairApplyRequest,
+    admin: User = Depends(require_any_admin),
+):
+    """
+    Deactivates (never deletes) the confirmed-invalid edges on ONE map,
+    then gives every affected destination a chance to reattach to the
+    corridor graph through the shared attachment service.
+
+    Never touches the Room, its RoutePoint or its LocationCode. An edge id
+    that this map's own preview does not classify as repairable is
+    rejected rather than acted on.
+    """
+
+    await _map_for_admin(request.map_id, admin)
+
+    result = await apply_legacy_edge_repair(request.map_id, request.edge_ids)
+    return LegacyRepairApplyResult(**result)
+
+
+@router.post(
+    "/pending-attachments/retry",
+    response_model=PendingAttachmentRetryResult,
+)
+async def retry_pending_attachments_route(
+    request: PendingAttachmentRetryRequest,
+    admin: User = Depends(require_any_admin),
+):
+    """
+    Attaches every still-unconnected destination and vertical-connector
+    stop on ONE map/floor, using the same algorithm a single save uses.
+
+    This is what makes "place sixty room door points, draw the corridor
+    afterwards" work without reopening sixty rooms. Safe to run repeatedly:
+    a point that already reaches the graph is skipped, and a repeat run
+    never creates a second junction on the same corridor edge.
+    """
+
+    await _map_for_admin(request.map_id, admin)
+
+    result = await retry_pending_attachments(request.map_id, floor=request.floor)
+    return PendingAttachmentRetryResult(**result)

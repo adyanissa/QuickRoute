@@ -36,6 +36,7 @@ export const MAP_PANEL_IDS = {
   semanticBatchReview: 'semanticBatchReview',
   navBuild: 'navBuild',
   editPoint: 'editPoint',
+  legacyRepair: 'legacyRepair',
 };
 
 // side          'left' / 'right' / 'center' in READING order — left and
@@ -114,6 +115,15 @@ export const MAP_PANEL_LAYOUT = {
     side: 'right',
     vAlign: 'bottom',
     estimatedHeight: 420,
+  },
+  // Legacy repair is a one-off maintenance panel opened on its own, so it
+  // shares the top-left review slot — nothing an admin would have open at
+  // the same time lives there.
+  [MAP_PANEL_IDS.legacyRepair]: {
+    width: 420,
+    side: 'left',
+    vAlign: 'top',
+    estimatedHeight: 400,
   },
 };
 

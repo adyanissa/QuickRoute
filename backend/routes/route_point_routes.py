@@ -40,7 +40,9 @@ from schemas.route_point_schema import (
 import math as _math
 
 from services.point_dedup_service import find_or_create_route_point
+from constants.route_point_types import DESTINATION_CAPABLE_POINT_TYPES
 from services.graph_connection_service import auto_connect_point
+from services.destination_attachment_service import attach_point_safely
 from services.room_sync_service import (
     sync_room_for_route_point,
     deactivate_linked_room_for_deleted_point,
@@ -423,10 +425,22 @@ async def create_route_point(
     auto_connected_edge_ids: List[str] = []
 
     if not was_reused and auto_connect != "off":
-        connect_summary = await auto_connect_point(new_point, mode=auto_connect)
-        auto_connected_edge_ids = [
-            str(edge.id) for edge in connect_summary["edges_created"]
-        ]
+        # A DESTINATION point goes through the shared attachment service
+        # (corridor nodes + corridor-edge projection + junction split +
+        # strict geometry) — the same path Room creation, connector stops
+        # and the bulk retry use. A corridor/entrance/untyped point keeps
+        # the historical nearest-neighbour merge, which is what Draw
+        # Walkable Path's "merge with safe nearby graph points" relies on.
+        if new_point.point_type in DESTINATION_CAPABLE_POINT_TYPES:
+            attachment = await attach_point_safely(new_point)
+            auto_connected_edge_ids = (
+                [attachment["edge_id"]] if attachment.get("edge_id") else []
+            )
+        else:
+            connect_summary = await auto_connect_point(new_point, mode=auto_connect)
+            auto_connected_edge_ids = [
+                str(edge.id) for edge in connect_summary["edges_created"]
+            ]
 
     # Destination data flow (Section 2) — a freshly created or reused
     # destination-capable point (type "room"/"store") gets its linked Room

@@ -164,13 +164,17 @@ def test_adding_an_edge_flips_the_next_get_to_navigable(client):
     assert before["navigation_unavailable_reason"] == "disconnected_from_graph"
 
     # A corridor point placed afterwards and manually wired up — exactly
-    # what "Draw Walkable Path" in Admin does after the fact. Deliberately
-    # created via a raw POST with no `floor` key (rather than the
-    # `_create_point` helper, which always sends one) so its floor
-    # resolves to the same None this map's own points get (this test map
-    # has no explicit floor set) — this isolated room's point already got
-    # floor=None the same way, and a walkway edge is only accepted between
-    # points the backend considers same-floor.
+    # what "Draw Walkable Path" in Admin does after the fact.
+    #
+    # It is created on the ROOM's own floor because a walkway edge is only
+    # accepted between points the backend considers same-floor, and on a
+    # map with no Map.floor of its own RoutePoint.floor is the only source
+    # of truth (see calculate_edge_distance). A room's arrival point now
+    # inherits the room's floor when its Map has none — previously it was
+    # stamped None regardless, which left it on a different "floor" from
+    # every corridor point the admin placed with a real floor number.
+    # Nothing about this test's subject (adding an edge flips
+    # is_navigable) depends on which floor number that is.
     corridor_response = client.post(
         "/api/route-points",
         json={
@@ -178,6 +182,7 @@ def test_adding_an_edge_flips_the_next_get_to_navigable(client):
             "name": "Late Corridor",
             "x": 720, "y": 700,
             "point_type": "hallway",
+            "floor": isolated["floor"],
         },
         headers=auth_headers(token),
     )

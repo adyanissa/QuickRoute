@@ -59,20 +59,29 @@ const source = readScreen(ADMIN_MAP_SCREEN);
 
 // ── 18. Toolbar button exists ───────────────────────────────────────────────
 
-test('AdminMapScreen.jsx: an Auto Connect Destinations toolbar button exists, rendering t.autoConnectMode', () => {
-  // Bounded to the mode toolbar itself (between the Delete Connection button
-  // and the Sync Rooms action button, its immediate neighbors) so this
-  // can't accidentally match some unrelated <button> elsewhere in this
-  // 260KB+ file.
-  const toolbarSlice = source.slice(
-    source.indexOf('{t.deleteConnectionMode}'),
-    source.indexOf('{t.syncRoomsAction}'),
-  );
-  assert.match(toolbarSlice, /handleStartAutoConnect\(\)/);
-  assert.match(toolbarSlice, /\{t\.autoConnectMode\}/);
+// The mode controls live in the draggable "Navigation Tools" toolbox now
+// rather than the old fixed horizontal toolbar, so each one is an entry in
+// the data-driven `mapToolGroups` array instead of an inline <button>. The
+// invariant is unchanged; only where to look for it is. Still a tightly
+// bounded slice so this cannot accidentally match elsewhere in the file.
+function toolboxConfigSlice(src) {
+  const start = src.indexOf('const mapToolGroups = [');
+  assert.notEqual(start, -1, 'expected the mapToolGroups toolbox config');
+  const end = src.indexOf('\n  ];', start);
+  assert.notEqual(end, -1, 'expected the mapToolGroups config to terminate');
+  return src.slice(start, end);
+}
+
+test('AdminMapScreen.jsx: an Auto Connect Destinations toolbox entry exists, rendering t.autoConnectMode', () => {
+  const toolbox = toolboxConfigSlice(source);
+
+  assert.match(toolbox, /handleStartAutoConnect\(\)/);
+  // The toolbox prefers a short label where one exists, falling back to
+  // the original full string — so both spellings are acceptable.
+  assert.match(toolbox, /label:\s*t\.autoConnectMode(Short)?/);
   assert.match(
-    toolbarSlice,
-    /<button[\s\S]*?handleStartAutoConnect\(\)[\s\S]*?\{t\.autoConnectMode\}[\s\S]*?<\/button>/,
+    toolbox,
+    /id:\s*'auto-connect'[\s\S]*?handleStartAutoConnect\(\)/,
   );
 });
 
@@ -169,7 +178,13 @@ test('AdminMapScreen.jsx: proposed connections are drawn as dashed SVG overlay l
   const body = getAutoConnectOverlaySection();
 
   assert.match(body, /pointsById\.get\(\s*proposal\.destination_point_id,?\s*\)/);
-  assert.match(body, /pointsById\.get\(\s*proposal\.selectedCandidateId,?\s*\)/);
+  // The selected candidate is identified by candidate_key now, because a
+  // corridor-EDGE attachment has no RoutePoint until the proposal is
+  // applied. The overlay still resolves an existing corridor POINT from
+  // pointsById and never fetches; for an edge attachment it falls back to
+  // the projected attachment coordinates the preview already returned.
+  assert.match(body, /pointsById\.get\([\s\S]{0,120}?selectedCandidateKey,?\s*\)/);
+  assert.match(body, /selected\?\.attachment_x/);
   assert.match(body, /strokeDasharray="6 6"/);
   assert.match(body, /<line/);
 
@@ -245,10 +260,15 @@ test('AdminMapScreen.jsx: handleAcceptProposal and handleRejectProposal only cha
 // convention used by getAutoConnectOverlaySection above) rather than an
 // exact-indentation regex.
 function getProposalRowSection() {
+  // The preview panel is a FloatingToolPanel now, so its primary actions
+  // live in the `footer` prop — which is declared BEFORE the children in
+  // source order. The rows therefore run from the .map(...) call to the
+  // panel's closing tag, not to the Review-complete button (which now
+  // precedes them).
   const start = source.indexOf('{autoConnectProposals.map((proposal) => {');
-  const end = source.indexOf('{t.autoConnectReviewComplete}');
   assert.ok(start > -1, 'expected the proposals.map row-rendering block to exist');
-  assert.ok(end > -1 && end > start, 'expected the Review complete footer button to follow it');
+  const end = source.indexOf('</FloatingToolPanel>', start);
+  assert.ok(end > start, 'expected the rows to close inside the floating panel');
   return source.slice(start, end);
 }
 
@@ -265,19 +285,22 @@ test('AdminMapScreen.jsx: each proposal row wires its own Accept/Reject buttons 
 
 test('AdminMapScreen.jsx: handleSelectAlternativeCandidate updates only the matching proposal\'s selectedCandidateId, and each candidate chip in the row wires to it with the real candidate.point_id', () => {
   const fnMatch = source.match(
-    /const handleSelectAlternativeCandidate = \(destinationId, candidateId\) => \{[\s\S]*?\n  \};/,
+    /const handleSelectAlternativeCandidate = \(destinationId, candidateKey\) => \{[\s\S]*?\n  \};/,
   );
   assert.ok(fnMatch, 'expected handleSelectAlternativeCandidate');
   assert.match(
     fnMatch[0],
-    /proposal\.destination_point_id === destinationId\s*\?\s*\{ \.\.\.proposal, selectedCandidateId: candidateId \}\s*:\s*proposal/,
+    /proposal\.destination_point_id === destinationId\s*\?\s*\{ \.\.\.proposal, selectedCandidateKey: candidateKey \}\s*:\s*proposal/,
   );
 
   const body = getProposalRowSection();
+  // Chips key off candidate_key rather than point_id, so a corridor-edge
+  // attachment (which has no point yet) is selectable too.
   assert.match(
     body,
-    /handleSelectAlternativeCandidate\(\s*proposal\.destination_point_id,\s*candidate\.point_id,\s*\)/,
+    /handleSelectAlternativeCandidate\(\s*proposal\.destination_point_id,\s*key,\s*\)/,
   );
+  assert.match(source, /const autoConnectCandidateKey = \(candidate\) =>/);
 });
 
 test('AdminMapScreen.jsx: a manual on-map corridor pick is also supported — handleStartManualCorridorPick/selectManualCorridorPoint reject anything that is not a confirmed transit-candidate point type before accepting it', () => {
@@ -330,10 +353,15 @@ test('AdminMapScreen.jsx: handleConfirmAutoConnectApply filters to only localSta
 
   assert.match(
     body,
-    /proposal\.localStatus === 'accepted' && proposal\.selectedCandidateId/,
+    /proposal\.localStatus === 'accepted' &&\s*proposal\.selectedCandidateKey/,
   );
   assert.match(body, /destination_point_id: proposal\.destination_point_id/);
-  assert.match(body, /corridor_point_id: proposal\.selectedCandidateId/);
+  // An ordinary proposal still sends corridor_point_id; a corridor-edge
+  // attachment sends the edge plus the projected coordinates instead, and
+  // exactly one of the two shapes is ever produced per accepted pair.
+  assert.match(body, /corridor_point_id: candidate\?\.point_id \|\| proposal\.selectedCandidateKey/);
+  assert.match(body, /corridor_edge_id: candidate\.corridor_edge_id/);
+  assert.match(body, /attachment_x: candidate\.attachment_x/);
   assert.match(body, /await applyAutoConnectDestinations\(\{/);
 
   // Refuses to call apply at all when nothing was accepted.
@@ -402,7 +430,8 @@ test('AdminMapScreen.jsx: Delete Connection mode (button, handlers, confirmation
   assert.match(source, /setMode\('delete-connection'\)/);
   assert.match(source, /const handleEdgeClickForDeletion = \(/);
   assert.match(source, /const handleConfirmDeleteConnection = async \(\) => \{/);
-  assert.match(source, /\{t\.deleteConnectionMode\}/);
+  // Rendered as a toolbox entry's `label:` now, not a JSX child.
+  assert.match(source, /label:\s*t\.deleteConnectionMode/);
 });
 
 test("AdminMapScreen.jsx: Draw Walkable Path mode (button, draft point flow) is fully intact after adding Auto Connect Destinations", () => {

@@ -53,176 +53,34 @@ from services.room_location_code_service import (
     merge_into_apply_result,
 )
 from services.graph_connection_service import (
-    LINE_SAMPLE_STEP_PX,
     _ensure_map_source_available,
     _get_wall_mask,
-    has_clear_line,
 )
+from services.graph_connectivity_service import FloorGraphIndex
 
-
-# Reuses graph_connection_service's own already-established "how far is too
-# far for an ordinary walkway connection" default (DEFAULT_MAX_DISTANCE_PX)
-# as this feature's ABSOLUTE FLOOR — never a ceiling — for the hard safety
-# distance below, and as the fallback for maps with no known canonical
-# image dimensions (pre-upload-pipeline maps, or synthetic/test maps that
-# never went through image processing). Every real, imaged map computes a
-# larger, scale-aware ceiling instead — see _effective_bounds() — so this
-# constant only ever WIDENS the old fixed 600px cutoff, never narrows it.
-MAX_DISTANCE_PX_DEFAULT = 600.0
-
-# Confidence tiers, as fixed pixel fallbacks (used only when a map has no
-# canonical image dimensions — see _effective_bounds()) and as the absolute
-# floor for the scale-aware tiers on every other map. "very close" vs
-# "within the recommended range" vs "outside the recommended range but
-# still within the hard safety ceiling", per this feature's spec.
-HIGH_CONFIDENCE_MAX_PX = 150.0
-MEDIUM_CONFIDENCE_MAX_PX = 390.0
-
-# Scale-aware thresholds, expressed as fractions of a map's canonical
-# image diagonal (source_width/source_height, falling back to
-# display_width/display_height) rather than one fixed raw-pixel cutoff.
-# This is what actually fixes "Auto Connect proposes nothing for any
-# destination whose nearest hallway/junction happens to be more than 600
-# raw pixels away on a large, high-resolution floor-plan image" — on a
-# large image, 600px can be a tiny fraction of the actual floor, so a
-# fixed pixel cutoff was effectively far too small regardless of how close
-# the two points really are on the physical floor.
-HIGH_CONFIDENCE_FRACTION_OF_DIAGONAL = 0.05
-MEDIUM_CONFIDENCE_FRACTION_OF_DIAGONAL = 0.18
-# The hard safety ceiling: candidates beyond this are never proposed
-# ("extremely unreasonable distance" per this feature's spec), regardless
-# of confidence tier. Deliberately generous (a majority of the image
-# diagonal) so that any destination with a genuine hallway/junction
-# candidate anywhere on the SAME map/floor is still proposed (at "low"
-# confidence if far), and only truly implausible pairings — e.g. two
-# points that are effectively on opposite corners of the whole floor
-# plan — are rejected.
-HARD_SAFETY_FRACTION_OF_DIAGONAL = 0.60
-
-MAX_CANDIDATES_PER_PROPOSAL = 3
-
-
-class _SpatialGrid:
-    """
-    Minimal stdlib-only uniform grid spatial index over a fixed list of
-    (RoutePoint, x, y) entries. Not a general-purpose library — just
-    enough to turn an O(n) "scan every transit point for every
-    destination" comparison into an O(1)-amortized neighborhood lookup for
-    the bulk auto-connect scan.
-    """
-
-    def __init__(self, cell_size: float):
-        self._cell_size = max(1.0, cell_size)
-        self._cells: Dict[Tuple[int, int], List[RoutePoint]] = defaultdict(list)
-
-    def _cell_key(self, x: float, y: float) -> Tuple[int, int]:
-        return (int(x // self._cell_size), int(y // self._cell_size))
-
-    def add(self, point: RoutePoint) -> None:
-        self._cells[self._cell_key(float(point.x), float(point.y))].append(point)
-
-    def nearby(self, x: float, y: float) -> List[RoutePoint]:
-        """Every point in this cell and its 8 neighbors — a superset of
-        every point actually within `_cell_size` of (x, y); callers still
-        filter by exact Euclidean distance afterward."""
-        cx, cy = self._cell_key(x, y)
-        results: List[RoutePoint] = []
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                results.extend(self._cells.get((cx + dx, cy + dy), []))
-        return results
-
-
-def _get_scale_for_floor(map_item: Map, floor: Optional[int]) -> float:
-    """
-    Mirrors routes/route_edge_routes.py's get_scale_for_floor() exactly
-    (same lookup: floor_scales[str(floor)] if present, else the map's
-    overall scale). Duplicated as a small, self-contained helper rather
-    than imported from routes/route_edge_routes.py to avoid a circular
-    import (that module imports this service for its two new endpoints).
-    """
-
-    if floor is not None and map_item.floor_scales:
-        floor_key = str(floor)
-        if floor_key in map_item.floor_scales:
-            return map_item.floor_scales[floor_key]
-
-    return map_item.scale
-
-
-def _confidence_tier(distance_px: float, high_max_px: float, medium_max_px: float) -> str:
-    if distance_px <= high_max_px:
-        return "high"
-    if distance_px <= medium_max_px:
-        return "medium"
-    return "low"
-
-
-def _canonical_diagonal_px(map_item: Map) -> Optional[float]:
-    """
-    The map's canonical image diagonal, used as the basis for every
-    scale-aware distance threshold below. Prefers the true source image
-    dimensions (source_width/source_height — the full-resolution file the
-    admin actually uploaded); falls back to the cosmetic display image's
-    dimensions when source dimensions aren't known; returns None for maps
-    with neither (pre-upload-pipeline or synthetic maps), which signals
-    every caller to fall back to the fixed pixel defaults instead.
-    """
-
-    width = map_item.source_width or map_item.display_width
-    height = map_item.source_height or map_item.display_height
-    if not width or not height:
-        return None
-    return math.hypot(float(width), float(height))
-
-
-def _effective_bounds(
-    map_item: Map, max_distance_px_override: Optional[float]
-) -> Tuple[float, float, float]:
-    """
-    Resolves this scan's (high_confidence_max_px, medium_confidence_max_px,
-    hard_safety_max_px) — the three distance thresholds every destination
-    on this map is scored against.
-
-    - An explicit caller-supplied max_distance_px always wins for the hard
-      safety ceiling (preserves the existing request-level override
-      contract) — confidence tiers still fall back to the fixed pixel
-      defaults in that case, clamped to never exceed the override.
-    - Otherwise, when the map has known canonical image dimensions, every
-      threshold scales with the image diagonal.
-    - Every threshold is clamped to never be SMALLER than the old fixed
-      pixel default — this change only ever widens what used to be a
-      single very small hard cutoff, never narrows it.
-    """
-
-    diagonal = _canonical_diagonal_px(map_item)
-
-    if max_distance_px_override is not None:
-        hard_safety_max_px = float(max_distance_px_override)
-        high_max_px = HIGH_CONFIDENCE_MAX_PX
-        medium_max_px = MEDIUM_CONFIDENCE_MAX_PX
-    elif diagonal is not None:
-        hard_safety_max_px = max(
-            diagonal * HARD_SAFETY_FRACTION_OF_DIAGONAL, MAX_DISTANCE_PX_DEFAULT
-        )
-        high_max_px = max(
-            diagonal * HIGH_CONFIDENCE_FRACTION_OF_DIAGONAL, HIGH_CONFIDENCE_MAX_PX
-        )
-        medium_max_px = max(
-            diagonal * MEDIUM_CONFIDENCE_FRACTION_OF_DIAGONAL, MEDIUM_CONFIDENCE_MAX_PX
-        )
-    else:
-        hard_safety_max_px = MAX_DISTANCE_PX_DEFAULT
-        high_max_px = HIGH_CONFIDENCE_MAX_PX
-        medium_max_px = MEDIUM_CONFIDENCE_MAX_PX
-
-    # A confidence tier boundary must never exceed the hard safety ceiling
-    # itself (only meaningful when an explicit override happens to be
-    # smaller than the fixed pixel defaults above).
-    high_max_px = min(high_max_px, hard_safety_max_px)
-    medium_max_px = min(medium_max_px, hard_safety_max_px)
-
-    return high_max_px, medium_max_px, hard_safety_max_px
+# THE candidate search, the geometry and the edge splitter all live in
+# services/destination_attachment_service now — this module is the
+# preview/apply presentation on top of them, not a second algorithm. The
+# names are re-exported here because navigation_build_preview_service and
+# the existing test suite import _effective_bounds from this module.
+from services.destination_attachment_service import (  # noqa: F401
+    EDGE_SPLIT_GENERATION_METHOD,
+    HARD_SAFETY_FRACTION_OF_DIAGONAL,
+    HIGH_CONFIDENCE_FRACTION_OF_DIAGONAL,
+    HIGH_CONFIDENCE_MAX_PX,
+    MAX_DISTANCE_PX_DEFAULT,
+    MEDIUM_CONFIDENCE_FRACTION_OF_DIAGONAL,
+    MEDIUM_CONFIDENCE_MAX_PX,
+    _attachment_is_clear,
+    _canonical_diagonal_px,
+    _confidence_tier,
+    _effective_bounds,
+    _get_scale_for_floor,
+    MAX_CANDIDATES_PER_PROPOSAL,
+    _split_corridor_edge_for_attachment,
+    find_attachment_candidates,
+    load_corridor_floor_context,
+)
 
 
 def _display_name(point: RoutePoint, lang: str) -> str:
@@ -241,246 +99,6 @@ def _display_name(point: RoutePoint, lang: str) -> str:
     # legitimately return None for a suppressed technical name, so this
     # falls back to the raw name rather than ever showing nothing.
     return resolved or point.name or str(point.id)
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Corridor-EDGE attachment, corridor connectivity, and the doorway rule
-#
-# Everything in this block exists to fix the two real-map failures this
-# feature had: "no hallway/junction point close enough" reported for a
-# room whose corridor is drawn right beside it, and a candidate pool that
-# could not tell "too far" from "a wall is in the way".
-# ─────────────────────────────────────────────────────────────────────
-
-# A projected attachment closer than this to one of the corridor edge's
-# own endpoints is not worth splitting the edge for — the endpoint node is
-# already a candidate in its own right, and a junction placed a few pixels
-# from an existing node is graph clutter, not accuracy.
-EDGE_SPLIT_MIN_NODE_GAP_FRACTION_OF_HIGH = 0.15
-EDGE_SPLIT_MIN_NODE_GAP_FLOOR_PX = 24.0
-
-# A straight line that crosses this many DISTINCT wall strokes has
-# entered and left some enclosed space on the way. See
-# _attachment_is_clear for why counting crossings, rather than counting
-# wall pixels, is what actually enforces "never use an unrelated room
-# interior as a shortcut".
-MAX_WALL_CROSSINGS = 1
-
-# CANDIDATE PRIORITY is a tie-break, not an override. Two candidates are
-# "effectively equidistant" when the second is within this much of the
-# nearest one — measured relative to the nearest distance, so it means the
-# same thing on a small plan and a huge one. Only inside that window does
-# the corridor/hallway-before-junction order decide; outside it, the closer
-# candidate wins, so a hallway across the floor can never beat a junction
-# right outside the door.
-PRIORITY_TIE_FRACTION = 0.15
-PRIORITY_TIE_FLOOR_PX = 4.0
-
-
-def _priority_tie_cutoff_px(best_distance_px: float) -> float:
-    return best_distance_px + max(
-        PRIORITY_TIE_FLOOR_PX, best_distance_px * PRIORITY_TIE_FRACTION
-    )
-
-
-def _project_point_on_segment(
-    px: float, py: float, x1: float, y1: float, x2: float, y2: float
-) -> Tuple[float, float, float, float]:
-    """
-    Closest point on the SEGMENT (x1,y1)-(x2,y2) to (px,py) — the
-    perpendicular foot when it falls within the segment, otherwise the
-    nearer endpoint.
-
-    Returns (qx, qy, t, segment_length_px) with t clamped to [0, 1].
-    """
-
-    vx, vy = x2 - x1, y2 - y1
-    length_sq = vx * vx + vy * vy
-
-    if length_sq <= 0.0:
-        return x1, y1, 0.0, 0.0
-
-    t = ((px - x1) * vx + (py - y1) * vy) / length_sq
-    t = max(0.0, min(1.0, t))
-
-    return x1 + t * vx, y1 + t * vy, t, math.sqrt(length_sq)
-
-
-class _UnionFind:
-    """Iterative union-find with path compression. Small enough to keep
-    here rather than pull in a dependency for one connectivity pass."""
-
-    def __init__(self) -> None:
-        self._parent: Dict[str, str] = {}
-
-    def add(self, item: str) -> None:
-        self._parent.setdefault(item, item)
-
-    def find(self, item: str) -> str:
-        self.add(item)
-        root = item
-        while self._parent[root] != root:
-            root = self._parent[root]
-        while self._parent[item] != root:
-            self._parent[item], item = root, self._parent[item]
-        return root
-
-    def union(self, a: str, b: str) -> None:
-        root_a, root_b = self.find(a), self.find(b)
-        if root_a != root_b:
-            self._parent[root_b] = root_a
-
-
-def _transit_components(
-    transit_ids: set, edges: List[RouteEdge]
-) -> Tuple[Dict[str, str], Optional[str], bool]:
-    """
-    Connected components of the CORRIDOR graph — active walkway edges whose
-    BOTH endpoints are transit points.
-
-    Returns (component_root_by_point_id, main_component_root,
-    has_any_internal_edge).
-
-    main_component_root is the root of the largest component that actually
-    contains more than one point, and None when no transit point is wired
-    to any other. That distinction is deliberate: on a map whose entire
-    corridor network is one hand-placed hallway point there is no
-    multi-point component, so nothing is "isolated" and that point stays a
-    perfectly good candidate — exactly the behaviour
-    test_no_candidate_outside_configured_threshold depends on.
-    """
-
-    union_find = _UnionFind()
-    for point_id in transit_ids:
-        union_find.add(point_id)
-
-    has_any_internal_edge = False
-
-    for edge in edges:
-        if edge.edge_type != "walkway":
-            continue
-        if edge.from_point_id in transit_ids and edge.to_point_id in transit_ids:
-            union_find.union(edge.from_point_id, edge.to_point_id)
-            has_any_internal_edge = True
-
-    roots: Dict[str, str] = {
-        point_id: union_find.find(point_id) for point_id in transit_ids
-    }
-
-    sizes: Dict[str, int] = defaultdict(int)
-    for root in roots.values():
-        sizes[root] += 1
-
-    main_root: Optional[str] = None
-    best_size = 1
-    for root, size in sizes.items():
-        if size > best_size:
-            best_size, main_root = size, root
-
-    return roots, main_root, has_any_internal_edge
-
-
-def _blocked_runs_on_line(
-    wall_mask, downscale: float, x1: float, y1: float, x2: float, y2: float
-) -> Tuple[List[Tuple[int, int]], int]:
-    """
-    Contiguous runs of wall samples along the straight line, as
-    (start_index, length) pairs, plus the total number of samples taken.
-
-    Sampled with exactly the same step graph_connection_service.has_clear_line
-    uses, so a run length here is directly comparable to a wall stroke
-    measured on the same mask.
-    """
-
-    height, width = wall_mask.shape[:2]
-
-    mx1, my1 = x1 * downscale, y1 * downscale
-    mx2, my2 = x2 * downscale, y2 * downscale
-
-    distance = math.hypot(mx2 - mx1, my2 - my1)
-    if distance <= 0:
-        return [], 0
-
-    sample_count = max(2, int(distance / LINE_SAMPLE_STEP_PX))
-    total_samples = sample_count + 1
-
-    runs: List[Tuple[int, int]] = []
-    run_start: Optional[int] = None
-
-    for index in range(total_samples):
-        t = index / sample_count
-        px = int(round(mx1 + (mx2 - mx1) * t))
-        py = int(round(my1 + (my2 - my1) * t))
-
-        if 0 <= py < height and 0 <= px < width:
-            blocked = wall_mask[py, px] > 0
-        else:
-            # Leaving the image is treated as blocked, matching
-            # has_clear_line — a path off the drawing is not a path.
-            blocked = True
-
-        if blocked:
-            if run_start is None:
-                run_start = index
-        elif run_start is not None:
-            runs.append((run_start, index - run_start))
-            run_start = None
-
-    if run_start is not None:
-        runs.append((run_start, total_samples - run_start))
-
-    return runs, total_samples
-
-
-def _attachment_is_clear(
-    map_id: str,
-    destination_x: float,
-    destination_y: float,
-    target_x: float,
-    target_y: float,
-) -> Tuple[bool, bool]:
-    """
-    Whether a destination may be attached to (target_x, target_y).
-
-    Returns (is_clear, grazes_wall_stroke). The second value is purely
-    informational — it feeds the review UI's per-candidate diagnostics and
-    changes no decision.
-
-    has_clear_line stays authoritative and is checked FIRST: anything it
-    rejects is rejected here, unconditionally. A candidate that crosses a
-    wall is never proposed because it happens to be closer; the caller
-    moves on to the next valid corridor candidate.
-
-    On top of that, this adds one rule that only ever makes the answer
-    STRICTER: a line is also rejected when it crosses more than
-    MAX_WALL_CROSSINGS distinct wall strokes. has_clear_line's tolerance is
-    a fraction of the sampled length, so a sufficiently long line can clip
-    several walls and still come in under 3% — which is exactly the
-    "routed straight through the middle of an unrelated room" case. A line
-    that enters and leaves another enclosed space produces two separate
-    blocked runs, and counting runs rejects it regardless of how long the
-    line is.
-    """
-
-    if not has_clear_line(map_id, destination_x, destination_y, target_x, target_y):
-        return False, False
-
-    cached = _get_wall_mask(map_id)
-    if cached is None:
-        # No mask means nothing to check against; has_clear_line already
-        # returned True on that basis and the caller separately refuses to
-        # report distance-based confidence for such a map.
-        return True, False
-
-    wall_mask, downscale = cached
-    runs, _total_samples = _blocked_runs_on_line(
-        wall_mask, downscale, destination_x, destination_y, target_x, target_y
-    )
-
-    if len(runs) > MAX_WALL_CROSSINGS:
-        return False, False
-
-    return True, bool(runs)
 
 
 def _corridor_edge_label(point_a: RoutePoint, point_b: RoutePoint, lang: str) -> str:
@@ -559,129 +177,44 @@ async def _scan_one_map(
     max_distance_px_override: Optional[float],
     lang: str,
 ) -> Tuple[dict, List[dict]]:
-    map_id = str(map_item.id)
-
-    high_max_px, medium_max_px, hard_safety_max_px = _effective_bounds(
-        map_item, max_distance_px_override
+    # ONE shared context and ONE shared candidate search — see
+    # services/destination_attachment_service. This function used to build
+    # the grid, the components, the corridor segments and the candidate
+    # ranking itself, which is precisely how the saved-room path and the
+    # Auto Connect path drifted into two different algorithms.
+    context = await load_corridor_floor_context(
+        map_item, floor=floor, max_distance_px_override=max_distance_px_override
     )
 
-    point_query: dict = {"map_id": map_id, "is_active": True}
-    if floor is not None:
-        point_query["floor"] = floor
+    map_id = context.map_id
+    high_max_px = context.high_max_px
+    medium_max_px = context.medium_max_px
+    hard_safety_max_px = context.hard_safety_max_px
 
-    all_points = await RoutePoint.find(point_query).to_list()
+    all_points = context.all_points
+    edges = context.edges
+    rooms = context.rooms
+    destinations = context.destinations
+    transit_points = context.transit_points
+    points_by_id = context.points_by_id
+    rooms_by_route_point_id = context.rooms_by_route_point_id
+    rooms_by_id = context.rooms_by_id
+    has_any_edge = context.has_any_edge
+    transit_network_has_internal_edges = context.transit_network_has_internal_edges
 
-    destinations = [
-        p
-        for p in all_points
-        if p.point_type in DESTINATION_CAPABLE_POINT_TYPES
-        and p.connector_id is None
-        and p.x is not None
-        and p.y is not None
-    ]
-    transit_points = [
-        p
-        for p in all_points
-        if p.point_type in TRANSIT_CANDIDATE_POINT_TYPES
-        and p.connector_id is None
-        and p.x is not None
-        and p.y is not None
-    ]
+    # CONNECTED STATUS — one shared authority.
+    #
+    # This scan used to decide "already connected" with its own local rule
+    # while routes/room_routes.py used a different one, and on real data
+    # they disagreed: Auto Connect reported rooms as already connected that
+    # the Rooms page showed as having no valid graph connection. Both now
+    # ask services/graph_connectivity_service the same question, so the two
+    # screens cannot drift again.
+    connectivity = FloorGraphIndex(map_id, all_points, edges, rooms)
 
-    edges = await RouteEdge.find({"map_id": map_id, "is_active": True}).to_list()
-    transit_ids = {str(p.id) for p in transit_points}
-    points_by_id: Dict[str, RoutePoint] = {str(p.id): p for p in all_points}
-    transit_by_id: Dict[str, RoutePoint] = {str(p.id): p for p in transit_points}
-
-    # Nested-room navigation (Approved Semantic Analysis -> Automatic
-    # Destinations spec, Section 12.B). Batched once per map, never one
-    # query per destination: every Room on this map, indexed both by its
-    # linked RoutePoint id (to find "is THIS destination point nested
-    # under something") and by its own id (to resolve "what IS that
-    # parent Room's own destination point").
-    rooms = await Room.find({"map_id": map_id}).to_list()
-    rooms_by_route_point_id: Dict[str, Room] = {
-        r.route_point_id: r for r in rooms if r.route_point_id
-    }
-    rooms_by_id: Dict[str, Room] = {str(r.id): r for r in rooms}
-
-    # For every RoutePoint id: does it have at least one active edge (of
-    # ANY edge_type) at all, and does it have at least one active WALKWAY
-    # edge specifically to a valid transit point? These are deliberately
-    # tracked separately — "has an edge" alone must never be treated as
-    # "correctly connected" (a stale Room-to-Room edge must still leave the
-    # Room eligible for a real proposal, just flagged with a warning).
-    has_any_edge: Dict[str, bool] = defaultdict(bool)
-    has_valid_transit_edge: Dict[str, bool] = defaultdict(bool)
-
-    for edge in edges:
-        has_any_edge[edge.from_point_id] = True
-        has_any_edge[edge.to_point_id] = True
-
-        if edge.edge_type != "walkway":
-            continue
-
-        if edge.to_point_id in transit_ids:
-            has_valid_transit_edge[edge.from_point_id] = True
-        if edge.from_point_id in transit_ids:
-            has_valid_transit_edge[edge.to_point_id] = True
-
-    # CONNECTED GRAPH RULE. Components of the corridor graph itself, so a
-    # candidate that exists but is stranded off the walkable network can be
-    # reported as exactly that instead of being silently proposed (or,
-    # worse, reported as a distance problem). See _transit_components for
-    # why a map with a single lone hallway point is deliberately NOT
-    # treated as having anything isolated.
-    component_root_by_id, main_component_root, transit_network_has_internal_edges = (
-        _transit_components(transit_ids, edges)
-    )
-
-    def _is_graph_connected(point_id: str) -> bool:
-        if main_component_root is None:
-            # No transit point is wired to any other anywhere on this map,
-            # so there is no "main walkable graph" to be isolated from.
-            return True
-        return component_root_by_id.get(point_id) == main_component_root
-
-    # Corridor EDGES, for attachment to the nearest point ALONG a drawn
-    # corridor rather than only to its endpoint nodes. This is the fix for
-    # "the room door is beside the middle of a long corridor run, and
-    # neither end node is anywhere near it".
-    corridor_segments: List[Tuple[RouteEdge, RoutePoint, RoutePoint]] = []
-    for edge in edges:
-        if edge.edge_type != "walkway":
-            continue
-        if edge.from_point_id not in transit_ids or edge.to_point_id not in transit_ids:
-            continue
-        point_a = transit_by_id.get(edge.from_point_id)
-        point_b = transit_by_id.get(edge.to_point_id)
-        if not point_a or not point_b:
-            continue
-        if point_a.floor != point_b.floor:
-            continue
-        corridor_segments.append((edge, point_a, point_b))
-
-    min_node_gap_px = max(
-        EDGE_SPLIT_MIN_NODE_GAP_FLOOR_PX,
-        high_max_px * EDGE_SPLIT_MIN_NODE_GAP_FRACTION_OF_HIGH,
-    )
-
-    # Cell size = this map's hard safety ceiling, so a destination's 3x3
-    # cell neighborhood is always guaranteed to fully cover every transit
-    # point within hard_safety_max_px, regardless of where in a cell it
-    # falls.
-    grid = _SpatialGrid(hard_safety_max_px)
-    for point in transit_points:
-        grid.add(point)
-
-    # ECS task storage is temporary. Restore the normalized source image
-    # from S3 once per scanned map before building the wall mask.
-    await _ensure_map_source_available(map_id)
-
-    wall_mask_available = _get_wall_mask(map_id) is not None
-
-    is_calibrated = bool(map_item.is_calibrated)
-    scale = _get_scale_for_floor(map_item, floor if floor is not None else map_item.floor)
+    wall_mask_available = context.wall_mask_available
+    is_calibrated = context.is_calibrated
+    scale = context.scale
 
     summary = {
         "scanned": len(destinations),
@@ -833,7 +366,10 @@ async def _scan_one_map(
             )
             continue
 
-        if has_valid_transit_edge.get(destination_id):
+        destination_connected, _connection_reason = connectivity.connection_state(
+            destination_id
+        )
+        if destination_connected:
             summary["already_connected"] += 1
             continue
 
@@ -858,222 +394,55 @@ async def _scan_one_map(
         destination_y = float(destination.y)
 
         # ── CANDIDATE POOL ──────────────────────────────────────────────
-        # Corridor/hallway and junction NODES, plus the nearest point along
-        # every drawn corridor EDGE. Room/store points are not in
-        # transit_points at all, so a normal destination can never see
-        # another destination here.
-        raw_candidates: List[dict] = []
-
-        for candidate in grid.nearby(destination_x, destination_y):
-            candidate_id = str(candidate.id)
-            if candidate_id == destination_id:
-                continue
-            # A Map document can still contain RoutePoints recorded on more
-            # than one distinct `floor` value (legacy data, or
-            # vertical-connector transition points). Two points merely
-            # sharing a map_id and a similar pixel position must never be
-            # proposed as connected across a real floor difference.
-            if candidate.floor != destination.floor:
-                continue
-
-            distance_px = math.hypot(
-                float(candidate.x) - destination_x,
-                float(candidate.y) - destination_y,
-            )
-            raw_candidates.append(
-                {
-                    "target_type": "corridor_node",
-                    "candidate_key": candidate_id,
-                    "point_id": candidate_id,
-                    "corridor_edge_id": None,
-                    "name": _display_name(candidate, lang),
-                    "point_type": candidate.point_type,
-                    "x": float(candidate.x),
-                    "y": float(candidate.y),
-                    "attachment_x": float(candidate.x),
-                    "attachment_y": float(candidate.y),
-                    "distance_px": distance_px,
-                    "priority_rank": transit_candidate_priority_rank(
-                        candidate.point_type
-                    ),
-                    "graph_connected": _is_graph_connected(candidate_id),
-                }
-            )
-
-        for edge, point_a, point_b in corridor_segments:
-            if point_a.floor != destination.floor:
-                continue
-
-            ax, ay = float(point_a.x), float(point_a.y)
-            bx, by = float(point_b.x), float(point_b.y)
-
-            # Cheap bounding-box reject before the projection maths, so a
-            # bulk scan over thousands of destinations stays linear in
-            # practice rather than doing full geometry per (destination,
-            # edge) pair.
-            if (
-                destination_x < min(ax, bx) - hard_safety_max_px
-                or destination_x > max(ax, bx) + hard_safety_max_px
-                or destination_y < min(ay, by) - hard_safety_max_px
-                or destination_y > max(ay, by) + hard_safety_max_px
-            ):
-                continue
-
-            qx, qy, t, segment_length = _project_point_on_segment(
-                destination_x, destination_y, ax, ay, bx, by
-            )
-
-            # A projection that lands essentially on one of the edge's own
-            # endpoints adds nothing — that node is already a candidate,
-            # and splitting an edge a few pixels from an existing junction
-            # is graph clutter rather than accuracy.
-            if (
-                t * segment_length < min_node_gap_px
-                or (1.0 - t) * segment_length < min_node_gap_px
-            ):
-                continue
-
-            distance_px = math.hypot(qx - destination_x, qy - destination_y)
-
-            # An edge is, by definition, part of the corridor graph; it is
-            # "connected" exactly when its own component is the main one.
-            edge_connected = _is_graph_connected(str(point_a.id))
-
-            raw_candidates.append(
-                {
-                    "target_type": "corridor_edge",
-                    "candidate_key": f"edge:{edge.id}",
-                    "point_id": None,
-                    "corridor_edge_id": str(edge.id),
-                    "name": _corridor_edge_label(point_a, point_b, lang),
-                    "point_type": (
-                        point_a.point_type
-                        if transit_candidate_priority_rank(point_a.point_type)
-                        <= transit_candidate_priority_rank(point_b.point_type)
-                        else point_b.point_type
-                    ),
-                    "x": round(qx, 2),
-                    "y": round(qy, 2),
-                    "attachment_x": qx,
-                    "attachment_y": qy,
-                    "distance_px": distance_px,
-                    "priority_rank": min(
-                        transit_candidate_priority_rank(point_a.point_type),
-                        transit_candidate_priority_rank(point_b.point_type),
-                    ),
-                    "graph_connected": edge_connected,
-                }
-            )
-
-        # Nearest thing found at all, before any safety filtering — kept
-        # for diagnostics so a rejection can say how far away the corridor
-        # actually was.
-        nearest_found_px = (
-            round(min(c["distance_px"] for c in raw_candidates), 2)
-            if raw_candidates
-            else None
+        # THE shared search (services/destination_attachment_service):
+        # corridor nodes plus the nearest point along every drawn corridor
+        # edge, ranked connected-first then by distance with the
+        # hallway-before-junction tie-break, each validated against strict
+        # clear-line geometry. Room/store points are not in the transit set
+        # at all, so a normal destination can never see another
+        # destination here.
+        #
+        # Exactly the same call the automatic attach-on-save and the bulk
+        # retry make — that is the point: one algorithm, three callers.
+        search = find_attachment_candidates(
+            context,
+            destination,
+            limit=MAX_CANDIDATES_PER_PROPOSAL,
+            label_for=lambda candidate: _display_name(candidate, lang),
         )
 
-        within_safety = [
-            c for c in raw_candidates if c["distance_px"] <= hard_safety_max_px
+        blocked_count = search.blocked_count
+        isolated_count = search.isolated_count
+        nearest_found_px = search.nearest_found_px
+
+        valid_candidates = [
+            {
+                "candidate_key": candidate["candidate_key"],
+                "point_id": candidate["point_id"],
+                "name": candidate["name"],
+                "point_type": candidate["point_type"],
+                "target_type": candidate["target_type"],
+                "corridor_edge_id": candidate["corridor_edge_id"],
+                "x": round(candidate["x"], 2),
+                "y": round(candidate["y"], 2),
+                "attachment_x": round(candidate["attachment_x"], 2),
+                "attachment_y": round(candidate["attachment_y"], 2),
+                "distance_px": round(candidate["distance_px"], 2),
+                "distance_meters": candidate["distance_meters"],
+                "blocked_by_wall": False,
+                "clear_line": True,
+                "doorway_crossing": candidate["doorway_crossing"],
+                "graph_connected": True,
+            }
+            for candidate in search.candidates
         ]
-
-        # CANDIDATE PRIORITY. Connected always beats isolated. Then
-        # distance — except among candidates that are effectively
-        # equidistant with the nearest one, where the declared
-        # corridor/hallway -> junction -> other order decides. Anything
-        # outside that tie window is ordered purely by distance, which is
-        # what stops a hallway on the far side of the floor from
-        # outranking a junction right outside the door.
-        within_safety.sort(
-            key=lambda c: (0 if c["graph_connected"] else 1, c["distance_px"])
-        )
-
-        if within_safety:
-            connected_first = [c for c in within_safety if c["graph_connected"]]
-            reference = (connected_first or within_safety)[0]
-            tie_cutoff = _priority_tie_cutoff_px(reference["distance_px"])
-
-            def _priority_sort_key(candidate: dict) -> tuple:
-                tied = candidate["distance_px"] <= tie_cutoff
-                return (
-                    0 if candidate["graph_connected"] else 1,
-                    0 if tied else 1,
-                    # Untied candidates all share slot 0 here, so they stay
-                    # ordered by pure distance below.
-                    candidate["priority_rank"] if tied else 0,
-                    candidate["distance_px"],
-                )
-
-            within_safety.sort(key=_priority_sort_key)
-
-        valid_candidates: List[dict] = []
-        blocked_count = 0
-        isolated_count = 0
-
-        for candidate in within_safety:
-            if not candidate["graph_connected"]:
-                # CONNECTED GRAPH RULE: a corridor point stranded off the
-                # walkable network is not a successful attachment. Counted
-                # so the reason below can say so precisely.
-                isolated_count += 1
-                continue
-
-            doorway_crossing = False
-            if wall_mask_available:
-                is_clear, doorway_crossing = _attachment_is_clear(
-                    map_id,
-                    destination_x,
-                    destination_y,
-                    candidate["attachment_x"],
-                    candidate["attachment_y"],
-                )
-                if not is_clear:
-                    # GEOMETRY SAFETY: reject and try the next valid
-                    # corridor candidate — never connect through a wall
-                    # just because it is closer.
-                    blocked_count += 1
-                    continue
-
-            distance_meters = (
-                round(candidate["distance_px"] * scale, 2) if is_calibrated else None
-            )
-            valid_candidates.append(
-                {
-                    "candidate_key": candidate["candidate_key"],
-                    "point_id": candidate["point_id"],
-                    "name": candidate["name"],
-                    "point_type": candidate["point_type"],
-                    "target_type": candidate["target_type"],
-                    "corridor_edge_id": candidate["corridor_edge_id"],
-                    "x": round(candidate["x"], 2),
-                    "y": round(candidate["y"], 2),
-                    "attachment_x": round(candidate["attachment_x"], 2),
-                    "attachment_y": round(candidate["attachment_y"], 2),
-                    "distance_px": round(candidate["distance_px"], 2),
-                    "distance_meters": distance_meters,
-                    "blocked_by_wall": False,
-                    "clear_line": True,
-                    "doorway_crossing": doorway_crossing,
-                    "graph_connected": True,
-                }
-            )
-            if len(valid_candidates) >= MAX_CANDIDATES_PER_PROPOSAL:
-                break
 
         if not valid_candidates:
             # PREVIEW DIAGNOSTICS: each of these is a genuinely different
             # problem with a genuinely different fix, and conflating them
             # is what made "no corridor point close enough" appear for a
             # room with a corridor drawn right beside it.
-            if blocked_count:
-                no_candidate_reason = "blocked_by_wall"
-            elif isolated_count:
-                no_candidate_reason = "corridor_candidate_isolated"
-            elif not transit_network_has_internal_edges and len(transit_points) >= 2:
-                no_candidate_reason = "transit_points_not_connected_by_edges"
-            else:
-                no_candidate_reason = "no_transit_point_within_range"
+            no_candidate_reason = search.reason or "no_transit_point_within_range"
 
             summary["no_candidate"] += 1
             proposals.append(
@@ -1180,91 +549,6 @@ async def preview_auto_connect_destinations(
         all_proposals.extend(proposals)
 
     return {"summary": overall_summary, "proposals": all_proposals}
-
-
-# Provenance stamped on the junction point and the two replacement
-# corridor edges an edge-split attachment creates, so a later regeneration
-# or cleanup can recognise them and an admin can see where they came from.
-EDGE_SPLIT_GENERATION_METHOD = "auto_connect_edge_split"
-
-
-async def _split_corridor_edge_for_attachment(
-    map_id: str,
-    edge: RouteEdge,
-    attachment_x: float,
-    attachment_y: float,
-    calculate_edge_distance,
-) -> Optional[RoutePoint]:
-    """
-    Turn a point partway along a corridor edge into a real junction the
-    graph can attach to.
-
-    Deliberately conservative and order-dependent:
-      1. insert the new junction RoutePoint,
-      2. insert the two replacement corridor edges,
-      3. only then deactivate the original edge.
-
-    If any step fails the caller's exception handler runs with the original
-    edge still active, so the corridor is never left severed — the worst
-    case is a redundant junction point, not a broken walkway.
-
-    Uses the SAME point_type ("junction"), edge_type ("walkway") and
-    calculate_edge_distance() every manually drawn corridor uses. No new
-    document type, no new edge type, nothing for Dijkstra to learn.
-    """
-
-    endpoints = await RoutePoint.find(
-        {"_id": {"$in": [PydanticObjectId(edge.from_point_id), PydanticObjectId(edge.to_point_id)]}}
-    ).to_list()
-    if len(endpoints) != 2:
-        return None
-
-    floor = endpoints[0].floor
-    if any(point.floor != floor for point in endpoints):
-        return None
-
-    junction = RoutePoint(
-        map_id=map_id,
-        name=f"Auto Corridor Junction {round(attachment_x)}-{round(attachment_y)}",
-        point_type="junction",
-        x=round(float(attachment_x), 2),
-        y=round(float(attachment_y), 2),
-        floor=floor,
-        building_id=endpoints[0].building_id,
-        is_accessible=True,
-        is_auto_generated=True,
-        generation_method=EDGE_SPLIT_GENERATION_METHOD,
-    )
-    await junction.insert()
-    junction_id = str(junction.id)
-
-    for endpoint in endpoints:
-        endpoint_id = str(endpoint.id)
-        replacement = RouteEdge(
-            map_id=map_id,
-            from_point_id=junction_id,
-            to_point_id=endpoint_id,
-            edge_type="walkway",
-            distance=await calculate_edge_distance(
-                map_id=map_id,
-                from_point_id=junction_id,
-                to_point_id=endpoint_id,
-                edge_type="walkway",
-            ),
-            is_bidirectional=edge.is_bidirectional,
-            is_accessible=edge.is_accessible,
-            description="Auto Connect: corridor split for room attachment",
-            is_auto_generated=True,
-            generation_method=EDGE_SPLIT_GENERATION_METHOD,
-        )
-        await replacement.insert()
-
-    # Last, so a failure above can never sever the corridor.
-    edge.is_active = False
-    edge.updated_at = datetime.utcnow()
-    await edge.save()
-
-    return junction
 
 
 async def apply_auto_connect_destinations(
