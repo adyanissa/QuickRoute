@@ -328,3 +328,10 @@ class AutoConnectApplyResult(BaseModel):
     rooms_unplaced: int = 0
     rooms_unconnected: int = 0
     rooms_needing_review: List[Dict[str, str]] = Field(default_factory=list)
+
+    # One entry per refused pair: {destination_point_id, reason}.
+    # `rejected_invalid` used to be a bare count with no explanation, so an
+    # admin who accepted three proposals and saw "Created 0 · Rejected
+    # invalid 3" had nothing to act on. Every refusal now names the check
+    # it failed, using the same vocabulary the preview reports.
+    rejected_reasons: List[Dict[str, Optional[str]]] = Field(default_factory=list)

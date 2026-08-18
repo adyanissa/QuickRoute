@@ -82,7 +82,9 @@ from services.destination_attachment_service import (  # noqa: F401
     find_attachment_candidates,
     load_corridor_floor_context,
     resolve_doorway_exit_point,
+    _floors_are_compatible,
 )
+from services.strict_geometry_service import get_strict_wall_metrics
 
 
 def _display_name(point: RoutePoint, lang: str) -> str:
@@ -583,6 +585,47 @@ async def preview_auto_connect_destinations(
     return {"summary": overall_summary, "proposals": all_proposals}
 
 
+# Why a pair was refused at apply time.
+#
+# `rejected_invalid` used to be a bare counter with no accompanying
+# warning, so an admin who accepted three proposals and got "Created 0 ·
+# Rejected invalid 3" had nothing to act on and no way to tell the failure
+# apart from a no-op. Every refusal below now says which check it failed;
+# the reasons are the same vocabulary the preview reports.
+REJECT_REASON_LABELS = {
+    "floor_mismatch": "the two points are recorded on different floors",
+    "blocked_by_wall": "a wall is in the way",
+    "doorway_not_resolved": "a wall is in the way and it is not a doorway",
+    "blocked_after_doorway": "a wall stands between the doorway and the corridor",
+    "corridor_edge_no_longer_valid": "the corridor edge is no longer a valid walkway",
+    "not_a_destination": "the point is not a room or store",
+    "corridor_not_found": "the corridor point no longer exists",
+    "corridor_inactive": "the corridor point is inactive",
+    "wrong_map": "the point belongs to a different map",
+    "connector_stop": "a stair/elevator stop cannot be used here",
+    "not_transit": "the target is not a corridor point",
+    "same_point": "the destination and the corridor point are the same point",
+    "missing_attachment_position": "no attachment position was supplied",
+    "edge_split_failed": "the corridor edge could not be split",
+    "destination_not_found": "the destination point no longer exists",
+    "destination_inactive": "the destination point is inactive",
+    "no_target": "exactly one corridor point or corridor edge is required",
+}
+
+
+def _reject(result: dict, destination_id: Optional[str], reason: str) -> None:
+    """Count a refused pair AND say why, so apply is never silent."""
+
+    result["rejected_invalid"] += 1
+    label = REJECT_REASON_LABELS.get(reason, reason)
+    result["warnings"].append(
+        f"Could not connect destination {destination_id}: {label}."
+    )
+    result.setdefault("rejected_reasons", []).append(
+        {"destination_point_id": destination_id, "reason": reason}
+    )
+
+
 async def apply_auto_connect_destinations(
     map_id: str,
     accepted_pairs: List[dict],
@@ -621,6 +664,9 @@ async def apply_auto_connect_destinations(
         # than at one of its endpoint nodes).
         "corridor_junctions_created": 0,
         "created_point_ids": [],
+        # One entry per refused pair, so "Rejected invalid 3" is always
+        # accompanied by which check each one failed.
+        "rejected_reasons": [],
     }
 
     map_item = await Map.get(PydanticObjectId(map_id))
@@ -639,28 +685,28 @@ async def apply_auto_connect_destinations(
 
         try:
             if not destination_id:
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "no_target")
                 continue
 
             # Exactly one attachment target: an existing corridor point, or
             # a position along an existing corridor edge. Never both, never
             # neither.
             if bool(corridor_id) == bool(corridor_edge_id):
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "no_target")
                 continue
 
             destination = await RoutePoint.get(PydanticObjectId(destination_id))
 
             if not destination:
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "destination_not_found")
                 continue
 
             if destination.map_id != map_id or not destination.is_active:
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "destination_inactive")
                 continue
 
             if destination.point_type not in DESTINATION_CAPABLE_POINT_TYPES:
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "not_a_destination")
                 continue
 
             # ── EDGE ATTACHMENT ─────────────────────────────────────────
@@ -671,7 +717,7 @@ async def apply_auto_connect_destinations(
             # junction created.
             if corridor_edge_id:
                 if attachment_x is None or attachment_y is None:
-                    result["rejected_invalid"] += 1
+                    _reject(result, destination_id, "missing_attachment_position")
                     continue
 
                 corridor_edge = await RouteEdge.get(PydanticObjectId(corridor_edge_id))
@@ -683,7 +729,7 @@ async def apply_auto_connect_destinations(
                     or corridor_edge.edge_type != "walkway"
                     or corridor_edge.to_map_id is not None
                 ):
-                    result["rejected_invalid"] += 1
+                    _reject(result, destination_id, "corridor_edge_no_longer_valid")
                     continue
 
                 edge_from = await RoutePoint.get(
@@ -700,14 +746,70 @@ async def apply_auto_connect_destinations(
                     or not edge_to.is_active
                     or edge_from.point_type not in TRANSIT_CANDIDATE_POINT_TYPES
                     or edge_to.point_type not in TRANSIT_CANDIDATE_POINT_TYPES
-                    or edge_from.floor != destination.floor
-                    or edge_to.floor != destination.floor
                 ):
-                    result["rejected_invalid"] += 1
+                    _reject(result, destination_id, "corridor_edge_no_longer_valid")
                     continue
 
+                # Floor compatibility uses the SHARED rule, not a raw
+                # comparison. This is the same silent-loop shape as the
+                # duplicate-edge bug: the preview proposes with
+                # _floors_are_compatible (which, when Map.floor is set,
+                # knows every RoutePoint on the map is on that floor by
+                # construction and ignores stale/None per-point values),
+                # and apply used to refuse with `!=`. On a Floor 2 map
+                # holding any legacy point whose own `floor` was never
+                # stamped, every such proposal came back forever.
+                if not (
+                    _floors_are_compatible(
+                        edge_from.floor, destination.floor, map_item.floor
+                    )
+                    and _floors_are_compatible(
+                        edge_to.floor, destination.floor, map_item.floor
+                    )
+                ):
+                    _reject(result, destination_id, "floor_mismatch")
+                    continue
+
+                # GEOMETRY REVALIDATION — from a fresh read, and through
+                # the SAME authority the preview used.
+                #
+                # This used to call the legacy _attachment_is_clear only.
+                # Since destination attachment moved onto the strict,
+                # full-resolution path, that made apply disagree with
+                # preview in both directions: a doorway-resolved proposal
+                # was proposed and then silently refused here, and a long
+                # line the legacy 3% budget waved through would have been
+                # accepted here after the search had rejected it. Asking
+                # resolve_doorway_exit_point — exactly what
+                # find_attachment_candidates asks — keeps the write path
+                # neither weaker nor stricter than the proposal it is
+                # applying. Nothing is trusted from the client: the
+                # coordinates are re-read from the database above.
                 await _ensure_map_source_available(map_id)
-                if _get_wall_mask(map_id) is not None:
+                metrics = get_strict_wall_metrics(map_id)
+
+                if metrics is not None:
+                    verdict = resolve_doorway_exit_point(
+                        map_id=map_id,
+                        metrics=metrics,
+                        origin_x=float(destination.x),
+                        origin_y=float(destination.y),
+                        target_x=float(attachment_x),
+                        target_y=float(attachment_y),
+                        canonical_diagonal_px=_canonical_diagonal_px(map_item),
+                        is_calibrated=bool(map_item.is_calibrated),
+                        scale=_get_scale_for_floor(map_item, destination.floor),
+                    )
+                    if not verdict.accepted:
+                        _reject(
+                            result,
+                            destination_id,
+                            verdict.reason or "blocked_by_wall",
+                        )
+                        continue
+                elif _get_wall_mask(map_id) is not None:
+                    # No strict mask for this map — fall back to exactly
+                    # the previous behaviour.
                     is_clear, _ = _attachment_is_clear(
                         map_id,
                         float(destination.x),
@@ -716,7 +818,7 @@ async def apply_auto_connect_destinations(
                         float(attachment_y),
                     )
                     if not is_clear:
-                        result["rejected_invalid"] += 1
+                        _reject(result, destination_id, "blocked_by_wall")
                         continue
 
                 junction = await _split_corridor_edge_for_attachment(
@@ -727,7 +829,7 @@ async def apply_auto_connect_destinations(
                     calculate_edge_distance,
                 )
                 if junction is None:
-                    result["rejected_invalid"] += 1
+                    _reject(result, destination_id, "edge_split_failed")
                     continue
 
                 corridor = junction
@@ -739,26 +841,28 @@ async def apply_auto_connect_destinations(
                 corridor = await RoutePoint.get(PydanticObjectId(corridor_id))
 
             if destination_id == corridor_id:
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "same_point")
                 continue
 
             if not corridor:
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "corridor_not_found")
                 continue
 
             if not corridor.is_active:
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "corridor_inactive")
                 continue
 
             # The corridor side must genuinely belong to the exact map this
             # apply call was scoped to — never trust a stale/forged pair
             # that has since drifted, even if both points still exist.
             if corridor.map_id != map_id:
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "wrong_map")
                 continue
 
-            if destination.floor != corridor.floor:
-                result["rejected_invalid"] += 1
+            if not _floors_are_compatible(
+                destination.floor, corridor.floor, map_item.floor
+            ):
+                _reject(result, destination_id, "floor_mismatch")
                 continue
 
             # Nested-room navigation (Section 12.B): the "corridor" side of
@@ -788,12 +892,12 @@ async def apply_auto_connect_destinations(
                         is_nested_pair = True
 
                 if not is_nested_pair:
-                    result["rejected_invalid"] += 1
+                    _reject(result, destination_id, "not_transit")
                     continue
 
             # Never a vertical-connector stop on either side.
             if destination.connector_id is not None or corridor.connector_id is not None:
-                result["rejected_invalid"] += 1
+                _reject(result, destination_id, "connector_stop")
                 continue
 
             duplicate = await find_duplicate_edge(

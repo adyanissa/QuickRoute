@@ -223,12 +223,33 @@ async def find_duplicate_edge(
     over the same corridor, or a stale frontend cache re-submitting a
     segment that already exists) without relying only on client-side
     de-duplication.
+
+    ONLY ACTIVE EDGES COUNT — and that qualifier is the whole point.
+
+    This used to match any stored document, is_active or not, and that made
+    a destination permanently impossible to reconnect. Several paths in this
+    system deactivate an edge rather than deleting it, because deactivation
+    is reversible and auditable: services/legacy_edge_repair_service.py
+    retires an invalid Room-to-Room or stale attachment that way, and
+    _split_corridor_edge_for_attachment retires the original corridor edge
+    the same way. Every reader of the graph — FloorGraphIndex, Dijkstra,
+    the Auto Connect scan — correctly ignores those documents, so the room
+    is genuinely disconnected and is correctly proposed for reconnection.
+    But the WRITE path then found the dead edge here, reported the pair as
+    "already connected", and wrote nothing.
+
+    The result was a silent, permanent loop: Auto Connect proposes the same
+    rooms, the admin accepts them, apply reports "skipped (already
+    connected)", nothing is persisted, and reopening the panel shows the
+    identical proposals again. An edge that is not in the graph cannot be a
+    duplicate of one being added to it.
     """
 
     candidates = await RouteEdge.find(
         {
             "map_id": map_id,
             "edge_type": edge_type,
+            "is_active": True,
             "$or": [
                 {"from_point_id": from_point_id, "to_point_id": to_point_id},
                 {"from_point_id": to_point_id, "to_point_id": from_point_id},
@@ -238,6 +259,10 @@ async def find_duplicate_edge(
 
     for candidate in candidates:
         if exclude_edge_id is not None and candidate.id == exclude_edge_id:
+            continue
+        # Defence in depth: the query filters on is_active, but a document
+        # written before that field existed would have no value at all.
+        if not candidate.is_active:
             continue
         return candidate
 

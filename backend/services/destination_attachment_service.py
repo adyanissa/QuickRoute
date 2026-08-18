@@ -1241,9 +1241,30 @@ async def _split_corridor_edge_for_attachment(
     if len(endpoints) != 2:
         return None
 
-    floor = endpoints[0].floor
-    if any(point.floor != floor for point in endpoints):
+    # Floor agreement, through the SHARED rule rather than a raw
+    # comparison. A raw `!=` here refused to split a perfectly good corridor
+    # edge whenever one of its endpoints was a legacy point whose own
+    # `floor` was never stamped — on a Map that HAS a floor, every RoutePoint
+    # on it is on that floor by construction, which is exactly what
+    # _floors_are_compatible encodes and what calculate_edge_distance
+    # already does. The search proposed such an attachment and this
+    # returned None, so apply reported "rejected invalid" and the same
+    # proposal came back on every reopen.
+    #
+    # The junction still inherits a concrete floor from an endpoint that
+    # has one, so nothing downstream sees a less specific value than before.
+    map_item = await Map.get(PydanticObjectId(map_id))
+    map_floor = map_item.floor if map_item else None
+
+    if not _floors_are_compatible(
+        endpoints[0].floor, endpoints[1].floor, map_floor
+    ):
         return None
+
+    floor = next(
+        (point.floor for point in endpoints if point.floor is not None),
+        map_floor,
+    )
 
     junction = RoutePoint(
         map_id=map_id,
