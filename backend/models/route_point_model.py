@@ -3,6 +3,7 @@ from typing import Optional
 
 from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel
 
 
 class RoutePoint(Document):
@@ -82,3 +83,22 @@ class RoutePoint(Document):
 
     class Settings:
         name = "route_points"
+        indexes = [
+            # Supports the node load that every route calculation performs:
+            #
+            #   RoutePoint.find({"map_id": {"$in": [...]}, "is_active": True})
+            #   logic/multi_floor_graph.py :: build_multi_floor_graph
+            #   reached from POST /api/navigation/multi-floor-route
+            #
+            # Both keys are equality predicates ($in is index-usable), so
+            # this is the smallest compound index that matches. `floor` is
+            # NOT included: the query above does not filter on it, and this
+            # pass adds no speculative keys.
+            #
+            # The same index also serves, as a leftmost prefix + second
+            # equality, the public start-point lookup
+            #   {"is_active": True, "map_id": "<id>"}
+            #   routes/route_point_routes.py :: get_public_route_points
+            # (key order in the filter dict is irrelevant to index use).
+            IndexModel([("map_id", 1), ("is_active", 1)]),
+        ]

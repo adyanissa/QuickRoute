@@ -104,4 +104,31 @@ class RouteEdge(Document):
             # semantics — Dijkstra and RouteEdge logic are untouched.
             IndexModel([("is_active", 1), ("from_point_id", 1)]),
             IndexModel([("is_active", 1), ("to_point_id", 1)]),
+            # ── Added for the navigation edge load (additive only) ───────
+            # The two indexes above are UNCHANGED and still serve the
+            # connectivity test they were added for. The two below are new
+            # and independent; nothing was reordered or replaced.
+            #
+            # They support the edge load every route calculation performs.
+            # Neither navigation query filters on is_active — the edges are
+            # loaded and then filtered in Python (is_edge_usable /
+            # route_calculator) — so the compound indexes above cannot
+            # serve them: a compound index is only usable from its leftmost
+            # key, and is_active is absent from both filters.
+            #
+            #   {"map_id": "<id>"}
+            #   routes/navigation_routes.py :: calculate_route_from_mongodb
+            #   POST /api/navigation/route
+            #
+            #   {"$or": [{"map_id":    {"$in": [...]}},
+            #            {"to_map_id": {"$in": [...]}}]}
+            #   logic/multi_floor_graph.py :: build_multi_floor_graph
+            #   POST /api/navigation/multi-floor-route
+            #
+            # An $or needs a usable index for EACH branch, which is why
+            # to_map_id gets its own. Both are read-path only and
+            # non-unique: a map legitimately has many edges, and a
+            # cross-floor edge legitimately shares to_map_id with others.
+            IndexModel([("map_id", 1)]),
+            IndexModel([("to_map_id", 1)]),
         ]
