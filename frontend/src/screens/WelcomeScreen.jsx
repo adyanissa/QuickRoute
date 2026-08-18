@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
+import { ROUTES } from '../config/routes';
 import '../styles/WelcomeScreen.css';
 
 const LANGUAGES = [
@@ -62,7 +63,7 @@ const WelcomeScreen = () => {
 
         {/* ── Go button ── */}
         <div className="s15-footer">
-          <button className="s15-go-btn" onClick={() => navigate('/screen/16')}>
+          <button className="s15-go-btn" onClick={() => navigate(ROUTES.buildings)}>
             {t.go}
           </button>
         </div>

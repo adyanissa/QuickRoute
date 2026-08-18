@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
 import { getLocalizedText } from '../utils/localization';
 import { formatFloor } from '../components/DestinationCard';
+import { ROUTES } from '../config/routes';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import RouteSteps from '../components/RouteSteps';
 import BackButton from '../components/BackButton';
@@ -1081,7 +1082,7 @@ const IndoorNavigationScreen = () => {
         <div className="s18-header">
           <div className="s18-header-top">
             <BackButton
-              onClick={() => navigate('/screen/17', { state: { building } })}
+              onClick={() => navigate(ROUTES.destinations, { state: { building } })}
               label={t.back}
               isRTL={isRTL}
               spacing="compact"

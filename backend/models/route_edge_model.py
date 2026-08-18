@@ -3,6 +3,7 @@ from typing import Optional
 
 from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel
 
 
 class RouteEdge(Document):
@@ -90,3 +91,17 @@ class RouteEdge(Document):
 
     class Settings:
         name = "route_edges"
+        indexes = [
+            # "Is there an ACTIVE edge touching this point?" — the
+            # connectivity test behind Room.is_navigable. It is an $or over
+            # the two endpoints, and MongoDB can use a separate index per
+            # $or branch, so this needs one compound index per direction.
+            # Without them the query was a full scan of the corridor graph,
+            # repeated once per room.
+            #
+            # These are read-path indexes only. They do not change which
+            # edges exist, how they are traversed, or any routing
+            # semantics — Dijkstra and RouteEdge logic are untouched.
+            IndexModel([("is_active", 1), ("from_point_id", 1)]),
+            IndexModel([("is_active", 1), ("to_point_id", 1)]),
+        ]

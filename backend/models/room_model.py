@@ -3,6 +3,7 @@ from typing import Dict, Optional
 
 from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel
 
 
 class Room(Document):
@@ -78,3 +79,9 @@ class Room(Document):
 
     class Settings:
         name = "rooms"
+        indexes = [
+            # GET /api/rooms?building_id=... is the query the public
+            # Destination Selection screen makes on every visit, and it was
+            # a full collection scan. Not unique: a building has many rooms.
+            IndexModel("building_id"),
+        ]

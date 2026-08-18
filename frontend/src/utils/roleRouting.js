@@ -18,8 +18,17 @@
 // `user` is the exact UserResponse shape returned by /api/auth/login,
 // /api/auth/signup and /api/auth/me (id, full_name, email, role,
 // building_ids, all_buildings, map_group_ids, map_ids).
-export const ADMIN_DASHBOARD_ROUTE = '/screen/05';
-export const END_USER_HOME_ROUTE = '/screen/15';
+// Imported and re-exported (not re-declared) from config/routes.js so this
+// module, and every existing importer of these two names, reads the same
+// values as App.jsx, the auth guards and invitationCodeFormHelpers' own
+// post-auth rule. They used to be two hard-coded strings here and two more
+// there, kept in sync by hand.
+import {
+  ADMIN_DASHBOARD_ROUTE,
+  END_USER_HOME_ROUTE,
+} from '../config/routes.js';
+
+export { ADMIN_DASHBOARD_ROUTE, END_USER_HOME_ROUTE };
 
 export function resolvePostLoginRoute(user) {
   if (!user || !user.role) {

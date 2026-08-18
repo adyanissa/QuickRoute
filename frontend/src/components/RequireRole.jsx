@@ -1,5 +1,6 @@
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { ROUTES } from '../config/routes';
 
 // Route guard used around admin screens.
 //
@@ -16,11 +17,11 @@ const RequireRole = ({ children }) => {
   const { isAuthenticated, isAdmin } = useAuth();
 
   if (!isAuthenticated) {
-    return <Navigate to="/screen/02" replace />;
+    return <Navigate to={ROUTES.login} replace />;
   }
 
   if (!isAdmin) {
-    return <Navigate to="/screen/15" replace />;
+    return <Navigate to={ROUTES.welcome} replace />;
   }
 
   return children;

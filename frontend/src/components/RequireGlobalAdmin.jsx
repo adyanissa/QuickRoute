@@ -1,5 +1,6 @@
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { ROUTES } from '../config/routes';
 
 // Stricter than RequireRole: only super_admin/global_manager may pass.
 // Used for the Invitation Codes management screen specifically —
@@ -19,14 +20,14 @@ const RequireGlobalAdmin = ({ children }) => {
   const { isAuthenticated, isAdmin, user } = useAuth();
 
   if (!isAuthenticated) {
-    return <Navigate to="/screen/02" replace />;
+    return <Navigate to={ROUTES.login} replace />;
   }
 
   if (!GLOBAL_ADMIN_ROLES.includes(user?.role)) {
     // A building_manager still has a real admin home to land on; anyone
     // else (shouldn't normally reach an /admin/* route at all) goes to
     // the regular end-user flow, matching RequireRole's own fallback.
-    return <Navigate to={isAdmin ? '/screen/05' : '/screen/15'} replace />;
+    return <Navigate to={isAdmin ? ROUTES.adminOverview : ROUTES.welcome} replace />;
   }
 
   return children;

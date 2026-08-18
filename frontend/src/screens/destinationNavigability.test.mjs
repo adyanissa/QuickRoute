@@ -112,15 +112,29 @@ test('the DestinationCard disabled prop is driven by room.isNavigable, never a r
 });
 
 test('the screen refetches rooms on window focus and document visibility change (no stale cache after Admin edits)', () => {
-  assert.match(destSource, /addEventListener\('focus', handleFocusOrVisible\)/);
-  assert.match(destSource, /addEventListener\('visibilitychange', handleFocusOrVisible\)/);
+  // Both events are still listened for — they cover different departures (a
+  // tab switch fires visibilitychange; moving to another window often only
+  // fires blur/focus) — but they now share ONE guarded handler, so a single
+  // departure-and-return refreshes exactly once instead of twice. The
+  // handler's identifier was never the contract; the refetch-on-return is.
+  assert.match(destSource, /addEventListener\('focus', handleReturn\)/);
+  assert.match(destSource, /addEventListener\('visibilitychange', handleReturn\)/);
+  assert.match(destSource, /wasAwayRef\.current = false;\s*loadRooms\(\);/);
   // And actually cleans the listeners up — never leaks across unmounts.
-  assert.match(destSource, /removeEventListener\('focus', handleFocusOrVisible\)/);
-  assert.match(destSource, /removeEventListener\('visibilitychange', handleFocusOrVisible\)/);
+  assert.match(destSource, /removeEventListener\('focus', handleReturn\)/);
+  assert.match(destSource, /removeEventListener\('visibilitychange', handleReturn\)/);
+  assert.match(destSource, /removeEventListener\('blur', markAway\)/);
 });
 
 test('destinations stay scoped to a single building_id (unrelated-building rooms never reach this screen)', () => {
-  assert.match(destSource, /getRooms\(\{\s*building_id:\s*building\.id\s*\}\)/);
+  // The filter argument is now followed by an options argument carrying the
+  // AbortController signal, so this pins BOTH halves of the contract: the
+  // call is scoped to a building id, and that id comes from the current
+  // building rather than from anywhere else.
+  assert.match(destSource, /getRooms\(\s*\{ building_id: buildingId \}/);
+  assert.match(destSource, /const buildingId = building\?\.id \?\? null;/);
+  assert.doesNotMatch(destSource, /getRooms\(\)/);
+  assert.doesNotMatch(destSource, /getRooms\(\{\}\)/);
 });
 
 console.log(`\n${passed} test(s) passed.`);

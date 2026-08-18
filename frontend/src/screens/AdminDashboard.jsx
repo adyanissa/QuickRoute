@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
+import { ROUTES } from '../config/routes';
 import '../styles/adminDashboard.css';
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -447,7 +448,7 @@ const AdminDashboard = () => {
             </div>
           </div>
         </div>
-        <button className="adm-logout" onClick={() => navigate('/screen/05')}>
+        <button className="adm-logout" onClick={() => navigate(ROUTES.adminOverview)}>
           <LogoutIcon /> Logout
         </button>
       </header>

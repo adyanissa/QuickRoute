@@ -32,6 +32,7 @@ import {
   normalizeId,
 } from '../utils/locationCodeFormHelpers';
 import { formatFloorDisplay } from '../utils/mapGroupHelpers';
+import { buildLocationCodeUrl } from '../config/publicUrl';
 import '../styles/adminScreens.css';
 
 const LANGUAGES = [
@@ -165,14 +166,29 @@ const CodeIcon = () => (
 // Renders a code's QR as a data-URL <img>, generated on demand (not
 // pre-rendered for every row in the list — most admins won't open every
 // code's QR every time the screen loads).
-const QrPreview = ({ value }) => {
+//
+// The ENCODED PAYLOAD is the openable QuickRoute URL
+// ({PUBLIC_FRONTEND_URL}/?locationCode=CODE), not the bare code — a phone
+// camera pointed at a bare code shows inert text and cannot open anything.
+// The CAPTION under the image stays the bare LocationCode so it can still be
+// read off a printed label and typed by hand on the start screen.
+//
+// Nothing here writes to the database. QR images have never been persisted —
+// each is rendered from `code` at the moment an admin opens this preview —
+// so changing the payload changes every QuickRoute QR immediately, with no
+// migration, no regenerated records and no duplicate LocationCodes.
+const QrPreview = ({ code }) => {
   const [dataUrl, setDataUrl] = useState(null);
   const [error, setError] = useState('');
+
+  const payload = useMemo(() => buildLocationCodeUrl(code), [code]);
 
   useEffect(() => {
     let cancelled = false;
 
-    QRCode.toDataURL(value, { width: 220, margin: 1 })
+    if (!payload) return undefined;
+
+    QRCode.toDataURL(payload, { width: 220, margin: 1 })
       .then((url) => {
         if (!cancelled) setDataUrl(url);
       })
@@ -184,15 +200,25 @@ const QrPreview = ({ value }) => {
     return () => {
       cancelled = true;
     };
-  }, [value]);
+  }, [payload]);
 
-  if (error) return <div style={{ fontSize: 12, color: '#a92323' }}>{error}</div>;
+  // An unbuildable payload (missing/misconfigured public URL) is DERIVED, not
+  // stored — writing it from the effect would be a synchronous setState in an
+  // effect. It must show the honest failure state rather than silently fall
+  // back to encoding the bare code again, which would look like a working QR
+  // but open nothing.
+  const renderError = payload ? error : 'QR render failed';
+
+  if (renderError) {
+    return <div style={{ fontSize: 12, color: '#a92323' }}>{renderError}</div>;
+  }
+
   if (!dataUrl) return null;
 
   return (
     <div style={{ marginTop: 10, textAlign: 'center' }}>
-      <img src={dataUrl} alt={`QR code for ${value}`} style={{ width: 160, height: 160 }} />
-      <div style={{ fontSize: 12, fontWeight: 700, marginTop: 4, letterSpacing: 1 }}>{value}</div>
+      <img src={dataUrl} alt={`QR code for ${code}`} style={{ width: 160, height: 160 }} />
+      <div style={{ fontSize: 12, fontWeight: 700, marginTop: 4, letterSpacing: 1 }}>{code}</div>
     </div>
   );
 };
@@ -507,7 +533,7 @@ const AdminLocationCodesScreen = () => {
                           </div>
                         </div>
 
-                        {expandedQr === entry.id && <QrPreview value={entry.code} />}
+                        {expandedQr === entry.id && <QrPreview code={entry.code} />}
 
                         {confirmId === entry.id && (
                           <div className="adm-delete-strip">

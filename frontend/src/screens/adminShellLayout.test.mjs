@@ -90,7 +90,7 @@ test('AdminLayout still renders its routed page through an Outlet', () => {
 
 test('every admin route still renders inside the single shared layout route', () => {
   assert.match(app, /<RequireRole>\s*<AdminLayout \/>\s*<\/RequireRole>/);
-  for (const route of ['/screen/05', '/admin/buildings/:buildingId', '/admin/maps/:mapId', '/admin/map', '/admin/invitation-codes']) {
+  for (const route of ['ADMIN_ROUTES.overview', '/admin/buildings/:buildingId', '/admin/maps/:mapId', '/admin/map', '/admin/invitation-codes']) {
     assert.equal(app.includes(route), true, route);
   }
 });
