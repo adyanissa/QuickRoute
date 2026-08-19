@@ -8,6 +8,7 @@ response, and can call it again safely since every operation here is
 idempotent.
 """
 
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -25,6 +26,19 @@ from models.user_model import User
 from schemas.localization_schema import localized_text_to_dict
 from services.building_service import find_or_create_building
 from services.map_group_service import generate_unique_group_code
+from services.semantic_analysis_service import SemanticAnalysisError
+
+# Imported as a MODULE for call_translation_provider so the single
+# outbound AI call is one clearly-named seam — tests replace it there and
+# then assert, against a real in-memory database, that no write happened.
+from services import room_name_translation_service
+from services.room_name_translation_service import (
+    RoomNameTranslationError,
+    build_proposals,
+    collect_source_names,
+    room_needs_translation,
+    updates_for_room,
+)
 
 
 router = APIRouter(
@@ -284,6 +298,181 @@ async def backfill_room_names(
         "rooms_that_would_be_updated": would_update,
         "rooms_updated": updated,
         "room_ids": room_ids,
+    }
+
+
+@router.post("/translate-room-names")
+async def translate_room_names(
+    dry_run: bool = True,
+    confirm_apply: bool = False,
+    building_id: Optional[str] = None,
+    map_id: Optional[str] = None,
+    _admin: User = Depends(require_global_admin),
+):
+    """
+    Fill the EMPTY Arabic/Hebrew slots of Destinations that already
+    exist, using this project's existing Anthropic configuration.
+
+    This is deliberately NOT /backfill-room-names (above), which copies
+    name_en into names.en and explicitly never invents a translation.
+    That endpoint is unchanged. This one is the other half: the rooms
+    were created correctly, the navigation graph around them is correct,
+    and the only thing missing is translated text.
+
+    WHAT IT CAN CHANGE
+        names.ar and names.he — and only where they are currently empty.
+
+    WHAT IT CANNOT CHANGE, BY CONSTRUCTION
+        Nothing else. The only write in this function is a `$set` naming
+        exactly `names` and `updated_at`. Room id, map_id, building_id,
+        floor, room_type, x/y, route_point_id, parent_room_id and
+        names.en are not in that set and therefore cannot be rewritten
+        even by a buggy proposal. RoutePoint, RouteEdge, LocationCode,
+        Map and MapGroup are never queried and never written here, so
+        the routing graph, Auto Connect state, semantic placement
+        coordinates and QR codes are untouched. No room is ever created,
+        deleted or re-created, and semantic analysis is never re-run.
+
+    PREVIEW vs APPLY
+        dry_run=True (the default) is a strict preview: the AI may be
+        called and full proposals are returned, but the function reaches
+        no write path at all.
+
+        Applying requires BOTH dry_run=false AND confirm_apply=true.
+        dry_run=false on its own is refused with zero writes, so a
+        half-typed URL cannot mutate anything.
+
+        Apply re-reads every Room immediately before writing and
+        recomputes the merge against that fresh document (see
+        services/room_name_translation_service.updates_for_room), so a
+        translation an admin typed by hand between preview and apply is
+        detected as non-empty and kept — a stale preview can never
+        overwrite it.
+
+    SCOPE
+        building_id and/or map_id narrow the run to one building or one
+        floor. Omitting both scans every active Room. Scoping is the
+        recommended way to start: preview one map, read the proposals,
+        then widen.
+
+    IDEMPOTENT
+        A second run finds those languages already populated, proposes
+        nothing for them, and writes nothing.
+    """
+
+    if not dry_run and not confirm_apply:
+        # Explicit confirmation is required, and the refusal happens
+        # before any provider call or any query — so this branch cannot
+        # write, and cannot spend a request either.
+        return {
+            "dry_run": True,
+            "applied": False,
+            "error": "confirmation_required",
+            "message": (
+                "Applying translations requires both dry_run=false and "
+                "confirm_apply=true. Nothing was read or written."
+            ),
+            "rooms_updated": 0,
+        }
+
+    scope: dict = {"is_active": True}
+
+    if building_id:
+        scope["building_id"] = building_id
+
+    if map_id:
+        scope["map_id"] = map_id
+
+    rooms = await Room.find(scope).to_list()
+
+    # Filtered in Python rather than with a names.ar/names.he query so
+    # that "empty" means exactly what the rest of the app means by it —
+    # missing key, null, "" and whitespace-only all count — instead of
+    # depending on how a given document happens to have been persisted.
+    candidates = [room for room in rooms if room_needs_translation(room)]
+
+    source_names = collect_source_names(candidates)
+
+    translations: dict = {}
+    provider_error = None
+
+    if source_names:
+        try:
+            translations = await asyncio.to_thread(
+                room_name_translation_service.call_translation_provider,
+                source_names,
+            )
+        except (RoomNameTranslationError, SemanticAnalysisError) as error:
+            provider_error = {
+                "error_code": error.error_code,
+                "message": error.message,
+            }
+
+    if provider_error:
+        # A provider or parsing failure is never a partial write: the
+        # function returns here, before the apply path exists.
+        return {
+            "dry_run": True,
+            "applied": False,
+            "error": provider_error["error_code"],
+            "message": provider_error["message"],
+            "scope": {"building_id": building_id, "map_id": map_id},
+            "rooms_scanned": len(rooms),
+            "rooms_needing_translation": len(candidates),
+            "distinct_source_names": len(source_names),
+            "proposals": [],
+            "rooms_updated": 0,
+        }
+
+    proposals = build_proposals(candidates, translations)
+
+    rooms_updated = 0
+    applied_detail: list = []
+
+    if not dry_run:
+        now = datetime.utcnow()
+
+        for proposal in proposals:
+            room_id = _try_object_id(proposal.get("room_id"))
+
+            if not room_id:
+                continue
+
+            # Re-read: the proposal above was computed from a snapshot,
+            # this is the document as it exists at the moment of writing.
+            fresh = await Room.get(room_id)
+
+            if not fresh:
+                continue
+
+            update = updates_for_room(fresh, proposal)
+
+            if not update["applied"]:
+                # Every language in this proposal has since been filled
+                # in by someone else. Nothing to do, and nothing written.
+                continue
+
+            await fresh.set({"names": update["names"], "updated_at": now})
+
+            rooms_updated += 1
+            applied_detail.append(
+                {
+                    "room_id": str(fresh.id),
+                    "applied_languages": update["applied"],
+                }
+            )
+
+    return {
+        "dry_run": dry_run,
+        "applied": not dry_run,
+        "scope": {"building_id": building_id, "map_id": map_id},
+        "rooms_scanned": len(rooms),
+        "rooms_needing_translation": len(candidates),
+        "distinct_source_names": len(source_names),
+        "proposals": proposals,
+        "rooms_that_would_be_updated": len(proposals),
+        "rooms_updated": rooms_updated,
+        "applied_detail": applied_detail,
     }
 
 
