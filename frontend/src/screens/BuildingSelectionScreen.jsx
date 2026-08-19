@@ -8,6 +8,7 @@ import { useLang } from '../context/LangContext';
 import { getBuildings } from '../api/buildingsApi';
 import { buildingToViewModel } from '../utils/viewModels';
 import { getLocalizedText, matchesLocalizedSearch } from '../utils/localization';
+import { ROUTES } from '../config/routes';
 import '../styles/BuildingSelectionScreen.css';
 
 // ── Translations ──────────────────────────────────────────────────────────────
@@ -132,7 +133,7 @@ const BuildingSelectionScreen = () => {
     : localizedBuildings;
 
   const handleSelect = (building) => {
-    navigate('/screen/17', { state: { building } });
+    navigate(ROUTES.destinations, { state: { building } });
   };
 
   return (
@@ -143,7 +144,7 @@ const BuildingSelectionScreen = () => {
         <div className="s16-header">
 
           <BackButton
-            onClick={() => navigate('/screen/01')}
+            onClick={() => navigate(ROUTES.start)}
             label={t.back}
             isRTL={isRTL}
           />

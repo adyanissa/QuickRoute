@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -104,6 +104,184 @@ async def location_code_to_response(entry: LocationCode) -> LocationCodeResponse
         created_at=entry.created_at,
         updated_at=entry.updated_at,
     )
+
+
+# ---------------------------------------------------------------------
+# Batched enrichment — used ONLY by GET /api/location-codes.
+#
+# WHY THIS EXISTS
+# ---------------
+# location_code_to_response() is correct but asks the database two
+# questions per code: Map.get() and RoutePoint.get(). Building a LIST that
+# way costs 1 + 2N sequential round trips. Measured against a real
+# inventory of ~146 codes that is ~293 round trips and close to a minute of
+# pure Atlas latency for a response of a few hundred kilobytes.
+#
+# The list endpoint therefore asks the same two questions ONCE FOR ALL
+# CODES, in at most two additional queries, and answers each code from
+# memory. The resolution ladder below is a line-for-line mirror of
+# resolve_location_code_group_and_floor(); that function and
+# location_code_to_response() are deliberately left untouched and still
+# serve every create / generate / get-by-id / update path exactly as
+# before. GET /resolve/{code} has its own separate defensive re-check and
+# is not affected by any of this.
+#
+# Query count: at most 3 (location_codes, maps, route_points), CONSTANT in
+# the number of codes. A lookup whose input set is empty is skipped.
+#
+# The response is byte-identical to the old path — the companion test
+# tests/test_location_codes_list_batching.py asserts equality against
+# location_code_to_response() code by code.
+# ---------------------------------------------------------------------
+
+
+def _to_object_id(value) -> Optional[PydanticObjectId]:
+    """
+    Mirrors the `try: PydanticObjectId(...) except: treat as missing`
+    behaviour resolve_location_code_group_and_floor() relies on, so a
+    malformed or null stored id degrades to exactly the same result it
+    does today rather than raising.
+    """
+
+    if not value:
+        return None
+
+    try:
+        return PydanticObjectId(value)
+    except Exception:  # noqa: BLE001 - a malformed id is a data problem
+        return None
+
+
+class LocationCodeListEnrichment:
+    """
+    Pre-fetched answers to the two per-code questions, keyed by the
+    CANONICAL id string (str(document.id)) — the single-code path resolves
+    through PydanticObjectId too, so keying any other way could disagree
+    with it for a differently-formatted stored id.
+
+    A missing entry means "not found", which is exactly the state the
+    single-code path reaches when Map.get()/RoutePoint.get() returns None.
+    """
+
+    __slots__ = ("maps_by_id", "points_by_id")
+
+    def __init__(
+        self,
+        maps_by_id: Dict[str, Map],
+        points_by_id: Dict[str, RoutePoint],
+    ) -> None:
+        self.maps_by_id = maps_by_id
+        self.points_by_id = points_by_id
+
+    def group_and_floor(
+        self, map_id: Optional[str], route_point_id: Optional[str]
+    ) -> Tuple[Optional[str], Optional[int]]:
+        """Same two INDEPENDENT lookups and the same precedence as
+        resolve_location_code_group_and_floor() — see its docstring for why
+        the Map's floor is authoritative and the RoutePoint's is only a
+        fallback for a legacy map with no floor recorded. A failure on one
+        side never suppresses the other, exactly as the two separate
+        try/except blocks there do not."""
+
+        map_group_id = None
+        map_floor = None
+        point_floor = None
+
+        map_oid = _to_object_id(map_id)
+        map_item = (
+            self.maps_by_id.get(str(map_oid)) if map_oid is not None else None
+        )
+
+        if map_item:
+            map_group_id = map_item.map_group_id
+            map_floor = map_item.floor
+
+        point_oid = _to_object_id(route_point_id)
+        route_point = (
+            self.points_by_id.get(str(point_oid))
+            if point_oid is not None
+            else None
+        )
+
+        if route_point:
+            point_floor = route_point.floor
+
+        floor = map_floor if map_floor is not None else point_floor
+
+        return map_group_id, floor
+
+
+async def build_location_code_list_enrichment(
+    entries: List[LocationCode],
+) -> LocationCodeListEnrichment:
+    map_oids = {
+        oid
+        for oid in (_to_object_id(entry.map_id) for entry in entries)
+        if oid is not None
+    }
+
+    maps_by_id: Dict[str, Map] = {}
+
+    if map_oids:
+        map_items = await Map.find({"_id": {"$in": list(map_oids)}}).to_list()
+        maps_by_id = {str(item.id): item for item in map_items}
+
+    point_oids = {
+        oid
+        for oid in (_to_object_id(entry.route_point_id) for entry in entries)
+        if oid is not None
+    }
+
+    points_by_id: Dict[str, RoutePoint] = {}
+
+    if point_oids:
+        points = await RoutePoint.find(
+            {"_id": {"$in": list(point_oids)}}
+        ).to_list()
+        points_by_id = {str(point.id): point for point in points}
+
+    return LocationCodeListEnrichment(
+        maps_by_id=maps_by_id,
+        points_by_id=points_by_id,
+    )
+
+
+def location_code_to_list_response(
+    entry: LocationCode, enrichment: LocationCodeListEnrichment
+) -> LocationCodeResponse:
+    """
+    The batched counterpart of location_code_to_response(). Synchronous by
+    design — every question it needs answered was already answered in bulk.
+    The field mapping below is identical to that function's, field for
+    field, in the same order.
+    """
+
+    map_group_id, floor = enrichment.group_and_floor(
+        entry.map_id, entry.route_point_id
+    )
+
+    return LocationCodeResponse(
+        id=str(entry.id),
+        code=entry.code,
+        building_id=entry.building_id,
+        map_id=entry.map_id,
+        route_point_id=entry.route_point_id,
+        map_group_id=map_group_id,
+        floor=floor,
+        label=entry.label,
+        is_active=entry.is_active,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+    )
+
+
+async def build_location_code_list_responses(
+    entries: List[LocationCode],
+) -> List[LocationCodeResponse]:
+    enrichment = await build_location_code_list_enrichment(entries)
+    return [
+        location_code_to_list_response(entry, enrichment) for entry in entries
+    ]
 
 
 async def validate_location_code_references(
@@ -387,7 +565,12 @@ async def get_all_location_codes(
             query["building_id"] = {"$in": accessible_building_ids}
 
     entries = await LocationCode.find(query).to_list()
-    return [await location_code_to_response(entry) for entry in entries]
+
+    # Batched enrichment — see build_location_code_list_enrichment above.
+    # Produces the identical LocationCodeResponse list the previous
+    # `[await location_code_to_response(entry) for entry in entries]`
+    # produced, in a constant number of queries instead of 1 + 2N.
+    return await build_location_code_list_responses(entries)
 
 
 @router.get(

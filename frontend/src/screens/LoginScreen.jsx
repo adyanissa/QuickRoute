@@ -5,6 +5,7 @@ import { useLang } from '../context/LangContext';
 import { useAuth } from '../context/AuthContext';
 import { loginUser } from '../api/authApi';
 import { resolvePostLoginRoute } from '../utils/roleRouting';
+import { ROUTES } from '../config/routes';
 import '../styles/LoginScreen.css';
 
 const UI = {
@@ -128,7 +129,7 @@ const LoginScreen = () => {
         <div className={`s02-topbar${isRTL ? ' s02-topbar-rtl' : ''}`}>
           <button
             className={`s02-back-btn${isRTL ? ' s02-back-btn-rtl' : ''}`}
-            onClick={() => navigate('/screen/01')}
+            onClick={() => navigate(ROUTES.start)}
             aria-label={t.back}
             type="button"
           >

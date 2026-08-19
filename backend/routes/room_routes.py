@@ -1,9 +1,10 @@
 import logging
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from beanie import PydanticObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 
 from core.auth_deps import (
     get_current_user,
@@ -99,15 +100,19 @@ async def compute_room_navigability(room: Room) -> Tuple[bool, Optional[str]]:
     return await room_connection_state(room)
 
 
-async def room_to_response(
-    room: Room,
-    *,
-    route_point_was_reused: bool = False,
-    route_point_connected: bool = False,
-) -> RoomResponse:
-    is_navigable, navigation_unavailable_reason = await compute_room_navigability(room)
+def _room_static_response_fields(room: Room) -> dict:
+    """
+    Every RoomResponse field that comes straight off the Room document,
+    with no database access at all.
 
-    return RoomResponse(
+    Extracted so the single-room path (room_to_response below) and the
+    batched list path (build_room_list_responses further down) map the
+    document to the response through ONE piece of code. They cannot drift
+    into two subtly different response shapes, which is the only real risk
+    in having a second enrichment path.
+    """
+
+    return dict(
         id=str(room.id),
         building_id=room.building_id,
         name_en=room.name_en,
@@ -126,15 +131,249 @@ async def room_to_response(
         y=room.y,
         route_point_id=room.route_point_id,
         parent_room_id=room.parent_room_id,
-        map_group_id=await resolve_room_map_group_id(room.map_id),
         is_active=room.is_active,
         created_at=room.created_at,
         updated_at=room.updated_at,
+    )
+
+
+async def room_to_response(
+    room: Room,
+    *,
+    route_point_was_reused: bool = False,
+    route_point_connected: bool = False,
+) -> RoomResponse:
+    is_navigable, navigation_unavailable_reason = await compute_room_navigability(room)
+
+    return RoomResponse(
+        **_room_static_response_fields(room),
+        map_group_id=await resolve_room_map_group_id(room.map_id),
         route_point_was_reused=route_point_was_reused,
         route_point_connected=route_point_connected,
         is_navigable=is_navigable,
         navigation_unavailable_reason=navigation_unavailable_reason,
     )
+
+
+# ---------------------------------------------------------------------
+# Batched enrichment — used ONLY by GET /api/rooms (get_all_rooms).
+#
+# WHY THIS EXISTS
+# ---------------
+# room_to_response() is correct but asks the database three questions per
+# room: RoutePoint.get(), RouteEdge.find_one() and Map.get(). Building a
+# LIST that way costs 1 + 3N sequential round trips. Against a remote
+# Atlas cluster that is roughly N x 3 x RTT of pure network latency — the
+# measured cause of a ~35 second GET /api/rooms?building_id=... on a
+# building with a normal number of destinations.
+#
+# The list endpoint therefore asks the same three questions ONCE FOR ALL
+# ROOMS, in at most three additional queries, and then answers each room
+# from memory. The decision ladder below is a line-for-line mirror of
+# compute_room_navigability() and resolve_room_map_group_id(); those two
+# functions are deliberately left untouched and still serve every
+# create / update / get-by-id path exactly as before.
+#
+# Query count: at most 4 (rooms, route_points, route_edges, maps),
+# CONSTANT in the number of rooms. Queries whose input set is empty are
+# skipped entirely, so a building with no placed rooms costs fewer.
+#
+# The response is byte-identical to the old path — tests/test_rooms_list_
+# batching.py asserts equality against room_to_response() room by room.
+# ---------------------------------------------------------------------
+
+
+class _RouteEdgeEndpoints(BaseModel):
+    """
+    Projection: an edge's two endpoint ids are the only thing the
+    connectivity test reads. Fetching whole RouteEdge documents here would
+    pull the entire corridor graph across the wire for nothing.
+    """
+
+    from_point_id: Optional[str] = None
+    to_point_id: Optional[str] = None
+
+
+def _to_object_id(value) -> Optional[PydanticObjectId]:
+    """
+    Mirrors the `try: PydanticObjectId(...) except: treat as missing`
+    behaviour both single-room helpers rely on, so a malformed stored id
+    degrades to exactly the same result it does today rather than raising.
+    """
+
+    if not value:
+        return None
+
+    try:
+        return PydanticObjectId(value)
+    except Exception:  # noqa: BLE001 - a malformed id is a data problem
+        return None
+
+
+class RoomListEnrichment:
+    """
+    Pre-fetched answers to the two per-room questions, keyed by the
+    CANONICAL id string (str(document.id)) rather than by the raw value
+    stored on the Room — the single-room path resolves through
+    PydanticObjectId too, so keying any other way could disagree with it
+    for a differently-formatted stored id.
+    """
+
+    __slots__ = ("points_by_id", "connected_point_ids", "group_id_by_map_id")
+
+    def __init__(
+        self,
+        points_by_id: Dict[str, RoutePoint],
+        connected_point_ids: Set[str],
+        group_id_by_map_id: Dict[str, Optional[str]],
+    ) -> None:
+        self.points_by_id = points_by_id
+        self.connected_point_ids = connected_point_ids
+        self.group_id_by_map_id = group_id_by_map_id
+
+    def navigability(self, room: Room) -> Tuple[bool, Optional[str]]:
+        """Same ladder, same precedence, same reasons as
+        compute_room_navigability() — see that function's docstring."""
+
+        if not room.route_point_id:
+            if not room.is_active:
+                return False, "inactive_destination"
+
+            return False, "missing_route_point"
+
+        point_oid = _to_object_id(room.route_point_id)
+        point = (
+            self.points_by_id.get(str(point_oid))
+            if point_oid is not None
+            else None
+        )
+
+        if point is not None and not point.is_active:
+            return False, "inactive_route_point"
+
+        if not room.is_active:
+            return False, "inactive_destination"
+
+        if point is None:
+            return False, "route_point_not_found"
+
+        if str(point.id) not in self.connected_point_ids:
+            return False, "disconnected_from_graph"
+
+        return True, None
+
+    def map_group_id(self, room: Room) -> Optional[str]:
+        """Same resolution as resolve_room_map_group_id()."""
+
+        map_oid = _to_object_id(room.map_id)
+
+        if map_oid is None:
+            return None
+
+        return self.group_id_by_map_id.get(str(map_oid))
+
+
+async def build_room_list_enrichment(rooms: List[Room]) -> RoomListEnrichment:
+    point_oids = {
+        oid
+        for oid in (_to_object_id(room.route_point_id) for room in rooms)
+        if oid is not None
+    }
+
+    points_by_id: Dict[str, RoutePoint] = {}
+
+    if point_oids:
+        points = await RoutePoint.find(
+            {"_id": {"$in": list(point_oids)}}
+        ).to_list()
+        points_by_id = {str(point.id): point for point in points}
+
+    # Only ACTIVE points can ever reach the connectivity check: the ladder
+    # above returns inactive_route_point first. Restricting the edge query
+    # to them is exactly sufficient and keeps the result set smaller.
+    active_point_ids = {
+        point_id
+        for point_id, point in points_by_id.items()
+        if point.is_active
+    }
+
+    connected_point_ids: Set[str] = set()
+
+    if active_point_ids:
+        candidate_ids = list(active_point_ids)
+
+        # Identical predicate to compute_room_navigability's find_one, just
+        # asked for every point at once: an ACTIVE edge touching the point
+        # from either end. Served by the two compound indexes declared on
+        # RouteEdge (is_active + from_point_id / is_active + to_point_id).
+        edges = await RouteEdge.find(
+            {
+                "is_active": True,
+                "$or": [
+                    {"from_point_id": {"$in": candidate_ids}},
+                    {"to_point_id": {"$in": candidate_ids}},
+                ],
+            },
+            projection_model=_RouteEdgeEndpoints,
+        ).to_list()
+
+        for edge in edges:
+            if edge.from_point_id in active_point_ids:
+                connected_point_ids.add(edge.from_point_id)
+
+            if edge.to_point_id in active_point_ids:
+                connected_point_ids.add(edge.to_point_id)
+
+    map_oids = {
+        oid
+        for oid in (_to_object_id(room.map_id) for room in rooms)
+        if oid is not None
+    }
+
+    group_id_by_map_id: Dict[str, Optional[str]] = {}
+
+    if map_oids:
+        map_items = await Map.find({"_id": {"$in": list(map_oids)}}).to_list()
+        group_id_by_map_id = {
+            str(map_item.id): map_item.map_group_id for map_item in map_items
+        }
+
+    return RoomListEnrichment(
+        points_by_id=points_by_id,
+        connected_point_ids=connected_point_ids,
+        group_id_by_map_id=group_id_by_map_id,
+    )
+
+
+def room_to_list_response(
+    room: Room, enrichment: RoomListEnrichment
+) -> RoomResponse:
+    """
+    The batched counterpart of room_to_response(). Synchronous by design —
+    every question it needs answered was already answered in bulk.
+
+    route_point_was_reused / route_point_connected are hard-coded False
+    here for the same reason room_to_response() defaults them to False:
+    they are one-shot signals only meaningful on the exact create/update
+    response that performed the map-linking step, and a plain GET has
+    always returned False for both (see schemas/room_schema.py).
+    """
+
+    is_navigable, navigation_unavailable_reason = enrichment.navigability(room)
+
+    return RoomResponse(
+        **_room_static_response_fields(room),
+        map_group_id=enrichment.map_group_id(room),
+        route_point_was_reused=False,
+        route_point_connected=False,
+        is_navigable=is_navigable,
+        navigation_unavailable_reason=navigation_unavailable_reason,
+    )
+
+
+async def build_room_list_responses(rooms: List[Room]) -> List[RoomResponse]:
+    enrichment = await build_room_list_enrichment(rooms)
+    return [room_to_list_response(room, enrichment) for room in rooms]
 
 
 async def _place_room_on_map(
@@ -542,7 +781,12 @@ async def get_all_rooms(
                 query["building_id"] = {"$in": accessible_ids}
 
     rooms = await Room.find(query).to_list()
-    return [await room_to_response(room) for room in rooms]
+
+    # Batched enrichment — see build_room_list_enrichment above. Produces
+    # the identical RoomResponse list the previous
+    # `[await room_to_response(room) for room in rooms]` produced, in a
+    # constant number of queries instead of 1 + 3N.
+    return await build_room_list_responses(rooms)
 
 
 @router.get(

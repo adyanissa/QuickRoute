@@ -1,7 +1,11 @@
 import { apiRequest } from "./api";
 
 // GET /api/rooms — supports optional filters: building_id, floor, room_type
-export function getRooms(filters = {}) {
+//
+// `options` is forwarded verbatim to apiRequest (and therefore to fetch),
+// so a caller can pass `{ signal }` to abort a request it has superseded.
+// Optional and defaulted, so every existing call site is unaffected.
+export function getRooms(filters = {}, options = {}) {
   const params = new URLSearchParams();
 
   if (filters.building_id) params.set("building_id", filters.building_id);
@@ -11,7 +15,7 @@ export function getRooms(filters = {}) {
   if (filters.room_type) params.set("room_type", filters.room_type);
 
   const query = params.toString();
-  return apiRequest(`/api/rooms${query ? `?${query}` : ""}`);
+  return apiRequest(`/api/rooms${query ? `?${query}` : ""}`, options);
 }
 
 export function getRoomById(roomId) {

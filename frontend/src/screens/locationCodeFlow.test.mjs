@@ -24,15 +24,22 @@ function test(name, fn) {
 
 // 12. A valid Location Code with a building_id navigates straight to
 //     Destination Selection (/screen/17) — never to Building Selection.
-test('a resolved Location Code navigates directly to /screen/17, never back through Building Selection', () => {
-  assert.match(barcodeSource, /navigate\('\/screen\/17'/);
-  assert.doesNotMatch(barcodeSource, /navigate\('\/screen\/16'/);
+test('a resolved Location Code navigates directly to Destination Selection, never back through Building Selection', () => {
+  assert.match(barcodeSource, /navigate\(ROUTES\.destinations,/);
+  assert.doesNotMatch(barcodeSource, /navigate\(ROUTES\.buildings/);
 });
 
 // 13. Destination Selection loads rooms scoped to the resolved building
 //     only (via the real building_id filter, never every room).
 test('DestinationSelectionScreen loads rooms filtered to a single building_id', () => {
-  assert.match(destSource, /getRooms\(\{\s*building_id:\s*building\.id\s*\}\)/);
+  // The filter argument is now followed by an options argument carrying the
+  // AbortController signal, so this pins BOTH halves of the contract: the
+  // call is scoped to a building id, and that id comes from the current
+  // building rather than from anywhere else.
+  assert.match(destSource, /getRooms\(\s*\{ building_id: buildingId \}/);
+  assert.match(destSource, /const buildingId = building\?\.id \?\? null;/);
+  assert.doesNotMatch(destSource, /getRooms\(\)/);
+  assert.doesNotMatch(destSource, /getRooms\(\{\}\)/);
 });
 
 // 14. The full resolved Location Code payload — route_point_id, map_id,

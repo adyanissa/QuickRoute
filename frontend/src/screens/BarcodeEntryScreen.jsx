@@ -1,10 +1,12 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
 import { resolveLocationCode } from '../api/locationCodesApi';
 import { getBuildingById } from '../api/buildingsApi';
 import { buildingToViewModel } from '../utils/viewModels';
+import { LOCATION_CODE_QUERY_PARAM } from '../config/publicUrl';
+import { ROUTES } from '../config/routes';
 import '../styles/BarcodeEntryScreen.css';
 
 // Where the resolved starting location (from a scanned/typed code) is kept
@@ -99,15 +101,43 @@ const ArrowLeftIcon = () => (
 const BarcodeEntryScreen = () => {
   const { lang, setLang } = useLang();
   const navigate           = useNavigate();
-  const [barcode, setBarcode] = useState('');
+  const [searchParams] = useSearchParams();
+
+  // A scanned QuickRoute QR arrives as {PUBLIC_FRONTEND_URL}/?locationCode=CODE
+  // and is forwarded here by App.jsx's root redirect. It is read as a plain
+  // parameter — there is no separate scan route and no second resolution
+  // path; it feeds the identical function manual entry uses.
+  const urlCode = (searchParams.get(LOCATION_CODE_QUERY_PARAM) ?? '').trim();
+
+  // Prefilled from the URL on the very first render (not written from an
+  // effect), so the field shows the scanned code while it is resolving and
+  // still holds it if resolution fails and the user wants to retry.
+  const [barcode, setBarcode] = useState(urlCode);
   const [isResolving, setIsResolving] = useState(false);
   const [error, setError] = useState('');
 
   const isRTL = lang === 'ar' || lang === 'he';
   const t     = UI[lang];
 
-  const handleGo = async () => {
-    const code = barcode.trim();
+  /**
+   * The ONE place a LocationCode is turned into a journey.
+   *
+   * Both entry paths call this and nothing else:
+   *   A. manual typing  -> handleGo() below
+   *   B. ?locationCode= -> the mount effect below
+   *
+   * so a scanned code and a typed code cannot diverge — same resolve call,
+   * same validation, same error states, same persisted record, same
+   * navigation target.
+   *
+   * What it establishes is the user's START position: the resolved
+   * RoutePoint is written to quickroute_start_location and nothing else.
+   * The DESTINATION is still chosen by the user afterwards on the
+   * Destination Selection screen, exactly as before — a scanned room never
+   * becomes the destination.
+   */
+  const resolveAndContinue = useCallback(async (rawCode) => {
+    const code = (rawCode ?? '').trim();
 
     if (!code) {
       setError(t.required);
@@ -154,7 +184,7 @@ const BarcodeEntryScreen = () => {
         }),
       );
 
-      navigate('/screen/17', {
+      navigate(ROUTES.destinations, {
         state: {
           building,
           startLabel: resolved.label ?? null,
@@ -163,11 +193,38 @@ const BarcodeEntryScreen = () => {
       });
     } catch (err) {
       console.error('Failed to resolve location code:', err);
+      // An unknown, inactive or malformed code from a URL lands on exactly
+      // the same safe invalid-code message a mistyped code has always
+      // produced — never a crash, a blank screen or a guessed building.
       setError(t.invalid);
     } finally {
       setIsResolving(false);
     }
-  };
+  }, [navigate, t]);
+
+  const handleGo = () => resolveAndContinue(barcode);
+
+  // Auto-resolve a code that arrived in the URL.
+  //
+  // The ref guard is keyed by the code itself, so React 19 development
+  // StrictMode — which mounts, unmounts and re-mounts every component,
+  // running effects twice — cannot resolve or navigate twice. Refs survive
+  // that double invocation; a boolean local would not.
+  //
+  // The call is deferred by a microtask so this effect writes no state
+  // synchronously (react-hooks/set-state-in-effect).
+  const autoResolvedCodeRef = useRef(null);
+
+  useEffect(() => {
+    if (!urlCode) return;
+    if (autoResolvedCodeRef.current === urlCode) return;
+
+    autoResolvedCodeRef.current = urlCode;
+
+    Promise.resolve().then(() => {
+      resolveAndContinue(urlCode);
+    });
+  }, [urlCode, resolveAndContinue]);
 
   return (
     <div className="layout-wrapper">
@@ -247,8 +304,8 @@ const BarcodeEntryScreen = () => {
             <span />
           </div>
           <div className="s01-auth-row">
-            <button className="s01-auth-btn s01-login-btn" onClick={() => navigate('/screen/02')}>{t.login}</button>
-            <button className="s01-auth-btn s01-signup-btn" onClick={() => navigate('/screen/03')}>{t.signup}</button>
+            <button className="s01-auth-btn s01-login-btn" onClick={() => navigate(ROUTES.login)}>{t.login}</button>
+            <button className="s01-auth-btn s01-signup-btn" onClick={() => navigate(ROUTES.signup)}>{t.signup}</button>
           </div>
         </div>
 

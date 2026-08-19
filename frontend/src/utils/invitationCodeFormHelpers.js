@@ -22,6 +22,8 @@
 // — who may hand out super_admin / global_manager — still mirrors
 // backend logic/invitation_code_logic.py:CREATABLE_ROLES_BY_CREATOR
 // exactly, and the backend remains the enforcement point.
+import { ADMIN_DASHBOARD_ROUTE, END_USER_HOME_ROUTE } from '../config/routes.js';
+
 const CREATABLE_ROLES_BY_CREATOR = {
   super_admin: ['super_admin', 'global_manager', 'building_manager'],
   global_manager: ['building_manager'],
@@ -192,6 +194,11 @@ export function buildSignupPayload(accountForm, code) {
 
 const ADMIN_ROLES = ['super_admin', 'global_manager', 'building_manager'];
 
+// Same two destinations utils/roleRouting.js uses, from the same single
+// definition — this rule used to be a second hard-coded copy that could
+// drift from the login redirect it is supposed to mirror.
 export function getPostAuthRedirectPath(role) {
-  return ADMIN_ROLES.includes(role) ? '/screen/05' : '/screen/15';
+  return ADMIN_ROLES.includes(role)
+    ? ADMIN_DASHBOARD_ROUTE
+    : END_USER_HOME_ROUTE;
 }

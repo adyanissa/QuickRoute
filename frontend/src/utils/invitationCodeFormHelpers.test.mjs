@@ -207,13 +207,13 @@ test('shouldLockEmailField: false when the code has no email restriction', () =>
 // ── 10. Successful signup redirects by role ──────────────────────────────
 
 test('getPostAuthRedirectPath: admin-tier roles go to the Admin Dashboard', () => {
-  assert.equal(getPostAuthRedirectPath('super_admin'), '/screen/05');
-  assert.equal(getPostAuthRedirectPath('global_manager'), '/screen/05');
-  assert.equal(getPostAuthRedirectPath('building_manager'), '/screen/05');
+  assert.equal(getPostAuthRedirectPath('super_admin'), '/admin');
+  assert.equal(getPostAuthRedirectPath('global_manager'), '/admin');
+  assert.equal(getPostAuthRedirectPath('building_manager'), '/admin');
 });
 
 test('getPostAuthRedirectPath: regular_user goes to the normal user flow', () => {
-  assert.equal(getPostAuthRedirectPath('regular_user'), '/screen/15');
+  assert.equal(getPostAuthRedirectPath('regular_user'), '/welcome');
 });
 
 console.log(`\n${passed} passed`);

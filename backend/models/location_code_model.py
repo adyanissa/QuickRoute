@@ -3,6 +3,7 @@ from typing import Optional
 
 from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel
 
 
 class LocationCode(Document):
@@ -30,3 +31,22 @@ class LocationCode(Document):
 
     class Settings:
         name = "location_codes"
+        indexes = [
+            # Supports exactly one query:
+            #
+            #   LocationCode.find_one(LocationCode.code == code)
+            #   -> {"code": "<CODE>"}
+            #   routes/location_code_routes.py :: resolve_location_code
+            #   GET /api/location-codes/resolve/{code}
+            #
+            # That is the anonymous entry point of the whole product — a
+            # scanned QR (/?locationCode=CODE) and a hand-typed code both
+            # land there — and it was a full collection scan.
+            #
+            # DELIBERATELY NOT UNIQUE. The resolver's behaviour, the stored
+            # codes and the generation logic are all unchanged by this; a
+            # unique constraint would be a data-integrity decision that
+            # must first be validated against the existing records, and is
+            # explicitly out of scope for this pass.
+            IndexModel("code"),
+        ]

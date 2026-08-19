@@ -3,6 +3,7 @@ from typing import Optional
 
 from beanie import Document
 from pydantic import Field
+from pymongo import IndexModel
 
 
 class RouteEdge(Document):
@@ -90,3 +91,44 @@ class RouteEdge(Document):
 
     class Settings:
         name = "route_edges"
+        indexes = [
+            # "Is there an ACTIVE edge touching this point?" — the
+            # connectivity test behind Room.is_navigable. It is an $or over
+            # the two endpoints, and MongoDB can use a separate index per
+            # $or branch, so this needs one compound index per direction.
+            # Without them the query was a full scan of the corridor graph,
+            # repeated once per room.
+            #
+            # These are read-path indexes only. They do not change which
+            # edges exist, how they are traversed, or any routing
+            # semantics — Dijkstra and RouteEdge logic are untouched.
+            IndexModel([("is_active", 1), ("from_point_id", 1)]),
+            IndexModel([("is_active", 1), ("to_point_id", 1)]),
+            # ── Added for the navigation edge load (additive only) ───────
+            # The two indexes above are UNCHANGED and still serve the
+            # connectivity test they were added for. The two below are new
+            # and independent; nothing was reordered or replaced.
+            #
+            # They support the edge load every route calculation performs.
+            # Neither navigation query filters on is_active — the edges are
+            # loaded and then filtered in Python (is_edge_usable /
+            # route_calculator) — so the compound indexes above cannot
+            # serve them: a compound index is only usable from its leftmost
+            # key, and is_active is absent from both filters.
+            #
+            #   {"map_id": "<id>"}
+            #   routes/navigation_routes.py :: calculate_route_from_mongodb
+            #   POST /api/navigation/route
+            #
+            #   {"$or": [{"map_id":    {"$in": [...]}},
+            #            {"to_map_id": {"$in": [...]}}]}
+            #   logic/multi_floor_graph.py :: build_multi_floor_graph
+            #   POST /api/navigation/multi-floor-route
+            #
+            # An $or needs a usable index for EACH branch, which is why
+            # to_map_id gets its own. Both are read-path only and
+            # non-unique: a map legitimately has many edges, and a
+            # cross-floor edge legitimately shares to_map_id with others.
+            IndexModel([("map_id", 1)]),
+            IndexModel([("to_map_id", 1)]),
+        ]

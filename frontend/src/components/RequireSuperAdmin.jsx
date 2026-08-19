@@ -1,5 +1,6 @@
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { ROUTES } from '../config/routes';
 
 // Stricter than RequireGlobalAdmin: only super_admin may pass. Used for the
 // multi-Map navigation-data cleanup screen (navigation-data-problem task,
@@ -17,11 +18,11 @@ const RequireSuperAdmin = ({ children }) => {
   const { isAuthenticated, isAdmin, user } = useAuth();
 
   if (!isAuthenticated) {
-    return <Navigate to="/screen/02" replace />;
+    return <Navigate to={ROUTES.login} replace />;
   }
 
   if (user?.role !== 'super_admin') {
-    return <Navigate to={isAdmin ? '/screen/05' : '/screen/15'} replace />;
+    return <Navigate to={isAdmin ? ROUTES.adminOverview : ROUTES.welcome} replace />;
   }
 
   return children;

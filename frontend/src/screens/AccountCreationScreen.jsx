@@ -10,6 +10,7 @@ import {
   getInitialEmail,
 } from '../utils/invitationCodeFormHelpers';
 import { resolvePostLoginRoute } from '../utils/roleRouting';
+import { ROUTES } from '../config/routes';
 import '../styles/AccountCreationScreen.css';
 
 const INVITATION_CODE_KEY = 'quickroute_invitation_code';
@@ -225,7 +226,7 @@ const AccountCreationScreen = () => {
         <div className={`s04-topbar${isRTL ? ' s04-topbar-rtl' : ''}`}>
           <button
             className={`s04-back-btn${isRTL ? ' s04-back-btn-rtl' : ''}`}
-            onClick={() => navigate('/screen/03')}
+            onClick={() => navigate(ROUTES.signup)}
             aria-label={t.back}
           >
             {isRTL ? <BackArrowRTL /> : <BackArrowLTR />}

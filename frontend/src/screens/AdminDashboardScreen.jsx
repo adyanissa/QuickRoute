@@ -1,6 +1,6 @@
 import AdminOverviewDashboard from './dashboards/AdminOverviewDashboard';
 
-// Route element for /screen/05 (Overview).
+// Route element for the admin Overview page (ROUTES.adminOverview).
 //
 // This used to dispatch to three separate per-role dashboard components,
 // then became a role-guarded wrapper. Both jobs now live elsewhere: the
@@ -10,7 +10,7 @@ import AdminOverviewDashboard from './dashboards/AdminOverviewDashboard';
 // end-user flow before any admin component mounts.
 //
 // Kept as its own module (rather than pointing the route straight at
-// AdminOverviewDashboard) so /screen/05 keeps one obvious entry point for
+// AdminOverviewDashboard) so Overview keeps one obvious entry point for
 // login redirection (utils/roleRouting.js) and for every existing "back to
 // dashboard" link.
 const AdminDashboardScreen = () => <AdminOverviewDashboard />;

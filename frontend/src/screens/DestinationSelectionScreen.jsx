@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import HospSearchBar from '../components/HospSearchBar';
 import DestinationCard from '../components/DestinationCard';
@@ -8,6 +8,7 @@ import { getRooms } from '../api/roomsApi';
 import { roomToViewModel } from '../utils/viewModels';
 import { getLocalizedText, matchesLocalizedSearch } from '../utils/localization';
 import { formatFloor } from '../components/DestinationCard';
+import { ROUTES } from '../config/routes';
 import '../styles/DestinationSelectionScreen.css';
 
 // Same key BarcodeEntryScreen writes to after a location code resolves —
@@ -98,11 +99,64 @@ const DestinationSelectionScreen = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
 
+  // The single in-flight GET /api/rooms, if there is one.
+  //
+  // Everything that wants rooms goes through requestRooms() and receives
+  // the SAME promise while a request is outstanding, so two triggers in
+  // quick succession — React StrictMode's double effect invocation in
+  // development, or a focus and a visibilitychange arriving for one tab
+  // switch — produce ONE network request instead of two. This matters
+  // because each of these is a real round trip, and duplicates pile up
+  // against the browser's per-origin connection limit (the "Stalled" time
+  // in DevTools) rather than being free.
+  const roomsRequestRef = useRef(null);
+
+  const requestRooms = useCallback((buildingId) => {
+    const existing = roomsRequestRef.current;
+
+    if (existing) {
+      if (existing.key === buildingId) return existing.promise;
+
+      // A request for a DIFFERENT building is now stale — abort it rather
+      // than let it land and race the one we actually want.
+      existing.controller.abort();
+    }
+
+    const controller = new AbortController();
+    const entry = {
+      key: buildingId,
+      controller,
+      promise: getRooms(
+        { building_id: buildingId },
+        { signal: controller.signal },
+      ),
+    };
+
+    roomsRequestRef.current = entry;
+
+    entry.promise
+      // Each consumer handles its own errors; this chain exists only so a
+      // rejection can never surface as an unhandled promise rejection, and
+      // so the slot is freed on failure as well as success.
+      .catch(() => {})
+      .finally(() => {
+        if (roomsRequestRef.current === entry) roomsRequestRef.current = null;
+      });
+
+    return entry.promise;
+  }, []);
+
+  // Armed when the user leaves (tab hidden or window blurred), consumed by
+  // the first event that brings them back. Without it, one return fires
+  // BOTH `visibilitychange` and `focus` — two refreshes for one gesture.
+  const wasAwayRef = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
+    const buildingId = building?.id ?? null;
 
     const loadRooms = async () => {
-      if (!building?.id) {
+      if (!buildingId) {
         setRooms([]);
         setLoading(false);
         return;
@@ -112,7 +166,7 @@ const DestinationSelectionScreen = () => {
       setError('');
 
       try {
-        const data = await getRooms({ building_id: building.id });
+        const data = await requestRooms(buildingId);
 
         if (!cancelled) {
           // Never display an inactive destination — Part 3 rule 4.
@@ -122,12 +176,14 @@ const DestinationSelectionScreen = () => {
           setRooms(viewModels);
         }
       } catch (err) {
+        // A request we deliberately superseded is not a failure — it must
+        // never reach the user as "Failed to load destinations".
+        if (cancelled || err?.name === 'AbortError') return;
+
         console.error('Failed to load rooms:', err);
 
-        if (!cancelled) {
-          setRooms([]);
-          setError(t.loadError);
-        }
+        setRooms([]);
+        setError(t.loadError);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -141,20 +197,40 @@ const DestinationSelectionScreen = () => {
     // screen stayed mounted with its last-fetched (now stale) navigability
     // snapshot. Without this, a destination that just became navigable
     // would stay disabled until an unrelated building-switch/remount.
-    const handleFocusOrVisible = () => {
-      if (document.visibilityState === 'hidden') return;
+    //
+    // Both listeners are kept, because they cover different departures: a
+    // tab switch fires `visibilitychange`, while moving to another WINDOW
+    // often leaves the page "visible" and only fires blur/focus. They are
+    // funnelled through the armed flag above so one departure-and-return
+    // triggers at most ONE refresh, whichever events happen to fire.
+    const markAway = () => {
+      wasAwayRef.current = true;
+    };
+
+    const handleReturn = () => {
+      if (document.visibilityState === 'hidden') {
+        markAway();
+        return;
+      }
+
+      if (!wasAwayRef.current) return;
+
+      wasAwayRef.current = false;
       loadRooms();
     };
-    window.addEventListener('focus', handleFocusOrVisible);
-    document.addEventListener('visibilitychange', handleFocusOrVisible);
+
+    window.addEventListener('blur', markAway);
+    window.addEventListener('focus', handleReturn);
+    document.addEventListener('visibilitychange', handleReturn);
 
     return () => {
       cancelled = true;
-      window.removeEventListener('focus', handleFocusOrVisible);
-      document.removeEventListener('visibilitychange', handleFocusOrVisible);
+      window.removeEventListener('blur', markAway);
+      window.removeEventListener('focus', handleReturn);
+      document.removeEventListener('visibilitychange', handleReturn);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [building?.id]);
+  }, [building?.id, requestRooms]);
 
   // Re-resolves every room's displayed `name` for the CURRENT `lang`
   // whenever the user switches language — purely an in-memory
@@ -188,7 +264,7 @@ const DestinationSelectionScreen = () => {
     // destination staying permanently disabled regardless of real graph
     // state — see viewModels.js's roomToViewModel for the field mapping).
     if (!room.isNavigable) return;
-    navigate('/map', { state: { building, destination: room, lang } });
+    navigate(ROUTES.navigation, { state: { building, destination: room, lang } });
   };
 
   return (
@@ -199,7 +275,7 @@ const DestinationSelectionScreen = () => {
         <div className="s17-header">
 
           <BackButton
-            onClick={() => navigate('/screen/16')}
+            onClick={() => navigate(ROUTES.buildings)}
             label={t.back}
             isRTL={isRTL}
           />

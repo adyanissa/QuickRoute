@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {
   ADMIN_ROUTES,
-  LEGACY_ROUTE_REDIRECTS,
+  LEGACY_ADMIN_ROUTE_REDIRECTS,
   buildingRoute,
   floorRoute,
   withMapContext,
@@ -33,11 +33,17 @@ test('ids are encoded into routes, never interpolated raw', () => {
 });
 
 test('the legacy Locations route redirects to the canonical Sites page', () => {
-  assert.equal(LEGACY_ROUTE_REDIRECTS['/admin/locations'], ADMIN_ROUTES.sites);
+  assert.equal(LEGACY_ADMIN_ROUTE_REDIRECTS['/admin/locations'], ADMIN_ROUTES.sites);
 });
 
 test('sidebar highlighting follows the section, not just the exact page', () => {
-  assert.equal(resolveSidebarActiveKey('/screen/05'), 'overview');
+  assert.equal(resolveSidebarActiveKey('/admin'), 'overview');
+  // Overview is now the PARENT path of every other admin route, so it must
+  // be matched exactly — a prefix match would light Overview everywhere.
+  assert.equal(resolveSidebarActiveKey('/admin/'), 'overview');
+  assert.notEqual(resolveSidebarActiveKey('/admin/sites'), 'overview');
+  assert.notEqual(resolveSidebarActiveKey('/admin/map'), 'overview');
+  assert.notEqual(resolveSidebarActiveKey('/admin/users'), 'overview');
   assert.equal(resolveSidebarActiveKey('/admin/sites'), 'sites');
   assert.equal(resolveSidebarActiveKey('/admin/buildings/b1'), 'sites');
   assert.equal(resolveSidebarActiveKey('/admin/maps/m1'), 'sites');
@@ -46,7 +52,7 @@ test('sidebar highlighting follows the section, not just the exact page', () => 
   assert.equal(resolveSidebarActiveKey('/admin/navigation-cleanup'), 'sites');
   assert.equal(resolveSidebarActiveKey('/admin/map'), 'mapManagement');
   assert.equal(resolveSidebarActiveKey('/admin/invitation-codes'), 'invitations');
-  assert.equal(resolveSidebarActiveKey('/screen/15'), null);
+  assert.equal(resolveSidebarActiveKey('/welcome'), null);
 });
 
 test('/admin/map-analysis is not mistaken for /admin/map', () => {
@@ -57,11 +63,14 @@ test('/admin/map-analysis is not mistaken for /admin/map', () => {
 });
 
 test('Back is deterministic and always lands inside QuickRoute', () => {
-  assert.equal(resolveBackTarget('/screen/05'), null);
-  assert.equal(resolveBackTarget('/admin/sites'), '/screen/05');
+  assert.equal(resolveBackTarget('/admin'), null);
+  // ...and every page UNDER /admin must still have a Back target.
+  assert.notEqual(resolveBackTarget('/admin/sites'), null);
+  assert.notEqual(resolveBackTarget('/admin/map'), null);
+  assert.equal(resolveBackTarget('/admin/sites'), '/admin');
   assert.equal(resolveBackTarget('/admin/buildings/b1'), '/admin/sites');
   assert.equal(resolveBackTarget('/admin/maps/m1'), '/admin/sites');
-  assert.equal(resolveBackTarget('/admin/invitation-codes'), '/screen/05');
+  assert.equal(resolveBackTarget('/admin/invitation-codes'), '/admin');
 });
 
 test('a map-scoped tool goes back to its Floor Workspace, else to Overview', () => {
@@ -69,8 +78,8 @@ test('a map-scoped tool goes back to its Floor Workspace, else to Overview', () 
   assert.equal(resolveBackTarget('/admin/map-analysis', '?mapId=m1&analysisId=a'), '/admin/maps/m1');
   assert.equal(resolveBackTarget('/admin/navigation-cleanup', '?mapId=m1'), '/admin/maps/m1');
   assert.equal(resolveBackTarget('/admin/map', '?mapId=m1'), '/admin/maps/m1');
-  assert.equal(resolveBackTarget('/admin/rooms', ''), '/screen/05');
-  assert.equal(resolveBackTarget('/admin/map'), '/screen/05');
+  assert.equal(resolveBackTarget('/admin/rooms', ''), '/admin');
+  assert.equal(resolveBackTarget('/admin/map'), '/admin');
 });
 
 test('mapId is read and decoded out of a raw query string', () => {

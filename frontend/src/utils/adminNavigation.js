@@ -7,8 +7,13 @@
 // Back control that lands inside QuickRoute rather than on whatever site
 // the browser happened to visit before.
 
+import { ROUTES } from '../config/routes.js';
+
 export const ADMIN_ROUTES = {
-  overview: '/screen/05',
+  // Imported rather than re-declared, so the admin overview path has exactly
+  // one definition shared with the post-login redirect rule in
+  // config/routes.js.
+  overview: ROUTES.adminOverview,
   sites: '/admin/sites',
   mapManagement: '/admin/map',
   invitations: '/admin/invitation-codes',
@@ -23,7 +28,7 @@ export const ADMIN_ROUTES = {
 // Legacy route kept working by redirecting to its canonical replacement —
 // old bookmarks, the map screen's "back to locations" links and anything
 // else pointing at /admin/locations must not 404 after the consolidation.
-export const LEGACY_ROUTE_REDIRECTS = {
+export const LEGACY_ADMIN_ROUTE_REDIRECTS = {
   '/admin/locations': ADMIN_ROUTES.sites,
 };
 
@@ -58,6 +63,21 @@ export function isUnderRoute(pathname, route) {
   return path === route || path.startsWith(`${route}/`) || path.startsWith(`${route}?`);
 }
 
+// Overview is the ONLY admin route that must be matched EXACTLY.
+//
+// Every other admin path now lives under it (/admin/sites, /admin/map, ...),
+// so the segment-aware isUnderRoute() above would report all of them as
+// "under Overview" — which would light the Overview sidebar item on every
+// page and strip every page's Back control. This is specific to Overview
+// being the parent path; the prefix match is still correct for the others,
+// where a child route genuinely belongs to its section.
+function isOverviewRoute(pathname) {
+  const path = String(pathname || '').split('?')[0].split('#')[0];
+  const normalized = path.length > 1 ? path.replace(/\/+$/, '') : path;
+
+  return normalized === ADMIN_ROUTES.overview;
+}
+
 const SITES_BRANCH_ROUTES = [
   ADMIN_ROUTES.sites,
   '/admin/locations',
@@ -73,7 +93,7 @@ const SITES_BRANCH_ROUTES = [
 export function resolveSidebarActiveKey(pathname) {
   const path = String(pathname || '');
 
-  if (isUnderRoute(path, ADMIN_ROUTES.overview)) return 'overview';
+  if (isOverviewRoute(path)) return 'overview';
   if (isUnderRoute(path, ADMIN_ROUTES.invitations)) return 'invitations';
   if (isUnderRoute(path, ADMIN_ROUTES.users)) return 'users';
   if (SITES_BRANCH_ROUTES.some((route) => isUnderRoute(path, route))) return 'sites';
@@ -90,7 +110,7 @@ export function resolveBackTarget(pathname, search = '') {
   const path = String(pathname || '');
   const mapId = readMapId(search);
 
-  if (isUnderRoute(path, ADMIN_ROUTES.overview)) return null; // Overview is the root
+  if (isOverviewRoute(path)) return null; // Overview is the root
 
   if (isUnderRoute(path, '/admin/buildings')) return ADMIN_ROUTES.sites;
   if (isUnderRoute(path, '/admin/maps')) return ADMIN_ROUTES.sites;

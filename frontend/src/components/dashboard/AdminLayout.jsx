@@ -14,13 +14,15 @@
 // own authorization.
 //
 // The end-user (regular_user) flow never renders this shell: RequireRole
-// bounces a non-admin to /screen/15 before this component mounts, and the
+// bounces a non-admin to the end-user home before this component mounts,
+// and the
 // public screens have their own unchanged layout.
 
 import { useCallback, useMemo } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useLang } from '../../context/LangContext';
 import { useAuth } from '../../context/AuthContext';
+import { ROUTES } from '../../config/routes';
 import { buildSidebarItems } from '../../utils/dashboardPermissions';
 import {
   ADMIN_ROUTES,
@@ -68,7 +70,7 @@ const AdminLayout = () => {
 
   const handleLogout = useCallback(() => {
     logout();
-    navigate('/screen/02');
+    navigate(ROUTES.login);
   }, [logout, navigate]);
 
   // Identity is always derived from the authenticated user object — there
