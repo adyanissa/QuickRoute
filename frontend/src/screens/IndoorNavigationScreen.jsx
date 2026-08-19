@@ -9,11 +9,13 @@ import RouteSteps from '../components/RouteSteps';
 import BackButton from '../components/BackButton';
 import { getPublicRoutePoints, getPublicRoutePointById } from '../api/routePointsApi';
 import { resolveLocationCode } from '../api/locationCodesApi';
+import QrScanner from '../components/QrScanner';
 import { calculateMultiFloorRoute } from '../api/navigationApi';
 import { getDestinationRoutePointId } from '../utils/destinationPlacement';
 import {
   buildStartLocationRecord,
   classifyScannedLocation,
+  extractLocationCode,
   isScanInActiveBuilding,
 } from '../utils/locationScan';
 import {
@@ -61,6 +63,21 @@ const LANGUAGES = [
 const UI = {
   en: {
     back:        'Back',
+    optionCode:   'Enter room code',
+    optionScan:   'Scan a QR code',
+    verify:       'Verify',
+    confirmTitle: 'Verify / update your location',
+    confirmHint:  'Enter a room code or scan its QR to confirm where you are. If you are somewhere else, your route is recalculated from there.',
+    goingTo:      'Going to',
+    scanQr:       'Scan QR',
+    rescanCtaHint: 'Enter a room code or scan a QR to correct your position',
+    scanTitle:    'Scan a room QR code',
+    scanHint:     'Point the camera at the QuickRoute code on the door or wall.',
+    scanStarting: 'Starting camera...',
+    scanDenied:   'Camera access was blocked.',
+    scanUnavailable: 'The camera could not be started.',
+    scanUnsupported: 'This browser cannot use the camera.',
+    scanErrorHint: 'You can still enter the code by hand.',
     destination: 'Your Destination',
     routeReady:  'Route ready',
     navigating:  'Navigating',
@@ -73,7 +90,7 @@ const UI = {
     navHint:     'Tap ✓ on each step when completed',
     arrivedTitle:'You have reached your destination',
     // Mid-journey relocation / arrival confirmation by room QR.
-    rescanCta:   'Not where you thought? Scan a room code',
+    rescanCta:    'Update my current location',
     rescanTitle: 'Scan or enter a room code',
     rescanHint:  'Your route is recalculated from wherever you are now',
     rescanPlaceholder: 'Room code',
@@ -91,7 +108,6 @@ const UI = {
     // Truthful status badge (Section 3) — replaces any distance/ETA claim.
     // Never worded as "exact"/"accurate" — only that a shortest route was
     // computed, which is always true regardless of map calibration quality.
-    shortestRouteBadge: 'Shortest route calculated',
     toLabel:     'To',
     nextLabel:   'Next',
     youAreNowOnFloor: (label) => `You are now on ${label}`,
@@ -143,6 +159,21 @@ const UI = {
   },
   ar: {
     back:        'رجوع',
+    optionCode:   'إدخال رمز الغرفة',
+    optionScan:   'مسح رمز QR',
+    verify:       'تحقق',
+    confirmTitle: 'تحقّق من موقعك أو حدّثه',
+    confirmHint:  'أدخل رمز الغرفة أو امسح رمز QR لتأكيد مكانك. إذا كنت في مكان آخر، تتم إعادة حساب مسارك من هناك.',
+    goingTo:      'الوجهة',
+    scanQr:       'مسح رمز QR',
+    rescanCtaHint: 'أدخل رمز الغرفة أو امسح رمز QR لتصحيح موقعك',
+    scanTitle:    'امسح رمز QR الخاص بالغرفة',
+    scanHint:     'وجّه الكاميرا نحو رمز QuickRoute على الباب أو الجدار.',
+    scanStarting: 'جاري تشغيل الكاميرا...',
+    scanDenied:   'تم حظر الوصول إلى الكاميرا.',
+    scanUnavailable: 'تعذّر تشغيل الكاميرا.',
+    scanUnsupported: 'هذا المتصفح لا يدعم استخدام الكاميرا.',
+    scanErrorHint: 'لا يزال بإمكانك إدخال الرمز يدويًا.',
     destination: 'وجهتك',
     routeReady:  'المسار جاهز',
     navigating:  'جارٍ التنقل',
@@ -154,7 +185,7 @@ const UI = {
     directions:  'التعليمات',
     navHint:     'اضغط ✓ بعد إتمام كل خطوة',
     arrivedTitle:'وصلتِ إلى وجهتك',
-    rescanCta:   'لست في المكان المتوقع؟ امسح رمز الغرفة',
+    rescanCta:    'تحديث موقعي الحالي',
     rescanTitle: 'امسح أو أدخل رمز الغرفة',
     rescanHint:  'سيتم إعادة حساب المسار من موقعك الحالي',
     rescanPlaceholder: 'رمز الغرفة',
@@ -169,7 +200,6 @@ const UI = {
     noRoute:     'لم يتم العثور على مسار متاح',
     noRouteHint: 'لم يتم ربط هذه الوجهة بشبكة التنقل بعد',
     noStartPoint:'لم يتم إعداد نقطة دخول لهذا المبنى بعد',
-    shortestRouteBadge: 'تم حساب أقصر مسار',
     toLabel:     'إلى',
     nextLabel:   'التالي',
     youAreNowOnFloor: (label) => `أنتِ الآن في ${label}`,
@@ -212,6 +242,21 @@ const UI = {
   },
   he: {
     back:        'חזרה',
+    optionCode:   'הזנת קוד חדר',
+    optionScan:   'סריקת קוד QR',
+    verify:       'אימות',
+    confirmTitle: 'אימות או עדכון המיקום שלך',
+    confirmHint:  'הזן קוד חדר או סרוק את ה-QR שלו כדי לאשר היכן אתה. אם אתה במקום אחר, המסלול יחושב מחדש משם.',
+    goingTo:      'היעד',
+    scanQr:       'סריקת QR',
+    rescanCtaHint: 'הזן קוד חדר או סרוק QR כדי לעדכן את מיקומך',
+    scanTitle:    'סרוק את קוד ה-QR של החדר',
+    scanHint:     'כוון את המצלמה לקוד QuickRoute שעל הדלת או הקיר.',
+    scanStarting: 'מפעיל מצלמה...',
+    scanDenied:   'הגישה למצלמה נחסמה.',
+    scanUnavailable: 'לא ניתן היה להפעיל את המצלמה.',
+    scanUnsupported: 'הדפדפן הזה אינו תומך בשימוש במצלמה.',
+    scanErrorHint: 'עדיין אפשר להזין את הקוד ידנית.',
     destination: 'היעד שלך',
     routeReady:  'מסלול מוכן',
     navigating:  'מנווט',
@@ -223,7 +268,7 @@ const UI = {
     directions:  'הוראות',
     navHint:     'הקש ✓ בכל שלב שהשלמת',
     arrivedTitle:'הגעת ליעד',
-    rescanCta:   'לא במקום שחשבת? סרוק קוד חדר',
+    rescanCta:    'עדכון המיקום הנוכחי שלי',
     rescanTitle: 'סרוק או הזן קוד חדר',
     rescanHint:  'המסלול יחושב מחדש מהמיקום הנוכחי שלך',
     rescanPlaceholder: 'קוד חדר',
@@ -238,7 +283,6 @@ const UI = {
     noRoute:     'לא נמצא מסלול זמין',
     noRouteHint: 'היעד הזה עדיין לא חובר לרשת הניווט',
     noStartPoint:'עדיין לא הוגדרה נקודת כניסה לבניין הזה',
-    shortestRouteBadge: 'המסלול הקצר ביותר חושב',
     toLabel:     'אל',
     nextLabel:   'הבא',
     youAreNowOnFloor: (label) => `כעת אתה ב${label}`,
@@ -311,11 +355,77 @@ const StopIcon = () => (
   </svg>
 );
 
-const RepeatIcon = () => (
+// The control this sits on calls handleRepeatStep, which speaks the
+// current instruction aloud through window.speechSynthesis. It used to
+// carry a circular two-arrow glyph, which reads as "restart / go back to
+// the beginning" — the one thing it does not do, and an alarming thing to
+// offer someone halfway along a route. A speaker is what the button
+// actually is. The BEHAVIOUR is unchanged; only the glyph moved.
+const SpeakIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-    <path d="M3 12a9 9 0 0 1 15.5-6.3M21 12a9 9 0 0 1-15.5 6.3" stroke="currentColor"
-      strokeWidth="1.9" strokeLinecap="round"/>
-    <path d="M18.5 2v4h-4M5.5 22v-4h4" stroke="currentColor" strokeWidth="1.9"
+    <path d="M11 5L6.5 8.5H3.5v7h3L11 19V5z" stroke="currentColor" strokeWidth="1.9"
+      strokeLinejoin="round" fill="none"/>
+    <path d="M15.5 9.2a4 4 0 0 1 0 5.6M18.2 6.5a7.8 7.8 0 0 1 0 11"
+      stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"/>
+  </svg>
+);
+
+// Scanning — a QR frame with a sweep line.
+const ScanIcon = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M4 8.5V6a2 2 0 0 1 2-2h2.5M15.5 4H18a2 2 0 0 1 2 2v2.5M20 15.5V18a2 2 0 0 1-2 2h-2.5M8.5 20H6a2 2 0 0 1-2-2v-2.5"
+      stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"/>
+    <path d="M3.5 12h17" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"/>
+  </svg>
+);
+
+// Current position — a map pin.
+const PinIcon = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11z"
+      stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round" fill="none"/>
+    <circle cx="12" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.9" fill="none"/>
+  </svg>
+);
+
+// The destination — a navigation arrow.
+const FloorLayersIcon = ({ size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M12 3l8.5 4.5L12 12 3.5 7.5 12 3z"
+      stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="none"/>
+    <path d="M3.5 12.4L12 16.9l8.5-4.5M3.5 16.9L12 21.4l8.5-4.5"
+      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
+const NavIcon = ({ size = 22 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M21 3L10.5 21l-2-8.5L0 10.5 21 3z" transform="translate(1.5 0)"
+      stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="none"/>
+  </svg>
+);
+
+// Directional chevrons. `isRTL` mirrors them so "previous" always points
+// back the way the reader came, in every language.
+const ChevronBackIcon = ({ isRTL }) => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"
+    style={isRTL ? { transform: 'scaleX(-1)' } : undefined}>
+    <path d="M15 5l-7 7 7 7" stroke="currentColor" strokeWidth="2.2"
+      strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
+const ChevronNextIcon = ({ isRTL }) => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"
+    style={isRTL ? { transform: 'scaleX(-1)' } : undefined}>
+    <path d="M9 5l7 7-7 7" stroke="currentColor" strokeWidth="2.2"
+      strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+);
+
+const CheckIcon = ({ size = 15 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2.4"
       strokeLinecap="round" strokeLinejoin="round"/>
   </svg>
 );
@@ -400,13 +510,6 @@ const BigDirectionArrow = ({ direction, size = 56 }) => {
   );
 };
 
-const connectorLabel = (t, type) => {
-  if (type === 'stairs') return t.connectorStairs;
-  if (type === 'escalator') return t.connectorEscalator;
-  if (type === 'ramp') return t.connectorRamp;
-  if (type === 'elevator') return t.connectorElevator;
-  return t.connectorGeneric;
-};
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 // This screen deliberately has NO architectural floor-plan image, route
@@ -499,11 +602,13 @@ const IndoorNavigationScreen = () => {
   // This is the authoritative, position-based arrival signal; the existing
   // "every step ticked" signal is kept as-is and either one is enough.
   const [scanArrived, setScanArrived] = useState(false);
-  const [scanOpen, setScanOpen] = useState(false);
   const [scanCode, setScanCode] = useState('');
   const [scanBusy, setScanBusy] = useState(false);
   const [scanError, setScanError] = useState(null);
   const [scanNotice, setScanNotice] = useState(null);
+  // Camera overlay visibility. Purely presentational: the scanner reads a
+  // string and hands it to applyLocationCode below.
+  const [scannerOpen, setScannerOpen] = useState(false);
   const startLabel = useMemo(() => {
     if (startLabelFromCode) return startLabelFromCode;
     if (!startRoutePoint) return null;
@@ -522,7 +627,14 @@ const IndoorNavigationScreen = () => {
   }, [startLabelFromCode, startRoutePoint, lang]);
 
   // PHASE 14 — route preferences.
-  const [optimizationMode, setOptimizationMode] = useState('shortest');
+  //
+  // The route STRATEGY is unchanged and still sent on every request; only
+  // its Shortest/Fastest/Accessible picker was removed from this screen.
+  // 'shortest' was already the default every user started on, so the
+  // request this screen makes is byte-identical to the one it made
+  // before — the backend's optimization_mode handling, and the other
+  // callers that still choose a mode, are untouched.
+  const [optimizationMode] = useState('shortest');
   // Section 7 — single-choice vertical-transport preference: 'any' |
   // 'elevator' | 'stairs'. Sent as the new vertical_transport_preference
   // request field (backend/routes/navigation_routes.py); replaces the old
@@ -958,10 +1070,14 @@ const IndoorNavigationScreen = () => {
   // recalculation is just the existing route effect running again with a
   // different start point.
   // ------------------------------------------------------------------
-  const handleScanSubmit = async (event) => {
-    event?.preventDefault?.();
-
-    const code = scanCode.trim();
+  //
+  // applyLocationCode() is that single path. A typed code and a camera
+  // scan both land here; the camera contributes nothing but the string it
+  // read. There is exactly one resolveLocationCode call site for
+  // relocation on this screen, and exactly one place that decides what a
+  // resolved code means.
+  const applyLocationCode = async (rawCode) => {
+    const code = (rawCode ?? '').trim();
     if (!code || scanBusy) return;
 
     setScanBusy(true);
@@ -1005,7 +1121,6 @@ const IndoorNavigationScreen = () => {
       if (outcome === 'arrived') {
         // Confirmed by position, not by ticking steps.
         setScanArrived(true);
-        setScanOpen(false);
         setScanCode('');
         return;
       }
@@ -1020,7 +1135,6 @@ const IndoorNavigationScreen = () => {
       // dependencies, and routeStateKey changes so step progress resets.
       setScanArrived(false);
       setRelocatePointId(startPointId);
-      setScanOpen(false);
       setScanCode('');
       setScanNotice(t.relocatedTo(resolved?.label || code));
     } catch (err) {
@@ -1031,6 +1145,35 @@ const IndoorNavigationScreen = () => {
     }
   };
 
+  const handleScanSubmit = (event) => {
+    event?.preventDefault?.();
+    applyLocationCode(scanCode);
+  };
+
+  // A camera result is just a string. QuickRoute QR labels encode a URL
+  // (`…/?locationCode=CODE`), so the code is lifted out of it first — then
+  // it goes through the identical resolver above. A scan of a code that is
+  // NOT the destination is therefore a relocation, exactly as a typed one
+  // is; only the backend resolver can call a code invalid.
+  const handleScanResult = (text) => {
+    setScannerOpen(false);
+
+    const code = extractLocationCode(text);
+
+    if (!code) {
+      setScanError(t.rescanInvalid);
+      return;
+    }
+
+    setScanCode(code);
+    applyLocationCode(code);
+  };
+
+  // Arrival is no longer something the user can simply declare: it is
+  // established only by the resolver recognising the scanned/typed code
+  // AS the destination (outcome === 'arrived' above), or by stepping
+  // through every instruction. Both paths are unchanged.
+
   const hasRealRoute = floorSegments.length > 0;
 
   // Badge config — Section 3: a truthful "route was computed" statement,
@@ -1038,19 +1181,10 @@ const IndoorNavigationScreen = () => {
   // navigation-PROGRESS labels (not accuracy claims), so those two states
   // are kept; only the pre-navigation wording changes to the exact
   // required phrase.
-  const badgeClass = hasArrived
-    ? 's18-route-badge s18-route-badge--arrived'
-    : isNavigating
-      ? 's18-route-badge s18-route-badge--nav'
-      : 's18-route-badge';
-  const badgeText = hasArrived ? t.arrived : isNavigating ? t.navigating : t.shortestRouteBadge;
-
-  const modeOptions = [
-    { value: 'shortest', label: t.modeShortest },
-    { value: 'fastest', label: t.modeFastest },
-    { value: 'accessible', label: t.modeAccessible },
-  ];
-  const currentModeLabel = modeOptions.find((m) => m.value === optimizationMode)?.label ?? '—';
+  // The route-calculated status badge was removed: visible directions
+  // already tell the user a route exists, and the phrase read like an
+  // accuracy claim. Its dictionary string was removed too; the arrived
+  // and navigating labels remain for the other states that use them.
 
   // Section 7 — matches the backend's VERTICAL_PREFERENCE_VALUES exactly
   // ('any' | 'elevator' | 'stairs'); order here is the exact required
@@ -1062,13 +1196,14 @@ const IndoorNavigationScreen = () => {
     { value: 'stairs', label: t.vertPrefStairs },
   ];
 
+  // Real floor labels for the summary card, preferring each segment's own
+  // backend floor_label (e.g. an admin-set "Ground Floor" or "Mezzanine")
+  // and falling back to the compact formatFloor() code. Never invented:
+  // when no route has been computed the value is null and the card shows
+  // a dash rather than a guess.
   const startFloorLabel = floorSegments[0]
     ? (floorSegments[0].floor_label || formatFloor(floorSegments[0].floor))
     : null;
-  // Prefers the real last floor segment's own floor_label (e.g. "Ground
-  // Floor", admin-set on the Map) so the destination header (Section A)
-  // reads naturally; falls back to the compact formatFloor() code only
-  // when no route has been computed yet.
   const lastFloorSegment = floorSegments[floorSegments.length - 1] || null;
   const destFloorLabel = lastFloorSegment
     ? (lastFloorSegment.floor_label || formatFloor(lastFloorSegment.floor))
@@ -1129,15 +1264,13 @@ const IndoorNavigationScreen = () => {
             </span>
           </div>
 
+          {/* Building context only. The destination used to be repeated
+              here as well, immediately above the hero that states it in
+              full — one of the "fragmented and text-heavy" repetitions
+              this pass removes. */}
           {building && (
             <div className="s18-header-info">
               <span className="s18-header-building">{buildingDisplayName}</span>
-              {room && (
-                <>
-                  <span className="s18-header-sep">·</span>
-                  <span className="s18-header-room">{roomDisplayName}</span>
-                </>
-              )}
             </div>
           )}
 
@@ -1146,18 +1279,16 @@ const IndoorNavigationScreen = () => {
               badge (never a distance/ETA claim). ── */}
           {room && (
             <div className="s18-nav-destination">
-              <p className="s18-nav-destination-to">
-                <span className="s18-nav-destination-label">{t.toLabel}:</span>{' '}
-                {roomDisplayName}
-              </p>
-              {destFloorLabel && (
-                <p className="s18-nav-destination-floor">{destFloorLabel}</p>
-              )}
-              {hasRealRoute && (
-                <div className={badgeClass}>
-                  <span className="s18-route-dot" />
-                  <span>{badgeText}</span>
-                </div>
+              <span className="s18-nav-dest-icon" aria-hidden="true">
+                <NavIcon size={22} />
+              </span>
+              <p className="s18-nav-dest-label">{t.goingTo}</p>
+              <h1 className="s18-nav-dest-name">{roomDisplayName}</h1>
+              {startLabel && (
+                <p className="s18-nav-dest-from">
+                  <PinIcon size={13} />
+                  <span>{t.startLabel}: {startLabel}</span>
+                </p>
               )}
             </div>
           )}
@@ -1182,7 +1313,7 @@ const IndoorNavigationScreen = () => {
                 className={`s18-floor-tab${index === activeFloorIndex ? ' s18-floor-tab--active' : ''}`}
                 onClick={() => setActiveFloorIndex(index)}
               >
-                {t.floorTabPrefix} {segment.floor_label || segment.floor}
+                {segment.floor_label || `${t.floorTabPrefix} ${segment.floor}`}
               </button>
             ))}
           </div>
@@ -1197,155 +1328,58 @@ const IndoorNavigationScreen = () => {
               just the destination name and its floor, plus the single End
               Navigation action at the bottom of this screen. */}
           {hasArrived && (
-            <div className="s18-arrival">
+            <div className="s18-arrival s18-arrival--compact">
               <BigCheckIcon />
               <div className="s18-arrival-text">
                 <p className="s18-arrival-title">{t.arrivedTitle}</p>
                 <p className="s18-arrival-sub">{room ? roomDisplayName : t.arrivedSub}</p>
-                {destFloorLabel && <p className="s18-arrival-floor">{destFloorLabel}</p>}
               </div>
             </div>
           )}
 
-          {/* Room-QR relocation / arrival confirmation.
-              Deliberately a small inline control, not a redesign: it reuses
-              the same typed-code input the entry screen uses and the same
-              public resolve endpoint. Hidden once the user has arrived —
-              there is nothing left to recalculate. */}
-          {hasRealRoute && !hasArrived && (
-            <div className="s18-rescan">
-              {!scanOpen ? (
-                <button
-                  type="button"
-                  className="s18-rescan-cta"
-                  onClick={() => {
-                    setScanOpen(true);
-                    setScanError(null);
-                    setScanNotice(null);
-                  }}
-                >
-                  {t.rescanCta}
-                </button>
-              ) : (
-                <form className="s18-rescan-form" onSubmit={handleScanSubmit}>
-                  <p className="s18-rescan-title">{t.rescanTitle}</p>
-                  <p className="s18-rescan-hint">{t.rescanHint}</p>
-                  <input
-                    className="s18-rescan-input"
-                    type="text"
-                    value={scanCode}
-                    onChange={(e) => setScanCode(e.target.value)}
-                    placeholder={t.rescanPlaceholder}
-                    aria-label={t.rescanPlaceholder}
-                    autoComplete="off"
-                    disabled={scanBusy}
-                  />
-                  <div className="s18-rescan-actions">
-                    <button
-                      type="submit"
-                      className="s18-rescan-submit"
-                      disabled={scanBusy || !scanCode.trim()}
-                    >
-                      {t.rescanSubmit}
-                    </button>
-                    <button
-                      type="button"
-                      className="s18-rescan-cancel"
-                      onClick={() => {
-                        setScanOpen(false);
-                        setScanCode('');
-                        setScanError(null);
-                      }}
-                      disabled={scanBusy}
-                    >
-                      {t.rescanCancel}
-                    </button>
-                  </div>
-                  {scanError && <p className="s18-rescan-error">{scanError}</p>}
-                </form>
-              )}
-              {!scanOpen && scanNotice && (
-                <p className="s18-rescan-notice">{scanNotice}</p>
-              )}
-            </div>
-          )}
-
-          {/* Journey summary card — Part 2.B: real backend values only */}
-          <div className={`s18-info-card${hasArrived ? ' s18-info-card--arrived' : ''}`}>
-            <p className="s18-dest-label">{t.destination}</p>
-
-            {building ? (
-              <>
-                <h2 className="s18-dest-name">{room ? roomDisplayName : buildingDisplayName}</h2>
-                <p className="s18-dest-meta">
-                  <span
-                    className="s18-building-chip"
-                    style={{ color: building.iconColor, background: building.iconBg }}
-                  >
-                    {building.tag}
-                  </span>
-                  {room && (
-                    <>
-                      <span className="s18-floor-chip">{formatFloor(room.floor)}</span>
-                      <span className="s18-type-chip">{room.type.replace('_', ' ')}</span>
-                    </>
-                  )}
-                  {hasRealRoute && floorSegments.length > 1 && (
-                    <span className="s18-floor-chip">{t.floorsLabel(floorSegments.length)}</span>
-                  )}
-                  {hasRealRoute && (
-                    <span className={`s18-type-chip${routeResult?.is_accessible ? '' : ' s18-type-chip--warn'}`}>
-                      {routeResult?.is_accessible ? t.accessibleYes : t.accessibleNo}
-                    </span>
-                  )}
-                </p>
-              </>
-            ) : (
-              <h2 className="s18-dest-name">—</h2>
-            )}
-
-            <div className="s18-journey-grid">
-              <div className="s18-journey-item">
-                <span className="s18-journey-label">{t.startLabel}</span>
-                <span className="s18-journey-value">{startLabel || '—'}</span>
-              </div>
-              <div className="s18-journey-item">
-                <span className="s18-journey-label">{t.currentFloorLabel}</span>
-                <span className="s18-journey-value">{startFloorLabel || '—'}</span>
-              </div>
-              <div className="s18-journey-item">
-                <span className="s18-journey-label">{t.destFloorLabel}</span>
-                <span className="s18-journey-value">{destFloorLabel || '—'}</span>
-              </div>
-              <div className="s18-journey-item">
-                <span className="s18-journey-label">{t.routePrefLabel}</span>
-                <span className="s18-journey-value">{currentModeLabel}</span>
-              </div>
+          {/* Route summary — four real values, or a dash. Every one
+              comes from the resolved start, the selected destination or
+              the backend's own floor segments; none is invented, and a
+              missing value degrades to "—" rather than to a guess. */}
+          <div className="s18-summary-card">
+            <div className="s18-summary-item">
+              <span className="s18-summary-head">
+                <PinIcon size={13} />
+                <span className="s18-summary-label">{t.startLabel}</span>
+              </span>
+              <span className="s18-summary-value">{startLabel || '—'}</span>
             </div>
 
-            {/* Section 3 — total distance, ETA, estimated walking time, and
-                estimated step count are DELIBERATELY not rendered here (or
-                anywhere on this screen). The real values still live in
-                `routeResult`/`overallProgress` above and are never removed
-                from the API response or component state — see the comment
-                at the top of this file. */}
+            <div className="s18-summary-item">
+              <span className="s18-summary-head">
+                <NavIcon size={13} />
+                <span className="s18-summary-label">{t.destination}</span>
+              </span>
+              <span className="s18-summary-value">
+                {room ? roomDisplayName : building ? buildingDisplayName : '—'}
+              </span>
+            </div>
+
+            <div className="s18-summary-item">
+              <span className="s18-summary-head">
+                <FloorLayersIcon size={13} />
+                <span className="s18-summary-label">{t.currentFloorLabel}</span>
+              </span>
+              <span className="s18-summary-value">{startFloorLabel || '—'}</span>
+            </div>
+
+            <div className="s18-summary-item">
+              <span className="s18-summary-head">
+                <FloorLayersIcon size={13} />
+                <span className="s18-summary-label">{t.destFloorLabel}</span>
+              </span>
+              <span className="s18-summary-value">{destFloorLabel || '—'}</span>
+            </div>
           </div>
 
           {/* PHASE 14 — route preferences */}
           {room?.id && (
             <div className="s18-mode-card">
-              <div className="s18-mode-row">
-                {modeOptions.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`s18-mode-btn${optimizationMode === option.value ? ' s18-mode-btn--active' : ''}`}
-                    onClick={() => setOptimizationMode(option.value)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
               {/* Section 7 — single-choice vertical-transport preference
                   segmented control (replaces the old avoid-stairs/
                   avoid-escalators/prefer-elevators checkbox row on this
@@ -1396,16 +1430,22 @@ const IndoorNavigationScreen = () => {
               user explicitly confirms a step. */}
           {!routeLoading && !routeError && isNavigating && !hasArrived && currentStepData && (
             <div className="s18-current-card">
-              <div className="s18-current-arrow" style={{ color: '#4a7ac8' }}>
-                {currentStepData.type === 'exit'
-                  ? <NavArrow flip={isRTL} />
-                  : currentStepData.type === 'arrive'
-                    ? <BigCheckIcon />
-                    : <BigDirectionArrow direction={currentStepData.direction} />}
-              </div>
               <div className="s18-current-body">
+                {/* The large circular illustration that used to sit above
+                    this was decoration, not information — it told the user
+                    nothing the instruction text does not. What remains is
+                    the SAME icon from the same route-instruction system,
+                    at inline size beside the step counter, where it reads
+                    as a movement cue rather than artwork. */}
                 <p className="s18-current-step-of">
-                  {t.stepOf(overallStepNumber, overallProgress.totalSteps)}
+                  <span className="s18-current-step-icon" aria-hidden="true">
+                    {currentStepData.type === 'exit'
+                      ? <NavArrow flip={isRTL} />
+                      : currentStepData.type === 'arrive'
+                        ? <BigCheckIcon />
+                        : <BigDirectionArrow direction={currentStepData.direction} size={16} />}
+                  </span>
+                  <span>{t.stepOf(overallStepNumber, overallProgress.totalSteps)}</span>
                 </p>
                 <p className="s18-current-text">{currentStepData.text}</p>
 
@@ -1421,14 +1461,18 @@ const IndoorNavigationScreen = () => {
 
               {/* ── Section D: Route progress — instruction-sequence only. */}
               <div className="s18-current-progress">
-                <div className="s18-progress-track">
-                  <div
-                    className="s18-progress-fill"
-                    style={{ width: `${Math.round(overallProgress.progressFraction * 100)}%` }}
-                  />
+                <div className="s18-progress-row">
+                  <div className="s18-progress-track">
+                    <div
+                      className="s18-progress-fill"
+                      style={{ width: `${Math.round(overallProgress.progressFraction * 100)}%` }}
+                    />
+                  </div>
+                  <span className="s18-progress-pct">
+                    {Math.round(overallProgress.progressFraction * 100)}%
+                  </span>
                 </div>
                 <p className="s18-steps-remaining">{t.stepsRemaining(stepsRemaining)}</p>
-                <p className="s18-progress-hint">{t.progressHint}</p>
               </div>
 
               <div className="s18-current-controls">
@@ -1438,7 +1482,8 @@ const IndoorNavigationScreen = () => {
                   onClick={handlePreviousStep}
                   disabled={!canGoToPreviousStep}
                 >
-                  {t.previousStep}
+                  <ChevronBackIcon isRTL={isRTL} />
+                  <span>{t.previousStep}</span>
                 </button>
                 <button
                   type="button"
@@ -1447,14 +1492,15 @@ const IndoorNavigationScreen = () => {
                   aria-label={t.repeatStep}
                   title={t.repeatStep}
                 >
-                  <RepeatIcon />
+                  <SpeakIcon />
                 </button>
                 <button
                   type="button"
                   className="s18-current-btn s18-current-btn--primary"
                   onClick={handleReachedStep}
                 >
-                  {t.reachedStep}
+                  <span>{t.reachedStep}</span>
+                  <ChevronNextIcon isRTL={isRTL} />
                 </button>
               </div>
             </div>
@@ -1500,42 +1546,96 @@ const IndoorNavigationScreen = () => {
               name/type, from/to floor, accessibility, estimated time),
               with the confirmation that auto-advances the floor
               stepper. */}
-          {!routeLoading && !routeError && (currentTransitionSegment || currentTransitionInstruction) && (
-            <div className="s18-transition-card">
-              <div className="s18-transition-icon">
+          {/* Floor change — a compact inline bar, not the large card
+              this used to be. The connector's own floor/accessibility/
+              estimated-time metadata rows were removed as clutter; the
+              REAL transition instruction text is unchanged and still
+              rendered here and in the directions list, and the advance
+              action still calls the same handler, so multi-floor routes
+              behave exactly as before. */}
+          {!routeLoading && !routeError && isNavigating
+            && (currentTransitionSegment || currentTransitionInstruction) && (
+            <div className="s18-transition-bar">
+              <span className="s18-transition-bar-icon" aria-hidden="true">
                 <ConnectorIcon type={currentTransitionSegment?.transition_type} />
-              </div>
-              <div className="s18-transition-body">
-                <p className="s18-transition-name">
-                  {currentTransitionSegment?.connector_name || connectorLabel(t, currentTransitionSegment?.transition_type)}
-                </p>
-                <p className="s18-transition-text">
-                  {currentTransitionInstruction?.text
-                    || t.continueTo(nextFloorSegment?.floor_label ?? nextFloorSegment?.floor ?? '')}
-                </p>
+              </span>
+              <span className="s18-transition-bar-text">
+                {currentTransitionInstruction?.text
+                  || t.continueTo(nextFloorSegment?.floor ?? '')}
+              </span>
+              <button
+                type="button"
+                className="s18-transition-bar-btn"
+                onClick={handleAdvanceFloor}
+              >
+                {t.reachedFloor(nextFloorSegment?.floor ?? '')}
+              </button>
+            </div>
+          )}
 
-                {/* Section 3/4.F — connector type, floor, and
-                    accessibility only; estimated time is deliberately not
-                    shown (currentTransitionSegment.estimated_time_seconds
-                    itself is untouched — it's simply never rendered). */}
-                {currentTransitionSegment && (
-                  <div className="s18-transition-meta">
-                    <span>{t.currentFloorLabel}: {formatFloor(currentTransitionSegment.from_floor)}</span>
-                    <span>{t.destFloorLabel}: {formatFloor(currentTransitionSegment.to_floor)}</span>
-                    <span>{currentTransitionSegment.is_accessible ? t.accessibleYes : t.accessibleNo}</span>
-                  </div>
-                )}
+          {/* Confirm your location — the three ways a user can tell
+              QuickRoute where they really are. All three converge on the
+              existing resolver: "I have arrived" sets the same flag a
+              destination QR sets, and the code field and the camera both
+              call applyLocationCode(). No second validation path, and no
+              duplicate "update my location" control elsewhere. */}
+          {hasRealRoute && isNavigating && !hasArrived && (
+            <div className="s18-confirm">
+              <p className="s18-confirm-title">{t.confirmTitle}</p>
+              <p className="s18-confirm-hint">{t.confirmHint}</p>
 
-                {isNavigating && (
+              <div className="s18-confirm-options">
+                {/* A — type a code */}
+                <div className="s18-confirm-card">
+                  <span className="s18-confirm-card-head">
+                    <PinIcon size={15} />
+                    <span>{t.optionCode}</span>
+                  </span>
+                  <form className="s18-confirm-actions" onSubmit={handleScanSubmit}>
+                    <input
+                      className="s18-rescan-input"
+                      type="text"
+                      value={scanCode}
+                      onChange={(e) => setScanCode(e.target.value)}
+                      placeholder={t.rescanPlaceholder}
+                      aria-label={t.rescanPlaceholder}
+                      autoComplete="off"
+                      disabled={scanBusy}
+                    />
+                    <button
+                      type="submit"
+                      className="s18-rescan-submit"
+                      disabled={scanBusy || !scanCode.trim()}
+                    >
+                      {t.verify}
+                    </button>
+                  </form>
+                </div>
+
+                {/* B — camera */}
+                <div className="s18-confirm-card">
+                  <span className="s18-confirm-card-head">
+                    <ScanIcon size={15} />
+                    <span>{t.optionScan}</span>
+                  </span>
                   <button
                     type="button"
-                    className="s18-transition-btn"
-                    onClick={handleAdvanceFloor}
+                    className="s18-rescan-scan"
+                    onClick={() => {
+                      setScanError(null);
+                      setScanNotice(null);
+                      setScannerOpen(true);
+                    }}
+                    disabled={scanBusy}
                   >
-                    {t.reachedFloor(nextFloorSegment?.floor_label ?? nextFloorSegment?.floor ?? '')}
+                    <ScanIcon size={15} />
+                    <span>{t.scanQr}</span>
                   </button>
-                )}
+                </div>
               </div>
+
+              {scanError && <p className="s18-rescan-error">{scanError}</p>}
+              {scanNotice && <p className="s18-rescan-notice">{scanNotice}</p>}
             </div>
           )}
 
@@ -1558,6 +1658,25 @@ const IndoorNavigationScreen = () => {
           )}
 
         </div>
+        {/* Camera scanner. Renders only while open, so no camera track
+            exists otherwise, and it resolves nothing itself. */}
+        {scannerOpen && (
+          <QrScanner
+            onResult={handleScanResult}
+            onClose={() => setScannerOpen(false)}
+            labels={{
+              title: t.scanTitle,
+              hint: t.scanHint,
+              cancel: t.rescanCancel,
+              starting: t.scanStarting,
+              denied: t.scanDenied,
+              unavailable: t.scanUnavailable,
+              unsupported: t.scanUnsupported,
+              errorHint: t.scanErrorHint,
+            }}
+          />
+        )}
+
       </div>
     </div>
   );

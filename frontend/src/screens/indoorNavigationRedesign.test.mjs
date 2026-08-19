@@ -189,24 +189,34 @@ test('routeResult still stores the real backend distance/time fields untouched (
 
 // ── 5. Shortest-route badge ───────────────────────────────────────────────────
 
-test('the exact "Shortest route calculated" badge text exists in en/ar/he and is rendered', () => {
-  assert.match(screenSource, /shortestRouteBadge: 'Shortest route calculated'/);
-  assert.match(screenSource, /shortestRouteBadge: 'تم حساب أقصر مسار'/);
-  assert.match(screenSource, /shortestRouteBadge: 'המסלול הקצר ביותר חושב'/);
-  assert.match(screenSource, /t\.shortestRouteBadge/);
-  // Never worded with a false precision claim.
-  assert.doesNotMatch(screenSource, /shortestRouteBadge:\s*'[^']*exact[^']*'/i);
-  assert.doesNotMatch(screenSource, /shortestRouteBadge:\s*'[^']*accurate[^']*'/i);
+// UPDATED: the badge was removed outright. Visible directions already
+// tell the user a route exists, and a standing "Shortest route
+// calculated" line read as a precision claim about the route rather than
+// a status. The rule it protected — never assert accuracy — is now
+// satisfied by there being no such claim anywhere on the screen.
+test('no route-calculated badge is rendered, in any language', () => {
+  assert.doesNotMatch(screenSource, /shortestRouteBadge:/);
+  assert.doesNotMatch(screenSource, /t\.shortestRouteBadge/);
+  assert.doesNotMatch(screenSource, /s18-route-badge/);
+  // And nothing replaced it with an equivalent claim.
+  assert.doesNotMatch(screenSource, /Shortest route calculated/);
 });
 
 // ── 6. Destination and floor are rendered (Section A) ────────────────────────
 
-test('the destination header renders "To: <name>" and the destination floor', () => {
-  assert.match(screenSource, /s18-nav-destination-to/);
-  assert.match(screenSource, /t\.toLabel/);
+// UPDATED: the header used to read "To: <name>" with the destination's
+// floor underneath. Both were removed on purpose — the "To:" prefix read
+// awkwardly, and the floor/type metadata was clutter around the one thing
+// the hero exists to state. The destination NAME is still the requirement,
+// and it is still resolved the same way; only its presentation changed.
+test('the destination header renders the localized destination name', () => {
+  assert.match(screenSource, /s18-nav-destination"/);
+  assert.match(screenSource, /s18-nav-dest-name/);
+  assert.match(screenSource, /t\.goingTo/);
   assert.match(screenSource, /roomDisplayName/);
-  assert.match(screenSource, /s18-nav-destination-floor/);
-  assert.match(screenSource, /destFloorLabel/);
+  // The removed pieces must stay removed.
+  assert.doesNotMatch(screenSource, /s18-nav-destination-to/);
+  assert.doesNotMatch(screenSource, /s18-nav-destination-floor/);
 });
 
 // ── 7/8. Current instruction + next-instruction preview ──────────────────────
@@ -238,21 +248,36 @@ test('Previous is disabled when there is no confirmed previous step, and confirm
 
 // ── 12. Floor transition is an independent instruction/card ──────────────────
 
-test('floor transition renders as its own dedicated card, separate from turn instructions', () => {
-  assert.match(screenSource, /s18-transition-card/);
+// UPDATED: the large standalone floor-transition CARD was removed. What
+// it protected — that a floor change is surfaced and can be confirmed —
+// is unchanged: the real transition instruction still renders, and the
+// same handleAdvanceFloor still advances the stepper. Only the card's
+// size and its floor/accessibility/estimated-time metadata rows went.
+test('a floor change is still surfaced and still advances the stepper', () => {
+  assert.match(screenSource, /s18-transition-bar/);
   assert.match(screenSource, /currentTransitionSegment \|\| currentTransitionInstruction/);
+  assert.match(screenSource, /currentTransitionInstruction\?\.text/);
+  assert.match(screenSource, /onClick=\{handleAdvanceFloor\}/);
   assert.match(screenSource, /t\.reachedFloor/);
   assert.match(screenSource, /youAreNowOnFloor/);
+  // The removed clutter stays removed.
+  assert.doesNotMatch(screenSource, /s18-transition-card/);
+  assert.doesNotMatch(screenSource, /s18-transition-meta/);
 });
 
 // ── 13. Arrival state on the final step ───────────────────────────────────────
 
 test('arrival state replaces the current-instruction card and shows destination + floor, no distance/ETA', () => {
-  assert.match(screenSource, /s18-arrival"/);
+  // UPDATED: the banner carries a --compact modifier now, so it no
+  // longer spans the viewport; the class itself is unchanged.
+  assert.match(screenSource, /s18-arrival s18-arrival--compact/);
   assert.match(screenSource, /t\.arrivedTitle/);
-  assert.match(screenSource, /s18-arrival-floor/);
+  // UPDATED: the arrival banner no longer repeats the destination's floor
+  // — the destination name is the whole point of the state. The
+  // no-distance/no-ETA rule below is unchanged and still enforced.
+  assert.doesNotMatch(screenSource, /s18-arrival-floor/);
   // The arrival block itself must not reference time/distance formatting.
-  const arrivalBlockMatch = screenSource.match(/\{hasArrived && \(\s*<div className="s18-arrival">[\s\S]*?\)\}/);
+  const arrivalBlockMatch = screenSource.match(/\{hasArrived && \(\s*<div className="s18-arrival[^"]*">[\s\S]*?\)\}/);
   assert.ok(arrivalBlockMatch, 'expected to find the arrival banner JSX block');
   assert.doesNotMatch(arrivalBlockMatch[0], /formatTime/);
   assert.doesNotMatch(arrivalBlockMatch[0], /totalTimeMin/);

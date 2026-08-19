@@ -1,0 +1,206 @@
+/* ─── QR camera scanner overlay ──────────────────────────────────────────── */
+
+.qrs-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(9, 24, 48, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.qrs-panel {
+  width: min(100%, 440px);
+  max-height: 100%;
+  overflow-y: auto;
+  border-radius: 24px;
+  background: #ffffff;
+  border: 1px solid rgba(208, 228, 247, 0.90);
+  box-shadow: 0 24px 60px rgba(13, 34, 68, 0.34);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.qrs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.qrs-title {
+  font-family: var(--font-brand);
+  font-size: 15px;
+  font-weight: 800;
+  color: #1a3a6b;
+}
+
+.qrs-close {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(138, 170, 203, 0.16);
+  color: #5a7aaa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.qrs-close:hover {
+  background: rgba(74, 122, 200, 0.16);
+  color: #2a5298;
+}
+
+/* ── Camera stage ──────────────────────────────────────────────────────── */
+
+.qrs-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #0d2244;
+}
+
+.qrs-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Four corner brackets — a viewfinder, not a decorative border. */
+.qrs-frame {
+  position: absolute;
+  inset: 16%;
+  pointer-events: none;
+}
+
+.qrs-frame span {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border: 3px solid rgba(255, 255, 255, 0.92);
+}
+
+.qrs-frame span:nth-child(1) {
+  top: 0;
+  left: 0;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 10px 0 0 0;
+}
+
+.qrs-frame span:nth-child(2) {
+  top: 0;
+  right: 0;
+  border-left: none;
+  border-bottom: none;
+  border-radius: 0 10px 0 0;
+}
+
+.qrs-frame span:nth-child(3) {
+  bottom: 0;
+  left: 0;
+  border-right: none;
+  border-top: none;
+  border-radius: 0 0 0 10px;
+}
+
+.qrs-frame span:nth-child(4) {
+  bottom: 0;
+  right: 0;
+  border-left: none;
+  border-top: none;
+  border-radius: 0 0 10px 0;
+}
+
+.qrs-status {
+  position: absolute;
+  inset-block-end: 14px;
+  inset-inline: 0;
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.90);
+}
+
+/* jsQR's working surface — never shown. */
+.qrs-canvas {
+  display: none;
+}
+
+/* ── Error state ───────────────────────────────────────────────────────── */
+
+.qrs-error {
+  border-radius: 16px;
+  background: rgba(214, 69, 69, 0.07);
+  border: 1px solid rgba(214, 69, 69, 0.22);
+  padding: 16px;
+  text-align: center;
+}
+
+.qrs-error p {
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #b23b3b;
+}
+
+.qrs-error-hint {
+  margin-top: 6px;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: #8aaacb !important;
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────── */
+
+.qrs-hint {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #8aaacb;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.qrs-cancel {
+  width: 100%;
+  height: 46px;
+  border-radius: 14px;
+  border: 1.5px solid rgba(208, 228, 247, 0.90);
+  background: #ffffff;
+  color: #5a7aaa;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.qrs-cancel:hover {
+  border-color: rgba(74, 122, 200, 0.45);
+  color: #2a5298;
+}
+
+@media (max-width: 420px) {
+  .qrs-panel {
+    padding: 14px;
+    border-radius: 20px;
+  }
+
+  .qrs-stage {
+    aspect-ratio: 4 / 5;
+  }
+}

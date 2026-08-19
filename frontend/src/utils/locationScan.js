@@ -17,6 +17,8 @@
 // The single localStorage key the whole app uses for "where the user is".
 // Written by BarcodeEntryScreen on the first scan and re-written here on a
 // mid-navigation rescan, so a page reload keeps the updated position.
+import { LOCATION_CODE_QUERY_PARAM } from '../config/publicUrl.js';
+
 export const START_LOCATION_KEY = 'quickroute_start_location';
 
 /**
@@ -125,4 +127,50 @@ export function isScanInActiveBuilding(resolved, activeBuildingId) {
   if (!activeBuildingId) return true;
   if (!resolved?.building_id) return true;
   return String(resolved.building_id) === String(activeBuildingId);
+}
+
+/**
+ * The location code inside whatever a camera just read.
+ *
+ * QuickRoute QR labels encode a URL — `{PUBLIC_FRONTEND_URL}/?locationCode=CODE`
+ * (see config/publicUrl.js's buildLocationCodeUrl) — so a scan returns the
+ * whole URL, not the code. Older labels, and anything typed by hand, are
+ * the bare code. This normalizes both into the one string the existing
+ * resolver expects, and returns '' for anything unusable so the caller
+ * reports the code as invalid through its existing error path rather than
+ * sending junk to the API.
+ *
+ * Deliberately does NOT validate the code: whether a code exists, is
+ * active and is reachable is the backend resolver's decision, exactly as
+ * it is for a typed code.
+ */
+export function extractLocationCode(scannedText) {
+  const raw = (scannedText ?? '').toString().trim();
+  if (!raw) return '';
+
+  // A URL — pull the query parameter out of it.
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw);
+      const fromQuery = url.searchParams.get(LOCATION_CODE_QUERY_PARAM);
+      if (fromQuery && fromQuery.trim()) return fromQuery.trim();
+
+      // A label pointing at a path-style link keeps working: take the
+      // last non-empty path segment.
+      const segments = url.pathname.split('/').filter(Boolean);
+      const last = segments[segments.length - 1];
+      return last ? decodeURIComponent(last).trim() : '';
+    } catch {
+      return '';
+    }
+  }
+
+  // A bare `locationCode=CODE` fragment, or the plain code itself.
+  const pairMatch = raw.match(
+    new RegExp(`${LOCATION_CODE_QUERY_PARAM}=([^&\\s]+)`, 'i'),
+  );
+  if (pairMatch) return decodeURIComponent(pairMatch[1]).trim();
+
+  // A multi-line or whitespace-padded scan is still one code.
+  return raw.split(/\s+/)[0].trim();
 }

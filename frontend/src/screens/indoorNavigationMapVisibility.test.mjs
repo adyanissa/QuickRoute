@@ -129,16 +129,19 @@ test('distance/ETA/estimated step count remain hidden, though still backend-calc
 //    controls, explicit floor-transition cards, arrival state, and a
 //    Stop/End Navigation button.
 test('the required text-only layout elements are all present', () => {
-  assert.match(screenSource, /s18-nav-destination-to/); // destination name
-  assert.match(screenSource, /s18-nav-destination-floor/); // current floor
+  // UPDATED: same two class names as above were retired with the hero
+  // redesign; the destination name is still required and still present.
+  assert.match(screenSource, /s18-nav-dest-name/); // destination name
   assert.match(screenSource, /BigDirectionArrow/); // large direction icon
   assert.match(screenSource, /s18-current-text/); // current instruction
   assert.match(screenSource, /s18-next-preview/); // next instruction
   assert.match(screenSource, /t\.stepOf\(overallStepNumber, overallProgress\.totalSteps\)/); // Step X of Y
   assert.match(screenSource, /handlePreviousStep/); // Previous control
   assert.match(screenSource, /handleReachedStep/); // Next/Reached control
-  assert.match(screenSource, /s18-transition-card/); // floor-transition card
-  assert.match(screenSource, /s18-arrival"/); // arrival state
+  // UPDATED: the transition card became a compact bar and the arrival
+  // banner gained a --compact modifier. Both are still rendered.
+  assert.match(screenSource, /s18-transition-bar/); // floor transition
+  assert.match(screenSource, /s18-arrival s18-arrival--compact/); // arrival state
   assert.match(screenSource, /s18-stop-nav-btn/); // Stop/End Navigation button
 });
 

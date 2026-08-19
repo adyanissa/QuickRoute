@@ -3,11 +3,20 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import HospSearchBar from '../components/HospSearchBar';
 import DestinationCard from '../components/DestinationCard';
 import BackButton from '../components/BackButton';
+import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
 import { getRooms } from '../api/roomsApi';
 import { roomToViewModel } from '../utils/viewModels';
 import { getLocalizedText, matchesLocalizedSearch } from '../utils/localization';
-import { formatFloor } from '../components/DestinationCard';
+import { resolveDestinationName } from '../utils/destinationDisplayName';
+import { formatFloorDisplay } from '../utils/mapGroupHelpers';
+import {
+  ALL_FLOORS,
+  filterRoomsByFloor,
+  reconcileFloorSelection,
+  resolveFloorOptions,
+  shouldShowFloorFilter,
+} from '../utils/destinationFloors';
 import { ROUTES } from '../config/routes';
 import '../styles/DestinationSelectionScreen.css';
 
@@ -16,6 +25,41 @@ import '../styles/DestinationSelectionScreen.css';
 // still shows up if this screen is reached without the QR flow's own
 // navigation state (e.g. a refresh).
 const START_LOCATION_KEY = 'quickroute_start_location';
+
+// Matches the selector on BarcodeEntryScreen one-for-one, and drives the
+// SAME LangContext state — this screen adds no language state of its own.
+const LANGUAGES = [
+  { code: 'en', label: 'EN' },
+  { code: 'he', label: 'עברית' },
+  { code: 'ar', label: 'عربي' },
+];
+
+// ── Icons ────────────────────────────────────────────────────────────────────
+// Inline SVG, the same convention every other QuickRoute screen uses. No
+// icon package and no image asset is introduced for these.
+
+const PinIcon = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path
+      d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11z"
+      stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round" fill="none"
+    />
+    <circle cx="12" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.9" fill="none" />
+  </svg>
+);
+
+const FloorIcon = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path
+      d="M12 3l8.5 4.5L12 12 3.5 7.5 12 3z"
+      stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="none"
+    />
+    <path
+      d="M3.5 12.4L12 16.9l8.5-4.5M3.5 16.9L12 21.4l8.5-4.5"
+      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+    />
+  </svg>
+);
 
 // ── Translations ──────────────────────────────────────────────────────────────
 const UI = {
@@ -33,6 +77,9 @@ const UI = {
     startingFrom: 'Starting from',
     currentFloor: 'Current floor',
     notConnected: 'Navigation is not available for this destination yet.',
+    allFloors:  'All',
+    floorFilter: 'Filter destinations by floor',
+    current:    'You are here',
   },
   ar: {
     subtitle:   'اختر وجهتك',
@@ -48,6 +95,9 @@ const UI = {
     startingFrom: 'الانطلاق من',
     currentFloor: 'الطابق الحالي',
     notConnected: 'التنقل إلى هذه الوجهة غير متاح بعد.',
+    allFloors:  'الكل',
+    floorFilter: 'تصفية الوجهات حسب الطابق',
+    current:    'أنت هنا',
   },
   he: {
     subtitle:   'בחר יעד',
@@ -63,12 +113,15 @@ const UI = {
     startingFrom: 'יוצא מ־',
     currentFloor: 'קומה נוכחית',
     notConnected: 'הניווט ליעד הזה עדיין לא זמין.',
+    allFloors:  'הכל',
+    floorFilter: 'סינון יעדים לפי קומה',
+    current:    'נמצא כאן',
   },
 };
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 const DestinationSelectionScreen = () => {
-  const { lang }              = useLang();
+  const { lang, setLang }     = useLang();
   const navigate              = useNavigate();
   const location               = useLocation();
   const [query, setQuery] = useState('');
@@ -88,16 +141,34 @@ const DestinationSelectionScreen = () => {
   } catch {
     persistedStart = null;
   }
+  const startMatchesBuilding = persistedStart?.buildingId === building?.id;
+
   const startLabel = location.state?.startLabel
-    ?? (persistedStart?.buildingId === building?.id ? persistedStart?.label : null)
+    ?? (startMatchesBuilding ? persistedStart?.label : null)
     ?? null;
   const startFloor = location.state?.startFloor
-    ?? (persistedStart?.buildingId === building?.id ? persistedStart?.floor : null)
+    ?? (startMatchesBuilding ? persistedStart?.floor : null)
     ?? null;
+
+  // Which map/group the user is actually standing in. Used ONLY to decide
+  // which floors are RELATED to them — never to restrict what is listed.
+  // Both ids come from the backend's own resolve response (see
+  // BarcodeEntryScreen), so this is the real stored relationship, not one
+  // the frontend invented.
+  const startMapId = startMatchesBuilding ? persistedStart?.mapId ?? null : null;
+  const startMapGroupId = startMatchesBuilding
+    ? persistedStart?.mapGroupId ?? null
+    : null;
+
+  const startContext = useMemo(
+    () => ({ mapId: startMapId, mapGroupId: startMapGroupId }),
+    [startMapId, startMapGroupId],
+  );
 
   const [rooms, setRooms]     = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
+  const [floorMapId, setFloorMapId] = useState(ALL_FLOORS);
 
   // The single in-flight GET /api/rooms, if there is one.
   //
@@ -238,22 +309,62 @@ const DestinationSelectionScreen = () => {
   // new API request, MongoDB write, or AI re-analysis (Section 9: the
   // selected language controls presentation only).
   const localizedRooms = useMemo(
-    () => rooms.map((r) => ({ ...r, name: getLocalizedText(r.names, lang, r.nameEn) })),
+    // resolveDestinationName rather than the shared getLocalizedText:
+    // a room can have a real name_en while names.en is null, and the
+    // shared helper's ['en','ar','he'] fallback answers an ENGLISH request
+    // with the Arabic name in that case. See utils/destinationDisplayName.js.
+    () => rooms.map((r) => ({ ...r, name: resolveDestinationName(r.names, lang, r.nameEn) })),
     [rooms, lang],
   );
 
-  // Multilingual search (Section 10): a destination must be findable by
-  // any of its stored translations, not just the one currently on
-  // screen — e.g. searching "شفاء" finds "Al Shifaa Pharmacy" even while
-  // the UI language is English. Falls back to the plain nameEn/type/
-  // description match for a legacy room with no `names` object at all.
-  const filtered = query.trim()
-    ? localizedRooms.filter((r) =>
-        matchesLocalizedSearch(r.names, r.nameEn, query) ||
-        r.type.replace('_', ' ').toLowerCase().includes(query.toLowerCase()) ||
-        (r.description && r.description.toLowerCase().includes(query.toLowerCase()))
-      )
-    : localizedRooms;
+  // The building's own name, re-resolved for the current language from
+  // the translations already attached to the view model — same helper,
+  // same fallback chain, and no refetch when the language changes.
+  const buildingName = building
+    ? getLocalizedText(building.names, lang, building.name || building.nameEn)
+    : '';
+
+  // Real secondary metadata only. A campus value that merely repeats the
+  // building's own name is noise, so it is hidden — and nothing is
+  // substituted in its place.
+  const buildingMeta =
+    building?.campus &&
+    building.campus !== buildingName &&
+    building.campus !== building.nameEn
+      ? building.campus
+      : '';
+
+  // Floors that genuinely exist in the user's related map group, derived
+  // from the destinations already loaded. Never a fixed list.
+  const floorOptions = useMemo(
+    () => resolveFloorOptions(localizedRooms, startContext),
+    [localizedRooms, startContext],
+  );
+
+  const showFloorFilter = shouldShowFloorFilter(floorOptions);
+
+  // A selection that no longer matches a real option (rooms reloaded,
+  // different start) falls back to All instead of showing nothing.
+  const activeFloorMapId = reconcileFloorSelection(floorMapId, floorOptions);
+
+  // Search and the floor filter compose: the floor narrows the list, the
+  // query narrows it again, and the count below reflects both.
+  const filtered = useMemo(() => {
+    const onFloor = filterRoomsByFloor(localizedRooms, activeFloorMapId);
+
+    if (!query.trim()) return onFloor;
+
+    // Multilingual search (Section 10): a destination must be findable by
+    // any of its stored translations, not just the one currently on
+    // screen — e.g. searching "شفاء" finds "Al Shifaa Pharmacy" even while
+    // the UI language is English. Falls back to the plain nameEn/type/
+    // description match for a legacy room with no `names` object at all.
+    return onFloor.filter((r) =>
+      matchesLocalizedSearch(r.names, r.nameEn, query) ||
+      r.type.replace('_', ' ').toLowerCase().includes(query.toLowerCase()) ||
+      (r.description && r.description.toLowerCase().includes(query.toLowerCase()))
+    );
+  }, [localizedRooms, activeFloorMapId, query]);
 
   const handleRoomClick = (room) => {
     // Unconnected destinations are disabled in the card itself — this is
@@ -273,48 +384,99 @@ const DestinationSelectionScreen = () => {
 
         {/* ── Gradient Header ── */}
         <div className="s17-header">
+          <div className="s17-header-inner">
 
-          <BackButton
-            onClick={() => navigate(ROUTES.buildings)}
-            label={t.back}
-            isRTL={isRTL}
-          />
+            {/* Back + language on one line, so the hero stays short */}
+            <div className="s17-topbar">
+              {/* Back goes to the location-code entry screen by its
+                  CANONICAL ROUTE, not through history and not to the
+                  building picker: the QR flow reaches this screen directly
+                  from /start, so /start is where "back" genuinely leads.
+                  Using the route rather than history.back() also means a
+                  user who happened to arrive via the building list can
+                  never be dropped back onto that intermediate step. */}
+              <BackButton
+                onClick={() => navigate(ROUTES.start)}
+                label={t.back}
+                isRTL={isRTL}
+                spacing="compact"
+              />
 
-          {/* Building card row */}
-          {building && (
-            <div className="s17-building-row">
-              <div className="s17-building-icon" style={{ background: building.iconBg }}>
-                <span className="s17-building-tag" style={{ color: building.iconColor }}>
-                  {building.tag}
+              <div className="s17-lang-pill" role="group" aria-label="Language selector">
+                {LANGUAGES.map((l) => (
+                  <button
+                    key={l.code}
+                    type="button"
+                    className={`s17-lang-btn${lang === l.code ? ' active' : ''}`}
+                    onClick={() => setLang(l.code)}
+                    aria-pressed={lang === l.code}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Branding */}
+            <div className="s17-brand">
+              <QuickRouteLogo size={24} />
+              <span className="s17-wordmark">Quick<span>Route</span></span>
+            </div>
+
+            {/* Building identity — the resolved Building, named once. */}
+            {building && (
+              <div className="s17-identity">
+                <span className="s17-identity-icon" aria-hidden="true">
+                  <PinIcon size={20} />
                 </span>
+                <div className="s17-identity-text">
+                  <h1 className="s17-identity-name">{buildingName}</h1>
+                  {buildingMeta && (
+                    <p className="s17-identity-meta">{buildingMeta}</p>
+                  )}
+                </div>
               </div>
-              <div className="s17-building-text">
-                <h1 className="s17-building-name">{building.name}</h1>
-                <p className="s17-building-en">{building.nameEn}</p>
+            )}
+
+            <p className="s17-subtitle">{t.subtitle}</p>
+
+            {/* Real starting-location context — shown only when the
+                backend actually resolved one (QR flow); never fabricated
+                (Part 5). */}
+            {(startLabel || startFloor != null) && (
+              <div className="s17-status-row">
+                {startLabel && (
+                  <div className="s17-status-card">
+                    <span className="s17-status-icon" aria-hidden="true">
+                      <PinIcon size={16} />
+                    </span>
+                    <span className="s17-status-text">
+                      <span className="s17-status-label">{t.startingFrom}</span>
+                      <strong className="s17-status-value">{startLabel}</strong>
+                    </span>
+                  </div>
+                )}
+                {startFloor != null && (
+                  <div className="s17-status-card">
+                    <span className="s17-status-icon" aria-hidden="true">
+                      <FloorIcon size={16} />
+                    </span>
+                    <span className="s17-status-text">
+                      <span className="s17-status-label">{t.currentFloor}</span>
+                      <strong className="s17-status-value">
+                        {formatFloorDisplay(startFloor, null)}
+                      </strong>
+                    </span>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            )}
 
-          <p className="s17-subtitle">{t.subtitle}</p>
-
-          {/* Real starting-location context — shown only when the
-              backend actually resolved one (QR flow); never fabricated
-              (Part 5). */}
-          {(startLabel || startFloor != null) && (
-            <div className="s17-start-row">
-              {startLabel && (
-                <span className="s17-start-chip">{t.startingFrom}: {startLabel}</span>
-              )}
-              {startFloor != null && (
-                <span className="s17-start-chip">{t.currentFloor}: {formatFloor(startFloor)}</span>
-              )}
-            </div>
-          )}
-
+          </div>
         </div>
 
-        {/* ── Floating search bar ── */}
-        <div className="s17-search-wrap">
+        {/* ── Search bar — ONE surface, no outer container ── */}
+        <div className="s17-searchbar">
           <HospSearchBar
             value={query}
             onChange={setQuery}
@@ -338,6 +500,42 @@ const DestinationSelectionScreen = () => {
             <div className="s17-empty"><p>{t.noData}</p></div>
           ) : (
             <>
+              {/* Floor filter — one chip per REAL map that actually holds
+                  a destination in the user's own map group. Hidden
+                  entirely when there is nothing to choose between. */}
+              {showFloorFilter && (
+                <div
+                  className="s17-floors"
+                  role="group"
+                  aria-label={t.floorFilter}
+                >
+                  <button
+                    type="button"
+                    className={`s17-floor-chip${!activeFloorMapId ? ' active' : ''}`}
+                    onClick={() => setFloorMapId(ALL_FLOORS)}
+                    aria-pressed={!activeFloorMapId}
+                  >
+                    {t.allFloors}
+                  </button>
+
+                  {floorOptions.map((option) => (
+                    <button
+                      key={option.mapId}
+                      type="button"
+                      className={
+                        `s17-floor-chip${activeFloorMapId === option.mapId ? ' active' : ''}`
+                        + `${option.isCurrent ? ' is-current' : ''}`
+                      }
+                      onClick={() => setFloorMapId(option.mapId)}
+                      aria-pressed={activeFloorMapId === option.mapId}
+                      title={option.isCurrent ? t.current : undefined}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="s17-section-row">
                 <span className="s17-section-label">{t.section}</span>
                 <span className="s17-section-count">{t.count(filtered.length)}</span>

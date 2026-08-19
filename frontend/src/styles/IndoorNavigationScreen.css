@@ -1,6 +1,9 @@
 /* ─── Screen 18 — Map / Indoor Navigation ───────────────────────────────── */
 
 .s18-shell {
+  /* The single content width the header row, hero and every card below
+     share, so nothing runs edge to edge on a wide screen. */
+  --s18-container: 1220px;
   width: 100%;
   max-width: 100%;
   min-height: 100vh;
@@ -161,7 +164,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 160px;
+  max-width: min(90vw, 420px);
 }
 
 .s18-header-sep {
@@ -292,35 +295,15 @@
   flex-shrink: 0;
 }
 
-.s18-mode-row {
-  display: flex;
-  gap: 6px;
-}
-
-.s18-mode-btn {
-  flex: 1;
-  border: 1px solid rgba(74, 122, 200, 0.22);
-  background: transparent;
-  color: #5a7aaa;
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 700;
-  padding: 8px 6px;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: all 0.18s ease;
-}
-
-.s18-mode-btn--active {
-  background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 100%);
-  border-color: transparent;
-  color: #ffffff;
-}
+/* The Shortest / Fastest / Accessible picker was removed from this
+   screen, so its rules went with it. .s18-mode-card above now holds only
+   the vertical-transport control; the route strategy itself is unchanged
+   and still sent on every request. */
 
 /* Section 7 — single-choice vertical-transport preference segmented
    control (any / elevator / stairs), replacing the old
    .s18-avoid-row/.s18-avoid-option checkbox row. Styled to match the
-   existing .s18-mode-row/.s18-mode-btn segmented control above it. */
+   segmented-control look this screen already used. */
 .s18-vertpref-row {
   display: flex;
   gap: 6px;
@@ -443,48 +426,57 @@
 .s18-current-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 10px;
+  align-items: stretch;
+  gap: 16px;
   background: #ffffff;
   border: 1px solid rgba(74, 122, 200, 0.18);
   border-radius: 22px;
-  padding: 20px 18px;
+  padding: 24px 26px;
   margin-bottom: 14px;
   box-shadow: 0 6px 24px rgba(23, 59, 112, 0.10);
   flex-shrink: 0;
 }
 
-.s18-current-arrow {
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
-  background: rgba(74, 122, 200, 0.10);
-  display: flex;
+.s18-current-step-icon {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: #4a7ac8;
+}
+
+.s18-current-step-icon svg {
+  width: 16px;
+  height: 16px;
 }
 
 .s18-current-body {
-  text-align: center;
+  text-align: start;
 }
 
 .s18-current-step-of {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-family: var(--font-body);
-  font-size: 11.5px;
-  font-weight: 700;
-  color: #7891ac;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #4a7ac8;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
-  margin: 0 0 4px;
+  letter-spacing: 0.08em;
+  background: rgba(74, 122, 200, 0.10);
+  border-radius: 100px;
+  padding: 5px 12px;
+  margin: 0 0 12px;
 }
 
 .s18-current-text {
-  font-family: var(--font-body);
-  font-size: 17px;
+  font-family: var(--font-brand);
+  font-size: 26px;
   font-weight: 800;
   color: #1a3a6b;
   margin: 0;
-  line-height: 1.35;
+  line-height: 1.28;
+  letter-spacing: -0.01em;
 }
 
 .s18-current-distance {
@@ -530,12 +522,32 @@
   margin-top: 6px;
 }
 
+.s18-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.s18-progress-row .s18-progress-track {
+  flex: 1;
+}
+
+.s18-progress-pct {
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #2a5298;
+  min-width: 38px;
+  text-align: end;
+}
+
 .s18-steps-remaining {
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 700;
-  color: #4a7ac8;
-  text-align: center;
+  color: #7891ac;
+  text-align: start;
   margin: 8px 0 0;
 }
 
@@ -574,6 +586,10 @@
 }
 
 .s18-current-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   flex: 1;
   border: none;
   border-radius: 100px;
@@ -692,74 +708,76 @@
 
 /* ── Journey summary grid (Part 2.B) ───────────────────────────────────── */
 
-.s18-journey-grid {
+/* ── Route summary: start / destination / current floor / dest floor ──── */
+
+.s18-summary-card {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 14px;
-  padding: 10px 0 2px;
-  border-top: 1px solid rgba(74, 122, 200, 0.10);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  background: #ffffff;
+  border: 1px solid rgba(208, 228, 247, 0.85);
+  border-radius: 18px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  box-shadow: 0 4px 16px rgba(42, 82, 152, 0.06);
 }
 
-.s18-journey-item {
+.s18-summary-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
+  padding-inline: 8px;
+  border-inline-start: 1px solid rgba(208, 228, 247, 0.75);
 }
 
-.s18-journey-label {
+.s18-summary-item:first-child {
+  border-inline-start: none;
+  padding-inline-start: 0;
+}
+
+.s18-summary-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #8aaacb;
+}
+
+.s18-summary-head svg {
+  flex-shrink: 0;
+}
+
+.s18-summary-label {
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
-  color: #96abc7;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.s18-journey-value {
-  font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 700;
-  color: #2a5298;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* ── Stats row ──────────────────────────────────────────────────────────── */
-
-.s18-stats {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  background: rgba(74, 122, 200, 0.06);
-  border-radius: 14px;
-  border: 1px solid rgba(74, 122, 200, 0.10);
-}
-
-.s18-stat {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #5a7aaa;
-  font-family: var(--font-body);
-  font-size: 13px;
+.s18-summary-value {
+  font-family: var(--font-brand);
+  font-size: 14px;
   font-weight: 700;
+  color: #1a3a6b;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
-.s18-stat svg {
-  color: #8aaacb;
-  flex-shrink: 0;
-}
+@media (max-width: 720px) {
+  .s18-summary-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 4px;
+  }
 
-.s18-stat-divider {
-  width: 1px;
-  height: 18px;
-  background: rgba(74, 122, 200, 0.18);
+  .s18-summary-item:nth-child(odd) {
+    border-inline-start: none;
+    padding-inline-start: 0;
+  }
 }
-
-/* ── Directions section ─────────────────────────────────────────────────── */
 
 .s18-directions {
   background: rgba(255, 255, 255, 0.94);
@@ -1040,7 +1058,7 @@
 
   .s18-header {
     width: 100%;
-    padding: 36px 40px 22px;
+    padding: 22px 40px 20px;
     border-radius: 0;
     display: flex;
     align-items: center;
@@ -1053,7 +1071,7 @@
   .s18-header-info,
   .s18-nav-destination {
     width: 100%;
-    max-width: 720px;
+    max-width: var(--s18-container);
     margin: 0 auto;
   }
 
@@ -1081,9 +1099,20 @@
 
   .s18-bottom {
     width: 100%;
-    max-width: 720px;
+    max-width: var(--s18-container);
     margin: 0 auto;
-    padding: 26px 0 48px;
+    padding: 22px 28px 48px;
+  }
+
+  /* Active navigation: the step the user is on, beside the whole list.
+     Only while navigating — before Start Navigation the directions card
+     is the single focus and gets the full container. */
+  /* The Current Step / All Steps two-column arrangement was removed: the
+     page is one vertical flow at every width, so each card gets the full
+     centered container instead of half of it. */
+
+  .s18-confirm-options {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .s18-info-card {
@@ -1127,41 +1156,74 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   width: 100%;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
-.s18-nav-destination-to {
-  font-family: var(--font-brand);
-  font-size: 15px;
+.s18-nav-dest-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #bcd9ff;
+  background: rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  backdrop-filter: blur(6px);
+  margin-bottom: 1px;
+}
+
+.s18-nav-dest-label {
+  font-family: var(--font-body);
+  font-size: 9.5px;
   font-weight: 700;
-  color: #fff;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(178, 206, 244, 0.78);
+  margin: 0;
+}
+
+.s18-nav-dest-from {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 4px 0 0;
+  padding: 5px 12px;
+  border-radius: 100px;
+  background: rgba(255, 255, 255, 0.11);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: rgba(226, 238, 253, 0.92);
+}
+
+.s18-nav-dest-from svg {
+  flex-shrink: 0;
+  color: #8fc2f7;
+}
+
+.s18-nav-dest-from span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.s18-nav-dest-name {
+  font-family: var(--font-brand);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: #ffffff;
   text-align: center;
   margin: 0;
-}
-
-.s18-nav-destination-label {
-  color: rgba(255, 255, 255, 0.65);
-  font-weight: 600;
-}
-
-.s18-nav-destination-floor {
-  font-family: var(--font-body);
-  font-size: 12.5px;
-  font-weight: 600;
-  color: rgba(210, 226, 250, 0.85);
-  margin: 0;
-}
-
-/* Reuses .s18-route-badge's existing look, but flows naturally in this
-   header block instead of the absolute positioning that class otherwise
-   uses (Section A groups the badge with the destination name/floor). */
-.s18-nav-destination .s18-route-badge {
-  position: static;
-  top: auto;
-  inset-inline-end: auto;
-  margin-top: 4px;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* ── Header "stop navigation" icon button (Section A) ───────────────────── */
@@ -1207,10 +1269,11 @@
 /* ── Section C: Next-instruction preview ────────────────────────────────── */
 
 .s18-next-preview {
-  margin: 8px 0 0;
+  margin: 12px 0 0;
   font-family: var(--font-body);
-  font-size: 13px;
-  color: rgba(26, 58, 107, 0.75);
+  font-size: 15px;
+  line-height: 1.45;
+  color: rgba(26, 58, 107, 0.80);
 }
 
 .s18-next-preview-label {
@@ -1266,20 +1329,54 @@
 
 .s18-rescan-cta {
   width: 100%;
-  padding: 10px 14px;
-  border: 1px dashed rgba(0, 0, 0, 0.18);
-  border-radius: 12px;
-  background: transparent;
-  color: inherit;
-  opacity: 0.75;
-  font: inherit;
-  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1.5px solid rgba(208, 228, 247, 0.90);
+  border-radius: 14px;
+  background: #ffffff;
   cursor: pointer;
+  text-align: start;
+  transition: all 0.18s ease;
 }
 
 .s18-rescan-cta:hover {
-  opacity: 1;
-  border-style: solid;
+  border-color: rgba(74, 122, 200, 0.45);
+  box-shadow: 0 4px 14px rgba(42, 82, 152, 0.10);
+}
+
+.s18-rescan-cta-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #2a5298;
+  background: rgba(74, 122, 200, 0.11);
+}
+
+.s18-rescan-cta-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.s18-rescan-cta-text strong {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
+  color: #1a3a6b;
+}
+
+.s18-rescan-cta-text small {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 500;
+  color: #8aaacb;
+  line-height: 1.4;
 }
 
 .s18-rescan-form {
@@ -1316,30 +1413,53 @@
 }
 
 .s18-rescan-submit,
+.s18-rescan-scan,
 .s18-rescan-cancel {
   flex: 1;
+  min-height: 42px;
   padding: 10px 12px;
-  border-radius: 10px;
-  font: inherit;
+  border-radius: 11px;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 700;
   cursor: pointer;
+  transition: all 0.18s ease;
 }
 
 .s18-rescan-submit {
   border: none;
-  background: #1f6feb;
+  background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 100%);
   color: #fff;
+  box-shadow: 0 3px 12px rgba(26, 58, 107, 0.20);
+}
+
+.s18-rescan-scan {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1.5px solid rgba(74, 122, 200, 0.40);
+  background: rgba(74, 122, 200, 0.07);
+  color: #2a5298;
+}
+
+.s18-rescan-scan:hover {
+  background: rgba(74, 122, 200, 0.13);
 }
 
 .s18-rescan-submit:disabled,
+.s18-rescan-scan:disabled,
 .s18-rescan-cancel:disabled {
   opacity: 0.55;
   cursor: default;
 }
 
 .s18-rescan-cancel {
-  border: 1px solid rgba(0, 0, 0, 0.15);
+  width: 100%;
+  margin-top: 8px;
+  border: 1.5px solid rgba(208, 228, 247, 0.90);
   background: transparent;
-  color: inherit;
+  color: #5a7aaa;
 }
 
 .s18-rescan-error {
@@ -1352,4 +1472,202 @@
   margin: 8px 2px 0;
   font-size: 0.85rem;
   opacity: 0.8;
+}
+
+
+/* ── Route summary + confirm-location, appended for this pass ──────────── */
+
+/* Directions card and the primary CTA share the container, never the
+   viewport. */
+.s18-nav-btn,
+.s18-done-btn,
+.s18-cancel-btn {
+  width: 100%;
+}
+
+/* ── Confirm your location ─────────────────────────────────────────────── */
+
+.s18-confirm {
+  margin-top: 14px;
+  background: #ffffff;
+  border: 1px solid rgba(208, 228, 247, 0.85);
+  border-radius: 20px;
+  padding: 16px;
+  box-shadow: 0 4px 16px rgba(42, 82, 152, 0.06);
+}
+
+.s18-confirm-title {
+  font-family: var(--font-brand);
+  font-size: 14px;
+  font-weight: 800;
+  color: #1a3a6b;
+  margin: 0;
+}
+
+.s18-confirm-hint {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #8aaacb;
+  line-height: 1.5;
+  margin: 4px 0 12px;
+}
+
+.s18-confirm-options {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.s18-confirm-card {
+  border: 1.5px solid rgba(208, 228, 247, 0.90);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.s18-confirm-card-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #2a5298;
+}
+
+.s18-confirm-card-head span {
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #1a3a6b;
+}
+
+.s18-confirm-card .s18-rescan-input {
+  margin: 0;
+}
+
+.s18-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── Compact arrival state ─────────────────────────────────────────────── */
+
+.s18-arrival--compact {
+  max-width: 460px;
+  margin-inline: auto;
+  border-radius: 22px;
+  padding: 26px 22px;
+  text-align: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.s18-arrival--compact .s18-arrival-text {
+  text-align: center;
+}
+
+/* Branding sits centred in the hero, between the header row and the
+   destination block. */
+.s18-brand-row {
+  justify-content: center;
+}
+
+/* The inline code field and its submit share one line. */
+.s18-confirm-actions .s18-rescan-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.s18-confirm-actions .s18-rescan-submit {
+  flex: 0 0 auto;
+  min-width: 84px;
+}
+
+/* One compact bar for a real floor change. */
+.s18-transition-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 11px 14px;
+  border-radius: 14px;
+  background: rgba(74, 122, 200, 0.07);
+  border: 1.5px solid rgba(74, 122, 200, 0.28);
+}
+
+.s18-transition-bar-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: #2a5298;
+}
+
+.s18-transition-bar-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a3a6b;
+}
+
+.s18-transition-bar-btn {
+  flex-shrink: 0;
+  min-height: 38px;
+  padding: 8px 14px;
+  border-radius: 11px;
+  border: none;
+  background: linear-gradient(135deg, #1a3a6b 0%, #2a5298 100%);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (max-width: 560px) {
+  .s18-transition-bar {
+    flex-wrap: wrap;
+  }
+
+  .s18-transition-bar-btn {
+    width: 100%;
+  }
+}
+
+
+/* ── Final pass: readable steps, single-column flow ────────────────────── */
+
+/* All Steps sits below the current step and takes the whole container. */
+.s18-directions {
+  width: 100%;
+}
+
+/* The step list is the second-most-read thing on this screen; it may not
+   render as fine print. */
+.rs-step-text,
+.s18-directions li,
+.s18-directions p {
+  font-size: 14.5px;
+}
+
+@media (max-width: 560px) {
+  .s18-current-card {
+    padding: 20px 18px;
+  }
+
+  .s18-current-text {
+    font-size: 21px;
+  }
+
+  .s18-next-preview {
+    font-size: 14px;
+  }
+
+  .s18-current-controls {
+    flex-wrap: wrap;
+  }
 }
