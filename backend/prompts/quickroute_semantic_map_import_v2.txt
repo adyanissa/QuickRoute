@@ -655,6 +655,160 @@ If the source contains a visible spelling error:
 - place the normalized meaning under a translation field when clear
 - explain the issue in review notes if necessary
 
+--------------------------------------------------
+N.1 DISPLAY-NAME POPULATION (ADDENDUM TO SECTION N)
+--------------------------------------------------
+
+This addendum refines ONLY how these four already-defined fields are filled:
+
+  names.original
+  names.en
+  names.ar
+  names.he
+
+It introduces no new field, no new object, and no second naming structure.
+Where it is more specific than the general guidance above, it is
+authoritative FOR THESE FOUR FIELDS ONLY.
+
+It changes nothing else. Entity detection, inclusion or exclusion of an
+entity, categories, types, normalized values, numbering, nesting, parent
+and pass-through relationships, geometry, evidence, confidence, review
+requirements, detected_language, alternative_readings and the output
+structure are all governed entirely by the other sections and are not
+affected by this one.
+
+Note on the JSON templates later in this prompt: the null values shown in
+them are empty placeholders illustrating the SHAPE of the object. They are
+not a recommendation to leave translations empty.
+
+N.1.1 names.original is the source of truth
+
+names.original is always the exact label as it is visible on the drawing.
+
+Never translate it.
+Never normalize, tidy, reorder or re-case it.
+Never replace it with a preferred English name.
+Never alter its wording, punctuation, spacing, number or code.
+
+names.en, names.ar and names.he are DISPLAY values derived from it. They
+never feed back into it.
+
+N.1.2 The source language is never assumed
+
+A drawing may be labelled in Arabic, in Hebrew, in English, in a mix, or
+in another script. Whatever it is, that exact text goes in names.original,
+and the supported display values are derived from it when they can be
+derived safely.
+
+A label is never rewritten merely because a different display language
+exists.
+
+N.1.3 Clear descriptive labels: populate all three
+
+When the visible label states what the space IS in ordinary words, give a
+natural display value in each of the three languages — the way a sign in a
+real building in that language would read.
+
+Do not leave names.en, names.ar or names.he null merely because filling
+them requires translating. For an ordinary, clearly descriptive space,
+leaving them null is a worse answer than translating them.
+
+This applies to any label whose words state a function. Judge each label
+on what it actually says; do not match it against a fixed list.
+
+N.1.4 Numbers, codes and identifiers are preserved exactly
+
+Room numbers, alphanumeric identifiers and explicit codes are carried
+through every display language unchanged: same characters, same order
+relative to the translated words.
+
+Never translate, transliterate, renumber, reformat, reorder, drop or
+invent an identifier. Never convert digits to another numeral system.
+
+Synthetic example (illustrative only, not a real label):
+
+  visible label:   Consultation Room B-27
+
+  "names": {
+    "original": "Consultation Room B-27",
+    "en": "Consultation Room B-27",
+    "ar": "غرفة استشارات B-27",
+    "he": "חדר ייעוץ B-27"
+  }
+
+All three display languages are filled, and B-27 appears identically in
+every one of the four values. This is the ordinary expected result for a
+label like this — not null, and not a renumbered identifier.
+
+N.1.5 Descriptive wording plus a code is still descriptive
+
+A code in the label does not make the label uninterpretable. If ordinary
+words state the function AND a code is present, translate the words and
+carry the code through unchanged.
+
+Synthetic example (illustrative only):
+
+  visible label:   Staff Washroom X14
+
+  "names": {
+    "original": "Staff Washroom X14",
+    "en": "Staff Washroom X14",
+    "ar": "دورة مياه الموظفين X14",
+    "he": "שירותי עובדים X14"
+  }
+
+The words carry the meaning, so this is translated. X14 stays X14 in every
+language.
+
+N.1.6 Code-only labels: preserve, never guess
+
+Some labels are only an architectural abbreviation, code or number, with
+no ordinary word stating what the space is. You may have a plausible guess
+at what such an abbreviation stands for. That guess is not sufficient. If
+the meaning is not written out in the label itself, and the drawing gives
+no reliable indication of it, do not expand it.
+
+For these, put the exact source label in all four fields.
+
+Synthetic example (illustrative only):
+
+  visible label:   ZX-204
+  names.original:  ZX-204
+  names.en:        ZX-204
+  names.ar:        ZX-204
+  names.he:        ZX-204
+
+Preserving the label is always safe. A confident-looking wrong expansion
+is not, because nothing downstream can detect it.
+
+An abbreviation seen in one building never carries its meaning to another.
+
+N.1.7 Proper names, brands and genuine ambiguity
+
+Do not invent a translation that changes identity. For a company, shop,
+brand, person, or a department name whose intended terminology is
+ambiguous, preserve identity rather than producing a translated variant.
+
+Where the meaning genuinely cannot be determined, fall back exactly as
+Section N already directs: do not translate unclear text.
+
+Filling all three languages is never a reason to invent a meaning. Where
+this addendum and semantic safety appear to conflict, semantic safety
+wins.
+
+N.1.8 Choosing between the two paths
+
+  words state a function (with or without a code)
+    -> translate the words, preserve every code exactly
+
+  only a code or abbreviation, meaning not stated
+    -> preserve the exact source label in all four fields
+
+  proper name, brand, or genuinely unclear text
+    -> preserve identity; leave a display language null rather than guess
+
+When it is unclear which path applies, take the more conservative one.
+
 ==================================================
 O. UNIVERSAL OPEN TAXONOMY
 ==================================================
