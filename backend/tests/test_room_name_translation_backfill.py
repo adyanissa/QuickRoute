@@ -22,6 +22,8 @@ Run with: pytest backend/tests/test_room_name_translation_backfill.py -v
 import ast
 import asyncio
 import copy
+import json
+import re
 
 import pytest
 
@@ -36,6 +38,9 @@ from models.semantic_map_analysis_model import SemanticMapAnalysis
 from routes import maintenance_routes
 from services import room_name_translation_service
 from services.room_name_translation_service import (
+    KIND_CODE_ONLY,
+    KIND_DESCRIPTIVE,
+    KIND_UNTRANSLATABLE,
     RoomNameTranslationError,
     build_proposal,
     collect_source_names,
@@ -1008,3 +1013,338 @@ def test_build_proposal_and_updates_for_room_are_pure(client, admin, provider):
     assert update["names"]["en"] == "Electrical Room"
 
     assert_untouched(before, snapshot())
+
+
+# =========================================================
+# 21. Descriptive labels vs code-only labels
+#
+# Real floor-plan labels are a mixture. "WOMEN RRW 315" says what the
+# space is in ordinary words and merely carries an architectural code
+# along with it — that is translatable, and the code rides through
+# untouched. "TEL 312" says nothing translatable at all: TEL might be
+# telephone, telecom, telemetry or a draughtsman's private shorthand, and
+# a confident-looking wrong expansion is the one error nobody would ever
+# catch by looking at the screen.
+#
+# So the model classifies (`kind`), and the code acts on that verdict
+# deterministically: a code_only label is preserved EXACTLY, taken from
+# the source string rather than from anything the model wrote.
+# =========================================================
+
+DESCRIPTIVE_REPLY = json.dumps(
+    {
+        "translations": [
+            {
+                "source": "WOMEN RRW 315",
+                "kind": "descriptive",
+                "ar": "دورة مياه النساء RRW 315",
+                "he": "שירותי נשים RRW 315",
+            },
+            {
+                "source": "MEN RRM 309",
+                "kind": "descriptive",
+                "ar": "دورة مياه الرجال RRM 309",
+                "he": "שירותי גברים RRM 309",
+            },
+        ]
+    },
+    ensure_ascii=False,
+)
+
+
+def test_a_descriptive_label_is_translated_and_keeps_its_code(client):
+    parsed = parse_translation_payload(DESCRIPTIVE_REPLY)
+
+    assert parsed["WOMEN RRW 315"]["ar"] == "دورة مياه النساء RRW 315"
+    assert parsed["WOMEN RRW 315"]["he"] == "שירותי נשים RRW 315"
+    assert parsed["MEN RRM 309"]["ar"] == "دورة مياه الرجال RRM 309"
+    assert parsed["MEN RRM 309"]["he"] == "שירותי גברים RRM 309"
+
+    # The code token survives in both scripts — this is the property that
+    # makes the translated sign still match the door.
+    for source, code in (("WOMEN RRW 315", "RRW 315"), ("MEN RRM 309", "RRM 309")):
+        for lang in ("ar", "he"):
+            assert code in parsed[source][lang], (source, lang)
+
+
+def test_a_code_only_label_is_preserved_exactly(client):
+    reply = json.dumps(
+        {
+            "translations": [
+                {"source": "TEL 312", "kind": "code_only", "ar": None, "he": None},
+                {"source": "ELEC310", "kind": "code_only", "ar": None, "he": None},
+            ]
+        }
+    )
+
+    parsed = parse_translation_payload(reply)
+
+    assert parsed["TEL 312"] == {"ar": "TEL 312", "he": "TEL 312"}
+    assert parsed["ELEC310"] == {"ar": "ELEC310", "he": "ELEC310"}
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "TEL 312",
+        "ELEC310",
+        "AHU-4/B",
+        "MDF  204",          # doubled space
+        "RM.117A",
+        "E/M 3",
+    ],
+)
+def test_code_only_preservation_is_byte_exact(client, label):
+    """
+    Whatever the label's spacing, punctuation or casing, the preserved
+    value is the input string itself — not a normalized, trimmed or
+    re-spaced version of it.
+    """
+
+    reply = json.dumps(
+        {"translations": [{"source": label, "kind": "code_only", "ar": None, "he": None}]}
+    )
+
+    parsed = parse_translation_payload(reply)
+
+    assert parsed[label]["ar"] == label
+    assert parsed[label]["he"] == label
+
+
+def test_a_code_only_entry_discards_an_expansion_the_model_tried_anyway(client):
+    """
+    The critical guard. If the model classifies correctly but then also
+    fills in a guessed expansion — "TEL" as telephone, say — that guess
+    must never reach the database. The code takes the source, not the
+    model's text.
+    """
+
+    reply = json.dumps(
+        {
+            "translations": [
+                {
+                    "source": "TEL 312",
+                    "kind": "code_only",
+                    "ar": "غرفة الهاتف 312",
+                    "he": "חדר טלפון 312",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    parsed = parse_translation_payload(reply)
+
+    assert parsed["TEL 312"] == {"ar": "TEL 312", "he": "TEL 312"}
+
+
+def test_an_untranslatable_label_still_produces_no_proposal(client):
+    reply = json.dumps(
+        {
+            "translations": [
+                {"source": "Cafe Aroma", "kind": "untranslatable", "ar": None, "he": None}
+            ]
+        }
+    )
+
+    parsed = parse_translation_payload(reply)
+    assert parsed["Cafe Aroma"] == {"ar": None, "he": None}
+
+    room = Room(
+        building_id=BUILDING_ID,
+        name_en="Cafe Aroma",
+        names={"en": "Cafe Aroma", "ar": None, "he": None},
+    )
+    assert build_proposal(room, parsed) is None
+
+
+def test_a_missing_or_unknown_kind_falls_back_to_the_previous_behavior(client):
+    """
+    `kind` is additive. A reply that predates it — or that carries a value
+    this code does not recognize — must behave exactly as this parser did
+    before the field existed, never as code_only.
+    """
+
+    reply = json.dumps(
+        {
+            "translations": [
+                {"source": "Storage", "ar": "مخزن", "he": "מחסן"},
+                {"source": "Lobby", "kind": "something_new", "ar": None, "he": None},
+                {"source": "Kitchen", "kind": "", "ar": "مطبخ", "he": "מטבח"},
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    parsed = parse_translation_payload(reply)
+
+    assert parsed["Storage"] == {"ar": "مخزن", "he": "מחסן"}
+    # Not preserved as "Lobby" — an unknown kind is not code_only.
+    assert parsed["Lobby"] == {"ar": None, "he": None}
+    assert parsed["Kitchen"]["ar"] == "مطبخ"
+
+
+def test_the_kind_value_is_matched_case_insensitively(client):
+    reply = json.dumps(
+        {"translations": [{"source": "TEL 312", "kind": " Code_Only ", "ar": None, "he": None}]}
+    )
+
+    assert parse_translation_payload(reply)["TEL 312"]["he"] == "TEL 312"
+
+
+# ── End to end, through the real endpoint ────────────────────────────────
+
+def test_apply_stores_translations_and_preserved_labels_side_by_side(
+    client, admin, monkeypatch
+):
+    run(_seed_graph())
+
+    women = run(
+        _make_room(
+            name_en="WOMEN RRW 315",
+            names={"en": "WOMEN RRW 315", "ar": None, "he": None},
+        )
+    )
+    tel = run(
+        _make_room(name_en="TEL 312", names={"en": "TEL 312", "ar": None, "he": None})
+    )
+    elec = run(
+        _make_room(name_en="ELEC310", names={"en": "ELEC310", "ar": None, "he": None})
+    )
+
+    # The stub returns what parse_translation_payload would have produced
+    # from a correctly-classified reply.
+    monkeypatch.setattr(
+        room_name_translation_service,
+        "call_translation_provider",
+        ProviderStub(
+            table={
+                "WOMEN RRW 315": {
+                    "ar": "دورة مياه النساء RRW 315",
+                    "he": "שירותי נשים RRW 315",
+                },
+                "TEL 312": {"ar": "TEL 312", "he": "TEL 312"},
+                "ELEC310": {"ar": "ELEC310", "he": "ELEC310"},
+            }
+        ),
+    )
+
+    body = apply_now(client, admin).json()
+    assert body["rooms_updated"] == 3
+
+    assert room_names(women.id) == {
+        "en": "WOMEN RRW 315",
+        "ar": "دورة مياه النساء RRW 315",
+        "he": "שירותי נשים RRW 315",
+    }
+    assert room_names(tel.id) == {"en": "TEL 312", "ar": "TEL 312", "he": "TEL 312"}
+    assert room_names(elec.id) == {"en": "ELEC310", "ar": "ELEC310", "he": "ELEC310"}
+
+
+def test_a_preserved_label_is_idempotent_and_never_re_proposed(
+    client, admin, monkeypatch
+):
+    run(_seed_graph())
+    tel = run(
+        _make_room(name_en="TEL 312", names={"en": "TEL 312", "ar": None, "he": None})
+    )
+
+    monkeypatch.setattr(
+        room_name_translation_service,
+        "call_translation_provider",
+        ProviderStub(table={"TEL 312": {"ar": "TEL 312", "he": "TEL 312"}}),
+    )
+
+    assert apply_now(client, admin).json()["rooms_updated"] == 1
+
+    after_first = snapshot()
+
+    second = apply_now(client, admin).json()
+    assert second["rooms_updated"] == 0
+    assert second["proposals"] == []
+
+    assert_untouched(after_first, snapshot())
+    assert room_names(tel.id)["ar"] == "TEL 312"
+
+
+def test_the_preview_shows_a_preserved_label_as_an_explicit_change(
+    client, admin, monkeypatch
+):
+    """
+    A preserved label is a real write, not a no-op, so the preview must
+    show it as one — an admin reading the proposals should be able to see
+    that TEL 312 is being stored verbatim rather than silently skipped.
+    """
+
+    run(_seed_graph())
+    tel = run(
+        _make_room(name_en="TEL 312", names={"en": "TEL 312", "ar": None, "he": None})
+    )
+
+    monkeypatch.setattr(
+        room_name_translation_service,
+        "call_translation_provider",
+        ProviderStub(table={"TEL 312": {"ar": "TEL 312", "he": "TEL 312"}}),
+    )
+
+    body = preview(client, admin).json()
+    proposal = next(p for p in body["proposals"] if p["room_id"] == str(tel.id))
+
+    assert sorted(proposal["will_change"]) == ["ar", "he"]
+    assert proposal["proposed"]["ar"] == "TEL 312"
+    assert proposal["proposed"]["he"] == "TEL 312"
+    # Still a preview: nothing was written.
+    assert room_names(tel.id)["ar"] is None
+
+
+# ── The rule lives in the prompt, not in a table ─────────────────────────
+
+def test_the_prompt_states_the_rule_without_listing_abbreviations(client):
+    """
+    The descriptive/code-only decision must be expressed as a RULE the
+    model applies to any label, never as a list of known abbreviations —
+    the next building's drawings will use different ones.
+    """
+
+    # What the MODEL actually receives — explanatory comments elsewhere in
+    # the module are not instructions and are deliberately out of scope.
+    prompt = room_name_translation_service.TRANSLATION_SYSTEM_PROMPT
+
+    # The rule is stated, as a rule.
+    assert KIND_DESCRIPTIVE in prompt
+    assert KIND_CODE_ONLY in prompt
+    assert KIND_UNTRANSLATABLE in prompt
+    assert "not a closed list" in prompt
+
+    # No abbreviation from a real drawing appears in the prompt at all —
+    # naming one would make it a lookup entry for that abbreviation and
+    # leave every other building's shorthand unhandled.
+    for abbreviation in ("TEL", "ELEC", "RRW", "RRM", "MDF", "AHU"):
+        assert not re.search(rf"\b{abbreviation}\b", prompt), abbreviation
+
+    # And no expansion of one, which is precisely the guess the model is
+    # being told not to make.
+    for expansion in ("telephone", "telecom", "telemetry"):
+        assert expansion not in prompt.lower(), expansion
+
+    # And no answers: no Arabic or Hebrew text anywhere in the service.
+    source = open(room_name_translation_service.__file__, encoding="utf-8").read()
+    assert not any("֐" <= ch <= "ۿ" for ch in source)
+
+
+def test_the_request_chunk_cannot_outgrow_the_output_budget(client):
+    """
+    Each reply entry now carries a source echo, two non-Latin
+    translations and a kind. A chunk that cannot fit in MAX_OUTPUT_TOKENS
+    gets cut off mid-JSON, which this code correctly refuses to parse —
+    but that turns a large estate into a hard failure instead of a slower
+    run, so the chunk size has to stay inside the budget.
+    """
+
+    worst_case_tokens_per_entry = 90
+
+    assert (
+        room_name_translation_service.MAX_NAMES_PER_REQUEST
+        * worst_case_tokens_per_entry
+        < room_name_translation_service.MAX_OUTPUT_TOKENS
+    ), "a full chunk could overflow the reply budget and be truncated"

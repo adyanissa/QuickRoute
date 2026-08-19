@@ -58,12 +58,40 @@ from services.semantic_analysis_service import (
 # it is the source text, never a target.
 TRANSLATABLE_LANGUAGES = ("ar", "he")
 
-# One request covers this many distinct names. 164 destinations is a single
-# chunk; the cap exists only so an unusually large estate still works.
-MAX_NAMES_PER_REQUEST = 200
+# How many distinct names one request covers. Each reply entry now carries
+# a source echo, two translations in non-Latin scripts and a `kind` — call
+# it ~90 output tokens — so this cap has to stay comfortably inside
+# MAX_OUTPUT_TOKENS below, or a large estate's reply is cut off mid-JSON.
+# Chunks are merged by call_translation_provider, so a lower number costs
+# an extra request, never a missed name.
+MAX_NAMES_PER_REQUEST = 60
 
 # Generous but bounded — the reply is a small JSON object, never prose.
 MAX_OUTPUT_TOKENS = 8000
+
+# The verdicts the model may return in an entry's `kind`.
+#
+# The distinction that matters is DESCRIPTIVE vs CODE_ONLY. A label that
+# states a function in words ("WOMEN RRW 315", "ELECTRICAL ROOM 210") is
+# descriptive: the words get translated and the code rides along unchanged.
+# A label that is only an architectural abbreviation ("TEL 312",
+# "ELEC310") states no meaning that can be translated without guessing —
+# expanding "TEL" to "telephone", or "ELEC" to "electrical", is exactly the
+# invention this backfill exists to avoid, and a plausible-looking wrong
+# expansion is worse than no translation because nobody would spot it.
+#
+# For those, the ORIGINAL LABEL is preserved verbatim as the value for
+# every missing language (see parse_translation_payload) — the model's own
+# ar/he output is discarded rather than trusted, so the stored string is
+# byte-identical to the source by construction.
+#
+# The model makes the descriptive/code-only judgement, because it is a
+# judgement about language; the code then acts on it deterministically.
+# That is deliberately NOT a lookup table of known abbreviations — a fixed
+# list would be wrong for the next building's drawings.
+KIND_DESCRIPTIVE = "descriptive"
+KIND_CODE_ONLY = "code_only"
+KIND_UNTRANSLATABLE = "untranslatable"
 
 
 TRANSLATION_SYSTEM_PROMPT = """\
@@ -73,39 +101,65 @@ into Arabic and Hebrew.
 
 Return ONLY a JSON object, no prose and no Markdown fence:
 
-{"translations": [{"source": "<exact input string>", "ar": "<Arabic>", "he": "<Hebrew>"}]}
+{"translations": [{"source": "<exact input string>", "kind": "<descriptive|code_only|untranslatable>", "ar": "<Arabic>", "he": "<Hebrew>"}]}
 
 RULES
 
 1. `source` must be the input string reproduced EXACTLY, character for
    character. It is the key used to match your answer back to a record.
 
-2. Translate GENERIC, FUNCTIONAL space names naturally, the way a sign in a
-   real building in that language would read. Examples of the KIND of name
-   this applies to (this is not a closed list — translate any functional
-   space name you are given): electrical room, control room, storage,
-   office, restroom, shower, laboratory, reception, meeting room, stairs,
-   elevator, corridor, kitchen, waiting area, server room, workshop.
+2. FIRST decide `kind` for each name. This decision comes before any
+   translating, and it is the most important thing you do:
 
-3. PRESERVE room numbers, codes and identifiers EXACTLY as they appear —
-   digits, letters and separators unchanged, in the same order relative to
-   the translated words. "Meeting Room B" keeps its "B". "Lab 204" keeps
-   "204". Do not convert digits to another numeral system.
+   "descriptive" — the label STATES its function in ordinary words, even
+     if it also carries a code or a number. The presence of a code does
+     not make a label non-descriptive: if a reader who knows no
+     abbreviations could still tell what the space is FROM THE WORDS, it
+     is descriptive.
 
-4. Do NOT translate a PROPER NAME or a BUSINESS/BRAND name. If the name
-   identifies a specific company, shop, person, department brand or
-   institution rather than a function, return null for that language. Never
-   substitute a different business identity, and never guess what a brand
-   "means".
+   "code_only" — the label is essentially just an architectural
+     abbreviation, code or number, with no ordinary word stating what the
+     space is. You may have a good guess at what the abbreviation stands
+     for. That guess is NOT sufficient — if the meaning is not written
+     out in the label itself, the label is code_only.
 
-5. If you are UNSURE what a name refers to, or it is an abbreviation you
-   cannot confidently expand, return null for that language. A null is
-   always safe: the app keeps showing the English name. An invented or
-   approximate translation is not safe.
+   "untranslatable" — a proper name or a business/brand name (see rule 6).
 
-6. Never return an empty string. Use null.
+3. For "descriptive": translate the DESCRIPTIVE WORDS naturally, the way a
+   sign in a real building in that language would read, and carry every
+   code, number and identifier through UNCHANGED — same characters, same
+   order relative to the translated words. A label that is a description
+   plus a code becomes the translated description plus that same code,
+   still in Latin characters and Western digits. Never translate,
+   transliterate, expand or renumber a code. Never drop one.
 
-7. Return one entry per input name, and no entries for names you were not
+   The kind of name this applies to (not a closed list — translate any
+   label whose words state a function): electrical room, control room,
+   storage, office, restroom, men's/women's facilities, shower,
+   laboratory, reception, meeting room, stairs, elevator, corridor,
+   kitchen, waiting area, server room, workshop.
+
+4. For "code_only": set both `ar` and `he` to null. Do NOT attempt a
+   translation, and do NOT expand the abbreviation — not even
+   parenthetically or as a guess. The application preserves the original
+   label itself for these; anything you write would be discarded, and a
+   plausible-but-wrong expansion is the one outcome nobody would catch.
+
+5. Do not convert digits to another numeral system, in any kind.
+
+6. For "untranslatable": a name identifying a specific company, shop,
+   person, department brand or institution rather than a function. Set
+   both `ar` and `he` to null. Never substitute a different business
+   identity, and never guess what a brand "means".
+
+7. If you are genuinely UNSURE which kind a label is, choose the more
+   conservative one — "code_only" over "descriptive", and null over a
+   guessed translation. Preserving the English label is always safe; an
+   invented or approximate translation is not.
+
+8. Never return an empty string. Use null.
+
+9. Return one entry per input name, and no entries for names you were not
    given.
 """
 
@@ -197,6 +251,20 @@ def parse_translation_payload(raw_text: str) -> Dict[str, Dict[str, Optional[str
       * a value that is not a non-empty string becomes None, which the
         caller treats as "no proposal", never as "blank it out";
       * unknown keys are ignored.
+
+    This is also where kind=code_only is honoured. For those entries the
+    model's own ar/he output is DISCARDED and replaced with the source
+    string itself, so an architectural abbreviation ends up stored exactly
+    as it was drawn rather than as somebody's expansion of it. Doing the
+    substitution here — from `source`, in code — rather than asking the
+    model to echo the label back means the preserved value is
+    byte-identical to the input by construction; the model cannot
+    accidentally reformat, transliterate or "tidy" it.
+
+    An entry with a missing or unrecognized `kind` is treated exactly as
+    this function treated every entry before `kind` existed: use ar/he if
+    they are usable strings, otherwise None. So an older or partial reply
+    degrades to the previous safe behaviour instead of failing.
     """
 
     cleaned = _strip_outer_markdown_fence(raw_text or "")
@@ -229,6 +297,15 @@ def parse_translation_payload(raw_text: str) -> Dict[str, Dict[str, Optional[str
 
         source = _clean(entry.get("source"))
         if not source:
+            continue
+
+        kind = _clean(entry.get("kind"))
+
+        if kind and kind.strip().lower() == KIND_CODE_ONLY:
+            # Preserve the label exactly. `source` is used rather than
+            # anything the model wrote, so this cannot drift from the
+            # original by even a character.
+            result[source] = {lang: source for lang in TRANSLATABLE_LANGUAGES}
             continue
 
         result[source] = {
