@@ -3,6 +3,7 @@ import AdminScreenHeader from '../components/dashboard/AdminScreenHeader';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useLang } from '../context/LangContext';
 import { useAdmin } from '../context/AdminContext';
+import { getLocalizedText } from '../utils/localization';
 import { getMaps, buildMapAssetUrl, suggestDestinationName } from '../api/mapsApi';
 import { getRoutePoints } from '../api/routePointsApi';
 import { getRouteEdges } from '../api/routeEdgesApi';
@@ -1089,7 +1090,21 @@ const AdminRoomsScreen = () => {
                     <div key={r.id} className="adm-list-item">
                       <div className="adm-list-item-row">
                         <div className="adm-list-item-info">
-                          <div className="adm-list-item-name">{r.name}</div>
+                          {/* DISPLAY ONLY. `r.name` is this admin
+                              screen's EDITABLE English value — it is what
+                              openEdit() loads into the "Room Name (EN)"
+                              input and what AdminContext's
+                              roomToApiPayload sends as name_en/names.en.
+                              So it is deliberately left untouched here and
+                              only the rendered string is resolved for the
+                              current UI language, through the same shared
+                              helper (and the same fallback chain) that
+                              DestinationSelectionScreen already uses. A
+                              room with no ar/he value keeps showing
+                              exactly the English name it shows today. */}
+                          <div className="adm-list-item-name">
+                            {getLocalizedText(r.names, lang, r.name)}
+                          </div>
                           <div className="adm-list-item-meta">
                             <span className={`adm-tag ${GROUP_COLOR[typeToGroupKey(r.type)] || 'adm-tag-blue'}`}>
                               {resolveDestinationTypeLabel(r.type, t.typeLabels)}
