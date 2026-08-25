@@ -2,7 +2,10 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
+import { useAuth } from '../context/AuthContext';
 import { loginUser } from '../api/authApi';
+import { resolvePostLoginRoute } from '../utils/roleRouting';
+import { ROUTES } from '../config/routes';
 import '../styles/LoginScreen.css';
 
 const UI = {
@@ -80,6 +83,7 @@ const BackArrowRTL = () => (
 const LoginScreen = () => {
   const { lang } = useLang();
   const navigate = useNavigate();
+  const { login } = useAuth();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -107,9 +111,10 @@ const LoginScreen = () => {
         password: password,
       });
 
-      localStorage.setItem('quickroute_admin', JSON.stringify(data));
+      const user = data.user;
 
-      navigate('/screen/05');
+      login(user, data.access_token);
+      navigate(resolvePostLoginRoute(user));
     } catch (err) {
       setError(err.message || t.failed);
     } finally {
@@ -124,7 +129,7 @@ const LoginScreen = () => {
         <div className={`s02-topbar${isRTL ? ' s02-topbar-rtl' : ''}`}>
           <button
             className={`s02-back-btn${isRTL ? ' s02-back-btn-rtl' : ''}`}
-            onClick={() => navigate('/screen/01')}
+            onClick={() => navigate(ROUTES.start)}
             aria-label={t.back}
             type="button"
           >

@@ -1,0 +1,223 @@
+name: Deploy QuickRoute to AWS
+
+on:
+  push:
+    branches:
+      - aws-deploy
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - ".github/workflows/deploy-aws.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: quickroute-production-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-central-1
+  AWS_ACCOUNT_ID: "538379555357"
+
+  ECR_REPOSITORY: quickroute-backend
+  ECS_CLUSTER: default
+  ECS_SERVICE_NAME: quickroute-backend
+  ECS_SERVICE_ARN: arn:aws:ecs:eu-central-1:538379555357:service/default/quickroute-backend
+
+  S3_BUCKET: quickroute-frontend-538379555357-eu-central-1
+  CLOUDFRONT_DISTRIBUTION_ID: EI31GFO6TGB42
+
+  VITE_API_BASE_URL: https://qu-463784aef4d94616af9af3c721621480.ecs.eu-central-1.on.aws
+
+jobs:
+  deploy:
+    name: Deploy production
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: arn:aws:iam::538379555357:role/QuickRouteGitHubDeployRole
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ============================================================
+      # BACKEND
+      # ============================================================
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2.1.6
+
+      - name: Build and push backend image
+        shell: bash
+        run: |
+          IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}:${GITHUB_SHA}"
+
+          echo "Building backend image:"
+          echo "$IMAGE_URI"
+
+          docker build \
+            --platform linux/amd64 \
+            -t "$IMAGE_URI" \
+            ./backend
+
+          docker push "$IMAGE_URI"
+
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Deploy backend to ECS Express
+        shell: bash
+        run: |
+          echo "Deploying:"
+          echo "$IMAGE_URI"
+
+          aws ecs update-express-gateway-service \
+            --service-arn "$ECS_SERVICE_ARN" \
+            --primary-container "image=$IMAGE_URI" \
+            --region "$AWS_REGION" \
+            --no-cli-pager
+
+      - name: Wait for backend deployment
+        shell: bash
+        run: |
+          echo "Waiting for ECS deployment to become stable..."
+
+          for attempt in {1..60}; do
+            ACTIVE_IMAGES=$(aws ecs describe-express-gateway-service \
+              --service-arn "$ECS_SERVICE_ARN" \
+              --region "$AWS_REGION" \
+              --query "service.activeConfigurations[].primaryContainer.image" \
+              --output text \
+              --no-cli-pager)
+
+            RUNNING=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$ECS_SERVICE_NAME" \
+              --region "$AWS_REGION" \
+              --query "services[0].runningCount" \
+              --output text \
+              --no-cli-pager)
+
+            DESIRED=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$ECS_SERVICE_NAME" \
+              --region "$AWS_REGION" \
+              --query "services[0].desiredCount" \
+              --output text \
+              --no-cli-pager)
+
+            ROLLOUT=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$ECS_SERVICE_NAME" \
+              --region "$AWS_REGION" \
+              --query "services[0].deployments[?status=='PRIMARY'] | [0].rolloutState" \
+              --output text \
+              --no-cli-pager)
+
+            echo "Attempt $attempt/60"
+            echo "Running: $RUNNING / Desired: $DESIRED"
+            echo "Rollout: $ROLLOUT"
+            echo "Active image(s): $ACTIVE_IMAGES"
+
+            if [[ "$ACTIVE_IMAGES" == *"$IMAGE_URI"* ]] && \
+               [[ "$RUNNING" == "$DESIRED" ]] && \
+               [[ "$ROLLOUT" == "COMPLETED" ]]; then
+              echo "Backend deployment completed successfully."
+              exit 0
+            fi
+
+            sleep 30
+          done
+
+          echo "::error::Backend deployment did not complete within 30 minutes."
+
+          aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE_NAME" \
+            --region "$AWS_REGION" \
+            --output json \
+            --no-cli-pager
+
+          exit 1
+
+      - name: Verify backend
+        shell: bash
+        run: |
+          curl --fail --silent --show-error \
+            "https://qu-463784aef4d94616af9af3c721621480.ecs.eu-central-1.on.aws/" \
+            > /dev/null
+
+          echo "Backend health check passed."
+
+      # ============================================================
+      # FRONTEND
+      # ============================================================
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          VITE_API_BASE_URL: ${{ env.VITE_API_BASE_URL }}
+        run: npm run build
+
+      - name: Upload frontend to S3
+        shell: bash
+        run: |
+          aws s3 sync \
+            ./frontend/dist \
+            "s3://${S3_BUCKET}" \
+            --delete \
+            --region "$AWS_REGION"
+
+      - name: Invalidate CloudFront cache
+        shell: bash
+        run: |
+          INVALIDATION_ID=$(aws cloudfront create-invalidation \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --paths "/*" \
+            --query "Invalidation.Id" \
+            --output text \
+            --no-cli-pager)
+
+          echo "CloudFront invalidation: $INVALIDATION_ID"
+
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" \
+            --id "$INVALIDATION_ID"
+
+          echo "CloudFront invalidation completed."
+
+      - name: Verify frontend
+        shell: bash
+        run: |
+          curl --fail --silent --show-error \
+            "https://dy18iemulrjcj.cloudfront.net/" \
+            > /dev/null
+
+          echo "Frontend health check passed."
+
+      - name: Deployment completed
+        run: |
+          echo "QuickRoute deployment completed successfully."
+          echo "Commit: $GITHUB_SHA"
+          echo "Frontend: https://dy18iemulrjcj.cloudfront.net"

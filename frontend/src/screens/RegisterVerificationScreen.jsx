@@ -3,7 +3,23 @@ import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
 import { validateInvitationCode } from '../api/invitationCodesApi';
+import { ROUTES } from '../config/routes';
 import '../styles/RegisterVerificationScreen.css';
+
+const ROLE_LABELS = {
+  en: {
+    super_admin: 'Super Admin', global_manager: 'Global Manager',
+    building_manager: 'Building Manager', regular_user: 'Regular User',
+  },
+  ar: {
+    super_admin: 'مشرف عام', global_manager: 'مدير عام',
+    building_manager: 'مدير مبنى', regular_user: 'مستخدم عادي',
+  },
+  he: {
+    super_admin: 'מנהל-על', global_manager: 'מנהל גלובלי',
+    building_manager: 'מנהל מבנה', regular_user: 'משתמש רגיל',
+  },
+};
 
 const UI = {
   en: {
@@ -14,6 +30,16 @@ const UI = {
     loading: 'Checking code...',
     required: 'Please enter the identification code',
     invalid: 'Invalid or used identification code',
+    previewTitle: 'Invitation Details',
+    role: 'Role',
+    buildings: 'Buildings',
+    allBuildings: 'All buildings',
+    noBuildings: 'None',
+    email: 'Restricted to',
+    expires: 'Expires',
+    never: 'No expiration',
+    continueToAccount: 'Continue to Account Creation',
+    editCode: 'Use a different code',
   },
   ar: {
     title: 'إنشاء حساب',
@@ -23,6 +49,16 @@ const UI = {
     loading: 'جاري فحص الرمز...',
     required: 'أدخلي رمز التعريف',
     invalid: 'رمز التعريف غير صحيح أو مستخدم',
+    previewTitle: 'تفاصيل الدعوة',
+    role: 'الدور',
+    buildings: 'المباني',
+    allBuildings: 'كل المباني',
+    noBuildings: 'لا شيء',
+    email: 'مقصور على',
+    expires: 'ينتهي',
+    never: 'بدون انتهاء',
+    continueToAccount: 'متابعة لإنشاء الحساب',
+    editCode: 'استخدم رمزًا آخر',
   },
   he: {
     title: 'הרשמה',
@@ -32,8 +68,21 @@ const UI = {
     loading: 'בודק קוד...',
     required: 'יש להזין קוד מזהה',
     invalid: 'קוד מזהה לא תקין או כבר בשימוש',
+    previewTitle: 'פרטי ההזמנה',
+    role: 'תפקיד',
+    buildings: 'מבנים',
+    allBuildings: 'כל המבנים',
+    noBuildings: 'ללא',
+    email: 'מוגבל ל',
+    expires: 'פג תוקף',
+    never: 'ללא תפוגה',
+    continueToAccount: 'המשך ליצירת חשבון',
+    editCode: 'השתמש בקוד אחר',
   },
 };
+
+const INVITATION_CODE_KEY = 'quickroute_invitation_code';
+const INVITATION_PREVIEW_KEY = 'quickroute_invitation_preview';
 
 const BarcodeIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -78,9 +127,11 @@ const RegisterVerificationScreen = () => {
   const [barcode, setBarcode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [preview, setPreview] = useState(null);
 
   const isRTL = lang === 'ar' || lang === 'he';
   const t = UI[lang];
+  const roleLabels = ROLE_LABELS[lang];
 
   const handleContinue = async () => {
     setError('');
@@ -95,16 +146,31 @@ const RegisterVerificationScreen = () => {
     try {
       setLoading(true);
 
-      await validateInvitationCode(code);
+      const result = await validateInvitationCode(code);
 
-      localStorage.setItem('quickroute_invitation_code', code);
+      localStorage.setItem(INVITATION_CODE_KEY, code);
+      localStorage.setItem(INVITATION_PREVIEW_KEY, JSON.stringify(result));
 
-      navigate('/screen/04');
+      // Show a safe summary (role, buildings, email restriction,
+      // expiration) before moving on to account creation, so the invited
+      // person can confirm what they're signing up for.
+      setPreview(result);
     } catch (err) {
       setError(err.message || t.invalid);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleEditCode = () => {
+    setPreview(null);
+    setError('');
+    localStorage.removeItem(INVITATION_CODE_KEY);
+    localStorage.removeItem(INVITATION_PREVIEW_KEY);
+  };
+
+  const handleContinueToAccount = () => {
+    navigate(ROUTES.signupAccount);
   };
 
   return (
@@ -114,7 +180,7 @@ const RegisterVerificationScreen = () => {
         <div className={`s03-topbar${isRTL ? ' s03-topbar-rtl' : ''}`}>
           <button
             className={`s03-back-btn${isRTL ? ' s03-back-btn-rtl' : ''}`}
-            onClick={() => navigate('/screen/01')}
+            onClick={() => navigate(ROUTES.start)}
             aria-label={t.back}
             type="button"
           >
@@ -136,45 +202,95 @@ const RegisterVerificationScreen = () => {
           <h1 className="s03-title">{t.title}</h1>
         </div>
 
-        <div className="s03-form">
-          <div className="s03-input-wrap">
-            <span className={`s03-input-icon${isRTL ? ' s03-input-icon-rtl' : ''}`}>
-              <BarcodeIcon />
-            </span>
-            <input
-              className={`s03-input${isRTL ? ' s03-input-rtl' : ''}`}
-              type="text"
-              placeholder={t.placeholder}
-              value={barcode}
-              onChange={(e) => setBarcode(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleContinue();
-                }
+        {preview ? (
+          <div className="s03-form">
+            <div style={{
+              borderRadius: 14, padding: 16, background: 'rgba(74,122,200,0.06)',
+              border: '1px solid rgba(74,122,200,0.18)', textAlign: isRTL ? 'right' : 'left',
+            }}>
+              <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 10 }}>{t.previewTitle}</div>
+              <div style={{ fontSize: 13, lineHeight: 1.9 }}>
+                <div><strong>{t.role}:</strong> {roleLabels[preview.role] || preview.role}</div>
+                <div>
+                  <strong>{t.buildings}:</strong>{' '}
+                  {preview.all_buildings
+                    ? t.allBuildings
+                    : (preview.buildings || []).map((b) => b.name).join(', ') || t.noBuildings}
+                </div>
+                {preview.intended_email && (
+                  <div><strong>{t.email}:</strong> {preview.intended_email}</div>
+                )}
+                <div>
+                  <strong>{t.expires}:</strong>{' '}
+                  {preview.expires_at ? new Date(preview.expires_at).toLocaleString() : t.never}
+                </div>
+              </div>
+            </div>
+
+            <button
+              className="s03-continue-btn"
+              aria-label={t.continueToAccount}
+              onClick={handleContinueToAccount}
+              type="button"
+              style={{ marginTop: 16 }}
+            >
+              {isRTL ? <ArrowLeftIcon /> : null}
+              <span>{t.continueToAccount}</span>
+              {isRTL ? null : <ArrowRightIcon />}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleEditCode}
+              style={{
+                display: 'block', margin: '12px auto 0', background: 'none', border: 'none',
+                color: '#5a7aaa', fontSize: 13, textDecoration: 'underline', cursor: 'pointer',
               }}
-              dir={isRTL ? 'rtl' : 'ltr'}
-              aria-label="Identification code"
-            />
+            >
+              {t.editCode}
+            </button>
           </div>
+        ) : (
+          <div className="s03-form">
+            <div className="s03-input-wrap">
+              <span className={`s03-input-icon${isRTL ? ' s03-input-icon-rtl' : ''}`}>
+                <BarcodeIcon />
+              </span>
+              <input
+                className={`s03-input${isRTL ? ' s03-input-rtl' : ''}`}
+                type="text"
+                placeholder={t.placeholder}
+                value={barcode}
+                onChange={(e) => setBarcode(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleContinue();
+                  }
+                }}
+                dir={isRTL ? 'rtl' : 'ltr'}
+                aria-label="Identification code"
+              />
+            </div>
 
-          {error && (
-            <p style={{ color: '#b42318', textAlign: 'center', marginTop: '8px' }}>
-              {error}
-            </p>
-          )}
+            {error && (
+              <p style={{ color: '#b42318', textAlign: 'center', marginTop: '8px' }}>
+                {error}
+              </p>
+            )}
 
-          <button
-            className="s03-continue-btn"
-            aria-label={t.continue}
-            onClick={handleContinue}
-            type="button"
-            disabled={loading}
-          >
-            {isRTL ? <ArrowLeftIcon /> : null}
-            <span>{loading ? t.loading : t.continue}</span>
-            {isRTL ? null : <ArrowRightIcon />}
-          </button>
-        </div>
+            <button
+              className="s03-continue-btn"
+              aria-label={t.continue}
+              onClick={handleContinue}
+              type="button"
+              disabled={loading}
+            >
+              {isRTL ? <ArrowLeftIcon /> : null}
+              <span>{loading ? t.loading : t.continue}</span>
+              {isRTL ? null : <ArrowRightIcon />}
+            </button>
+          </div>
+        )}
 
       </div>
     </div>

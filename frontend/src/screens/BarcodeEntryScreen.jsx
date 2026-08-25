@@ -1,8 +1,18 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
+import { resolveLocationCode } from '../api/locationCodesApi';
+import { getBuildingById } from '../api/buildingsApi';
+import { buildingToViewModel } from '../utils/viewModels';
+import { LOCATION_CODE_QUERY_PARAM } from '../config/publicUrl';
+import { ROUTES } from '../config/routes';
 import '../styles/BarcodeEntryScreen.css';
+
+// Where the resolved starting location (from a scanned/typed code) is kept
+// so IndoorNavigationScreen can pick it up later instead of always
+// defaulting to the map's first entrance point.
+const START_LOCATION_KEY = 'quickroute_start_location';
 
 const LANGUAGES = [
   { code: 'ar', label: 'عربي' },
@@ -19,6 +29,10 @@ const UI = {
     or:         'OR',
     login:      'Login',
     signup:     'Sign Up',
+    checking:   'Checking code...',
+    required:   'Please enter a barcode number',
+    invalid:    'Invalid or inactive barcode. Please try again.',
+    noBuilding: 'This location code is not linked to a valid building.',
   },
   ar: {
     welcome:    'أهلاً وسهلاً',
@@ -28,6 +42,10 @@ const UI = {
     or:         'أو',
     login:      'تسجيل الدخول',
     signup:     'إنشاء حساب',
+    checking:   'جاري التحقق من الرمز...',
+    required:   'الرجاء إدخال رقم الباركود',
+    invalid:    'رمز الباركود غير صحيح أو غير مفعّل. حاول مرة أخرى.',
+    noBuilding: 'رمز الموقع هذا غير مرتبط بمبنى صالح.',
   },
   he: {
     welcome:    'ברוכים הבאים',
@@ -37,6 +55,10 @@ const UI = {
     or:         'או',
     login:      'התחברות',
     signup:     'הרשמה',
+    checking:   'בודק קוד...',
+    required:   'יש להזין מספר ברקוד',
+    invalid:    'ברקוד לא תקין או לא פעיל. נסה שוב.',
+    noBuilding: 'קוד המיקום הזה אינו מקושר לבניין תקף.',
   },
 };
 
@@ -79,10 +101,130 @@ const ArrowLeftIcon = () => (
 const BarcodeEntryScreen = () => {
   const { lang, setLang } = useLang();
   const navigate           = useNavigate();
-  const [barcode, setBarcode] = useState('');
+  const [searchParams] = useSearchParams();
+
+  // A scanned QuickRoute QR arrives as {PUBLIC_FRONTEND_URL}/?locationCode=CODE
+  // and is forwarded here by App.jsx's root redirect. It is read as a plain
+  // parameter — there is no separate scan route and no second resolution
+  // path; it feeds the identical function manual entry uses.
+  const urlCode = (searchParams.get(LOCATION_CODE_QUERY_PARAM) ?? '').trim();
+
+  // Prefilled from the URL on the very first render (not written from an
+  // effect), so the field shows the scanned code while it is resolving and
+  // still holds it if resolution fails and the user wants to retry.
+  const [barcode, setBarcode] = useState(urlCode);
+  const [isResolving, setIsResolving] = useState(false);
+  const [error, setError] = useState('');
 
   const isRTL = lang === 'ar' || lang === 'he';
   const t     = UI[lang];
+
+  /**
+   * The ONE place a LocationCode is turned into a journey.
+   *
+   * Both entry paths call this and nothing else:
+   *   A. manual typing  -> handleGo() below
+   *   B. ?locationCode= -> the mount effect below
+   *
+   * so a scanned code and a typed code cannot diverge — same resolve call,
+   * same validation, same error states, same persisted record, same
+   * navigation target.
+   *
+   * What it establishes is the user's START position: the resolved
+   * RoutePoint is written to quickroute_start_location and nothing else.
+   * The DESTINATION is still chosen by the user afterwards on the
+   * Destination Selection screen, exactly as before — a scanned room never
+   * becomes the destination.
+   */
+  const resolveAndContinue = useCallback(async (rawCode) => {
+    const code = (rawCode ?? '').trim();
+
+    if (!code) {
+      setError(t.required);
+      return;
+    }
+
+    setError('');
+    setIsResolving(true);
+
+    try {
+      // Resolve the code to an exact start RoutePoint. The resolve endpoint
+      // itself re-validates that the point/map still exist and that the
+      // code is active, so a successful response is safe to trust.
+      const resolved = await resolveLocationCode(code);
+
+      // A Location Code with no building relationship is a distinct,
+      // honest error state — never silently fall back to a
+      // frontend-guessed building (QuickRoute UX Final Cleanup, Part 3
+      // rule 7).
+      if (!resolved?.building_id) {
+        setError(t.noBuilding);
+        return;
+      }
+
+      const buildingRaw = await getBuildingById(resolved.building_id);
+      const building = buildingToViewModel(buildingRaw);
+
+      // Persist the full resolved starting location — including the
+      // map group, floor and human-readable label the backend already
+      // resolves fresh on every call — so IndoorNavigationScreen and the
+      // Destination Selection header can show real "starting location"
+      // and "current floor" values instead of always defaulting to a
+      // generic entrance point (Part 3 / Part 2.B).
+      localStorage.setItem(
+        START_LOCATION_KEY,
+        JSON.stringify({
+          routePointId: resolved.route_point_id,
+          mapId: resolved.map_id,
+          mapGroupId: resolved.map_group_id ?? null,
+          floor: resolved.floor ?? null,
+          buildingId: resolved.building_id,
+          code: resolved.code,
+          label: resolved.label ?? null,
+        }),
+      );
+
+      navigate(ROUTES.destinations, {
+        state: {
+          building,
+          startLabel: resolved.label ?? null,
+          startFloor: resolved.floor ?? null,
+        },
+      });
+    } catch (err) {
+      console.error('Failed to resolve location code:', err);
+      // An unknown, inactive or malformed code from a URL lands on exactly
+      // the same safe invalid-code message a mistyped code has always
+      // produced — never a crash, a blank screen or a guessed building.
+      setError(t.invalid);
+    } finally {
+      setIsResolving(false);
+    }
+  }, [navigate, t]);
+
+  const handleGo = () => resolveAndContinue(barcode);
+
+  // Auto-resolve a code that arrived in the URL.
+  //
+  // The ref guard is keyed by the code itself, so React 19 development
+  // StrictMode — which mounts, unmounts and re-mounts every component,
+  // running effects twice — cannot resolve or navigate twice. Refs survive
+  // that double invocation; a boolean local would not.
+  //
+  // The call is deferred by a microtask so this effect writes no state
+  // synchronously (react-hooks/set-state-in-effect).
+  const autoResolvedCodeRef = useRef(null);
+
+  useEffect(() => {
+    if (!urlCode) return;
+    if (autoResolvedCodeRef.current === urlCode) return;
+
+    autoResolvedCodeRef.current = urlCode;
+
+    Promise.resolve().then(() => {
+      resolveAndContinue(urlCode);
+    });
+  }, [urlCode, resolveAndContinue]);
 
   return (
     <div className="layout-wrapper">
@@ -132,17 +274,26 @@ const BarcodeEntryScreen = () => {
               inputMode="numeric"
               placeholder={t.placeholder}
               value={barcode}
-              onChange={(e) => setBarcode(e.target.value)}
+              onChange={(e) => { setBarcode(e.target.value); if (error) setError(''); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !isResolving) handleGo(); }}
               dir={isRTL ? 'rtl' : 'ltr'}
               aria-label="Barcode number"
+              disabled={isResolving}
             />
           </div>
 
-          <button className="s01-go-btn" aria-label={t.go} onClick={() => navigate('/screen/16')}>
+          <button
+            className="s01-go-btn"
+            aria-label={t.go}
+            onClick={handleGo}
+            disabled={isResolving}
+          >
             {isRTL ? <ArrowLeftIcon /> : null}
-            <span>{t.go}</span>
+            <span>{isResolving ? t.checking : t.go}</span>
             {isRTL ? null : <ArrowRightIcon />}
           </button>
+
+          {error && <p className="s01-barcode-error">{error}</p>}
         </div>
 
         {/* ── Auth ── */}
@@ -153,8 +304,8 @@ const BarcodeEntryScreen = () => {
             <span />
           </div>
           <div className="s01-auth-row">
-            <button className="s01-auth-btn s01-login-btn" onClick={() => navigate('/screen/02')}>{t.login}</button>
-            <button className="s01-auth-btn s01-signup-btn" onClick={() => navigate('/screen/03')}>{t.signup}</button>
+            <button className="s01-auth-btn s01-login-btn" onClick={() => navigate(ROUTES.login)}>{t.login}</button>
+            <button className="s01-auth-btn s01-signup-btn" onClick={() => navigate(ROUTES.signup)}>{t.signup}</button>
           </div>
         </div>
 

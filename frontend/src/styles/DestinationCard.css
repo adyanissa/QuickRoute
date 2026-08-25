@@ -46,6 +46,35 @@
   color: #4a7ac8 !important;
 }
 
+/* Disabled state — an unconnected destination is shown, never hidden, but
+   not clickable (QuickRoute UX Final Cleanup, Part 5). No admin-style
+   "NO GRAPH CONNECTION" badge — just a muted card and a plain-language
+   note in place of the description/chevron. */
+.dcard-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.dcard-disabled:hover {
+  background: rgba(255, 255, 255, 0.90);
+  border-color: rgba(208, 228, 247, 0.75);
+  transform: none;
+  box-shadow:
+    0 2px 12px rgba(42, 82, 152, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.80);
+}
+
+.dcard-disabled-note {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #a8b8cc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
 /* ── Icon box ─────────────────────────────────────────────────────────────── */
 
 .dcard-icon-box {

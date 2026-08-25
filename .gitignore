@@ -29,6 +29,9 @@ venv/
 # Environment files
 .env
 
+# Uploaded and generated maps
+backend/uploads/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -39,3 +42,8 @@ venv/
 *.njsproj
 *.sln
 *.sw?
+# Temporary local verification files
+frontend/_tmp*.mjs
+frontend/_*synchk*.mjs
+frontend/eslint.config.temp.js
+frontend/deleteConnectionTestOutput.txt

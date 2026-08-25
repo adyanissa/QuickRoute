@@ -1,42 +1,78 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QuickRouteLogo from '../components/QuickRouteLogo';
 import { useLang } from '../context/LangContext';
+import { useAuth } from '../context/AuthContext';
+import { signupUser } from '../api/authApi';
+import {
+  buildSignupPayload,
+  shouldLockEmailField,
+  getInitialEmail,
+} from '../utils/invitationCodeFormHelpers';
+import { resolvePostLoginRoute } from '../utils/roleRouting';
+import { ROUTES } from '../config/routes';
 import '../styles/AccountCreationScreen.css';
+
+const INVITATION_CODE_KEY = 'quickroute_invitation_code';
+const INVITATION_PREVIEW_KEY = 'quickroute_invitation_preview';
 
 const UI = {
   en: {
     title:           'Create Account',
-    groupUser:       'Username',
+    groupUser:       'Your Details',
     groupPass:       'Password',
-    username:        'New username',
-    confirmUsername: 'Confirm username',
+    fullName:        'Full name',
+    email:           'Email address',
     password:        'New password',
     confirmPassword: 'Confirm password',
     finish:          'Finish',
     back:            'Back',
+    creating:        'Creating account...',
+    success:         'Account created — signing you in...',
+    missingCode:     'Your invitation code was lost. Please verify it again.',
+    required:        'Please fill in every field',
+    mismatch:        'Passwords do not match',
+    tooShort:        'Password must be at least 6 characters',
+    failed:          'Could not create the account. Please try again.',
+    emailLockedHint: 'This invitation code is restricted to this email address',
   },
   ar: {
     title:           'إنشاء حساب',
-    groupUser:       'اسم المستخدم',
+    groupUser:       'بياناتك',
     groupPass:       'كلمة المرور',
-    username:        'اسم مستخدم جديد',
-    confirmUsername: 'تأكيد اسم المستخدم',
+    fullName:        'الاسم الكامل',
+    email:           'البريد الإلكتروني',
     password:        'كلمة مرور جديدة',
     confirmPassword: 'تأكيد كلمة المرور',
     finish:          'إنهاء',
     back:            'رجوع',
+    creating:        'جاري إنشاء الحساب...',
+    success:         'تم إنشاء الحساب — جاري تسجيل الدخول...',
+    missingCode:     'فُقد رمز الدعوة الخاص بك. الرجاء التحقق منه مرة أخرى.',
+    required:        'الرجاء تعبئة جميع الحقول',
+    mismatch:        'كلمتا المرور غير متطابقتين',
+    tooShort:        'يجب أن تتكون كلمة المرور من 6 أحرف على الأقل',
+    failed:          'تعذر إنشاء الحساب. حاول مرة أخرى.',
+    emailLockedHint: 'رمز الدعوة هذا مقصور على هذا البريد الإلكتروني',
   },
   he: {
     title:           'יצירת חשבון',
-    groupUser:       'שם משתמש',
+    groupUser:       'הפרטים שלך',
     groupPass:       'סיסמה',
-    username:        'שם משתמש חדש',
-    confirmUsername: 'אימות שם משתמש',
+    fullName:        'שם מלא',
+    email:           'כתובת אימייל',
     password:        'סיסמה חדשה',
     confirmPassword: 'אימות סיסמה',
     finish:          'סיום',
     back:            'חזרה',
+    creating:        'יוצר חשבון...',
+    success:         'החשבון נוצר — מתחבר...',
+    missingCode:     'קוד ההזמנה שלך אבד. יש לאמת אותו שוב.',
+    required:        'יש למלא את כל השדות',
+    mismatch:        'הסיסמאות אינן תואמות',
+    tooShort:        'הסיסמה חייבת להכיל לפחות 6 תווים',
+    failed:          'לא ניתן היה ליצור את החשבון. נסה שוב.',
+    emailLockedHint: 'קוד הזמנה זה מוגבל לכתובת אימייל זו',
   },
 };
 
@@ -90,15 +126,97 @@ const BackArrowRTL = () => (
 const AccountCreationScreen = () => {
   const { lang }  = useLang();
   const navigate  = useNavigate();
+  const { login } = useAuth();
   const isRTL     = lang === 'ar' || lang === 'he';
   const t         = UI[lang];
 
-  const [username,        setUsername]        = useState('');
-  const [confirmUsername, setConfirmUsername] = useState('');
+  const [fullName,        setFullName]        = useState('');
+  const [email,           setEmail]           = useState('');
   const [password,        setPassword]        = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPass,        setShowPass]        = useState(false);
   const [showConfPass,    setShowConfPass]    = useState(false);
+
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState('');
+  const [success, setSuccess] = useState(false);
+  const [emailLocked, setEmailLocked] = useState(false);
+
+  // If the invitation code restricts signup to one specific email
+  // (validated on Screen 03), prefill it here and lock the field so the
+  // account created always matches the code's intended_email — the same
+  // restriction the backend enforces independently at signup time.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(INVITATION_PREVIEW_KEY);
+      const preview = raw ? JSON.parse(raw) : null;
+
+      if (shouldLockEmailField(preview)) {
+        setEmail(getInitialEmail(preview));
+        setEmailLocked(true);
+      }
+    } catch {
+      // Ignore malformed/missing preview — email field just stays editable.
+    }
+  }, []);
+
+  const handleFinish = async () => {
+    setError('');
+
+    const trimmedName  = fullName.trim();
+    const trimmedEmail = email.trim();
+
+    if (!trimmedName || !trimmedEmail || !password || !confirmPassword) {
+      setError(t.required);
+      return;
+    }
+
+    if (password.length < 6) {
+      setError(t.tooShort);
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setError(t.mismatch);
+      return;
+    }
+
+    const code = localStorage.getItem(INVITATION_CODE_KEY);
+
+    if (!code) {
+      setError(t.missingCode);
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      // Only full_name/email/password/code are ever sent — role/building
+      // permissions are never editable here; they come only from the
+      // invitation code, resolved on the backend.
+      const data = await signupUser(
+        buildSignupPayload({ fullName: trimmedName, email: trimmedEmail, password }, code)
+      );
+
+      // The code is single-use on the backend too, but clearing it locally
+      // keeps this device from trying to reuse it.
+      localStorage.removeItem(INVITATION_CODE_KEY);
+      localStorage.removeItem(INVITATION_PREVIEW_KEY);
+
+      setSuccess(true);
+
+      // Signup already returns a valid session (same shape as login) — log
+      // the new account straight in and land on the right home screen for
+      // its role, instead of sending the person back to a login form.
+      login(data.user, data.access_token);
+
+      setTimeout(() => navigate(resolvePostLoginRoute(data.user)), 900);
+    } catch (err) {
+      setError(err.message || t.failed);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="layout-wrapper">
@@ -108,7 +226,7 @@ const AccountCreationScreen = () => {
         <div className={`s04-topbar${isRTL ? ' s04-topbar-rtl' : ''}`}>
           <button
             className={`s04-back-btn${isRTL ? ' s04-back-btn-rtl' : ''}`}
-            onClick={() => navigate('/screen/03')}
+            onClick={() => navigate(ROUTES.signup)}
             aria-label={t.back}
           >
             {isRTL ? <BackArrowRTL /> : <BackArrowLTR />}
@@ -134,7 +252,7 @@ const AccountCreationScreen = () => {
         {/* ── Form ── */}
         <div className="s04-form">
 
-          {/* Username group */}
+          {/* Details group */}
           <div className="s04-field-group">
             <span className="s04-group-label">{t.groupUser}</span>
 
@@ -145,10 +263,10 @@ const AccountCreationScreen = () => {
               <input
                 className={`s04-input${isRTL ? ' s04-input-rtl' : ''}`}
                 type="text"
-                autoComplete="username"
-                placeholder={t.username}
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="name"
+                placeholder={t.fullName}
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
                 dir={isRTL ? 'rtl' : 'ltr'}
               />
             </div>
@@ -159,14 +277,21 @@ const AccountCreationScreen = () => {
               </span>
               <input
                 className={`s04-input${isRTL ? ' s04-input-rtl' : ''}`}
-                type="text"
-                autoComplete="username"
-                placeholder={t.confirmUsername}
-                value={confirmUsername}
-                onChange={(e) => setConfirmUsername(e.target.value)}
+                type="email"
+                autoComplete="email"
+                placeholder={t.email}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 dir={isRTL ? 'rtl' : 'ltr'}
+                disabled={emailLocked}
+                title={emailLocked ? t.emailLockedHint : undefined}
               />
             </div>
+            {emailLocked && (
+              <p style={{ fontSize: 12, color: '#5a7aaa', margin: '2px 4px 0' }}>
+                {t.emailLockedHint}
+              </p>
+            )}
           </div>
 
           <div className="s04-divider" />
@@ -222,13 +347,26 @@ const AccountCreationScreen = () => {
             </div>
           </div>
 
+          {error && (
+            <p style={{ color: '#b42318', textAlign: 'center', marginTop: '8px' }}>
+              {error}
+            </p>
+          )}
+
+          {success && (
+            <p style={{ color: '#1a7f37', textAlign: 'center', marginTop: '8px' }}>
+              {t.success}
+            </p>
+          )}
+
           {/* Finish */}
           <button
             className="s04-finish-btn"
             aria-label={t.finish}
-            onClick={() => navigate('/screen/02')}
+            onClick={handleFinish}
+            disabled={loading || success}
           >
-            {t.finish}
+            {loading ? t.creating : t.finish}
           </button>
 
         </div>
